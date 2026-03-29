@@ -1,0 +1,39 @@
+{
+  "outbounds": [
+    {
+      "tag": "vless-reality",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "<VLESS_SERVER_HOST>",
+            "port": <VLESS_SERVER_PORT>,
+            "users": [
+              {
+                "id": "<VLESS_UUID>",
+                "encryption": "none",
+                "flow": "xtls-rprx-vision",
+                "level": 0
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "publicKey": "<REALITY_PUBLIC_KEY>",
+          "fingerprint": "random",
+          "serverName": "<REALITY_SERVER_NAME>",
+          "shortId": "<REALITY_SHORT_ID>",
+          "spiderX": "/"
+        }
+      }
+    },
+    {
+      "protocol": "freedom",
+      "tag": "direct"
+    }
+  ]
+}

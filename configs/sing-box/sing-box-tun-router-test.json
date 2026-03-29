@@ -1,0 +1,74 @@
+{
+  "log": {
+    "level": "debug",
+    "output": "/opt/var/log/sing-box-router-test.log",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "tag": "bootstrap-dns",
+        "address": "8.8.8.8",
+        "detour": "direct"
+      }
+    ]
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "interface_name": "sbrt0",
+      "address": [
+        "172.19.1.1/30"
+      ],
+      "mtu": 1500,
+      "auto_route": true,
+      "auto_redirect": true,
+      "strict_route": true,
+      "iproute2_table_index": 2022,
+      "iproute2_rule_index": 9000,
+      "route_address": [
+        "52.71.170.232/32"
+      ],
+      "route_exclude_address": [
+        "192.168.1.0/24",
+        "192.168.2.0/24",
+        "185.121.234.53/32"
+      ],
+      "stack": "gvisor"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "vless-out",
+      "server": "<VLESS_SERVER_HOST>",
+      "server_port": <VLESS_SERVER_PORT>,
+      "uuid": "<VLESS_UUID>",
+      "flow": "xtls-rprx-vision",
+      "network": "tcp",
+      "packet_encoding": "",
+      "tls": {
+        "enabled": true,
+        "server_name": "<REALITY_SERVER_NAME>",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "random"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "<REALITY_PUBLIC_KEY>",
+          "short_id": "<REALITY_SHORT_ID>"
+        }
+      }
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "final": "vless-out"
+  }
+}
