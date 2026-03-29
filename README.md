@@ -1,12 +1,14 @@
-# VPN Router Project
+# Проект VPN на роутере
 
-This repository is now organized into a few clear areas:
+Этот репозиторий собран как база знаний и набор рабочих артефактов по схеме `Keenetic + Entware + HydraRoute + XKeen/xray`.
 
-- [docs/project-map.md](/e:/Домашние проекты/VPN на роутере/docs/project-map.md): project index and current status
-- [docs/architecture.md](/e:/Домашние проекты/VPN на роутере/docs/architecture.md): canonical technical source of truth
-- [docs/prompt.md](/e:/Домашние проекты/VPN на роутере/docs/prompt.md): compact handoff for new sessions
+Основные точки входа:
 
-## Structure
+- [project-map.md](/e:/Домашние проекты/VPN на роутере/docs/project-map.md) — карта проекта и текущее состояние.
+- [architecture.md](/e:/Домашние проекты/VPN на роутере/docs/architecture.md) — основной технический документ.
+- [prompt.md](/e:/Домашние проекты/VPN на роутере/docs/prompt.md) — короткий handoff для новой сессии.
+
+## Структура
 
 - `docs/`
 - `docs/analysis/`
@@ -17,26 +19,26 @@ This repository is now organized into a few clear areas:
 - `scripts/xkeen/`
 - `snapshots/router-configs/`
 
-## Current focus
+## Текущий фокус
 
-- root cause investigation of `Codex compact` failures through Keenetic proxy routing
-- evaluation of alternatives to `Proxy0 -> hev-socks5-tunnel`
-- staged migration research toward `Xkeen`
+- расследование причин сбоев `Codex compact` в схеме маршрутизации Keenetic;
+- фиксация рабочего гибридного решения `HydraRoute + XKeen`;
+- сохранение runbook-ов, конфигов и утилит для повторного развертывания и отката.
 
-## Useful entry points
+## Полезные точки входа
 
-- [docs/runbooks/codex-compact-debug-checklist.md](/e:/Домашние проекты/VPN на роутере/docs/runbooks/codex-compact-debug-checklist.md)
-- [docs/runbooks/xkeen-migration-plan.md](/e:/Домашние проекты/VPN на роутере/docs/runbooks/xkeen-migration-plan.md)
-- [docs/runbooks/xkeen-cutover-checklist.md](/e:/Домашние проекты/VPN на роутере/docs/runbooks/xkeen-cutover-checklist.md)
-- [docs/analysis/v2rayn-vs-router-xray.md](/e:/Домашние проекты/VPN на роутере/docs/analysis/v2rayn-vs-router-xray.md)
-- [docs/analysis/xkeen-profile-mapping.md](/e:/Домашние проекты/VPN на роутере/docs/analysis/xkeen-profile-mapping.md)
-- [scripts/xkeen/xkeen_backup_state.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_backup_state.ps1)
-- [scripts/xkeen/xkeen_probe_layout.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_probe_layout.ps1)
-- [scripts/xkeen/xkeen_preflight.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_preflight.ps1)
-- [scripts/xkeen/xkeen_stage_drafts.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_stage_drafts.ps1)
-- [scripts/xkeen/xkeen_apply_drafts.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_apply_drafts.ps1)
+- [codex-compact-debug-checklist.md](/e:/Домашние проекты/VPN на роутере/docs/runbooks/codex-compact-debug-checklist.md)
+- [xkeen-migration-plan.md](/e:/Домашние проекты/VPN на роутере/docs/runbooks/xkeen-migration-plan.md)
+- [xkeen-cutover-checklist.md](/e:/Домашние проекты/VPN на роутере/docs/runbooks/xkeen-cutover-checklist.md)
+- [v2rayn-vs-router-xray.md](/e:/Домашние проекты/VPN на роутере/docs/analysis/v2rayn-vs-router-xray.md)
+- [xkeen-profile-mapping.md](/e:/Домашние проекты/VPN на роутере/docs/analysis/xkeen-profile-mapping.md)
+- [xkeen_backup_state.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_backup_state.ps1)
+- [xkeen_probe_layout.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_probe_layout.ps1)
+- [xkeen_preflight.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_preflight.ps1)
+- [xkeen_stage_drafts.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_stage_drafts.ps1)
+- [xkeen_apply_drafts.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_apply_drafts.ps1)
 
-## Script prerequisites
+## Требования к скриптам
 
-- Export `ROUTER_SSH_PASSWORD` before running PowerShell automation scripts.
-- `snapshots/`, `.claude/`, and backup archives are intentionally excluded from git.
+- Перед запуском PowerShell-скриптов нужно экспортировать `ROUTER_SSH_PASSWORD`.
+- `snapshots/`, `.claude/` и backup-архивы специально исключены из git.

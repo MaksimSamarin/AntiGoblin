@@ -1,147 +1,147 @@
-# VPN Setup Prompt: Keenetic + HydraRoute + XKeen/xray
+# Промпт по VPN-схеме: Keenetic + HydraRoute + XKeen/xray
 
-Use this document as the compact handoff prompt for another session.
-Canonical source of truth is `docs/architecture.md`.
+Используй этот документ как короткий handoff для новой сессии.
+Канонический источник истины: `docs/architecture.md`.
 
-## Current Working State
+## Текущее рабочее состояние
 
-- Router: Keenetic
-- OS: KeeneticOS / NDM
-- Entware mounted at `/opt`
-- CPU: `aarch64`
-- SSH: `root@192.168.2.1:22`
-- SSH password: `<ROUTER_SSH_PASSWORD>`
+- роутер: Keenetic;
+- ОС: KeeneticOS / NDM;
+- Entware смонтирован в `/opt`;
+- CPU: `aarch64`;
+- SSH: `root@192.168.2.1:22`;
+- SSH-пароль: `<ROUTER_SSH_PASSWORD>`.
 
-## Final Working Outcome From 2026-03-29
+## Финальный рабочий результат от 2026-03-29
 
-`OpenAI Codex compact` now works.
+`OpenAI Codex compact` теперь работает.
 
-The working solution is a hybrid:
+Рабочее решение гибридное:
 
-- `HydraRoute` remains the selector/UI layer
-- `XKeen` became the actual transport path for marked traffic
+- `HydraRoute` остается слоем выбора и UI;
+- `XKeen` стал фактическим транспортным путем для помеченного трафика.
 
-This means the old problematic path:
+Это значит, что старый проблемный путь:
 
 ```text
 HydraRoute -> Proxy0 -> hev-socks5-tunnel -> xray SOCKS :1300 -> VLESS
 ```
 
-was replaced for selected traffic by:
+для выбранного трафика был заменен на:
 
 ```text
 HydraRoute -> connmark 0xffffaab -> XKeen REDIRECT :61219 -> xray -> VLESS
 ```
 
-## What Was Proven
+## Что было доказано
 
-- same VLESS server works on PC through `v2rayN`
-- old router path failed specifically on `compact`
-- generic long-lived HTTPS was not the core issue
-- strongest old suspect was `hev-socks5-tunnel` and its runtime behavior
-- after moving traffic into `XKeen`, `compact` succeeded
+- тот же VLESS-сервер работает на ПК через `v2rayN`;
+- старый путь на роутере ломался именно на `compact`;
+- обычный долгий HTTPS не был основной проблемой;
+- сильнейшим подозреваемым по старому пути был `hev-socks5-tunnel` и его runtime-поведение;
+- после перевода трафика в `XKeen` `compact` начал работать.
 
-So the practical root cause was the old Keenetic proxy-client delivery path, not the remote server.
+Практический вывод: корневая проблема была в старом proxy-client пути Keenetic, а не в удаленном сервере.
 
-## Current Roles
+## Текущие роли
 
-`HydraRoute` is kept because it is convenient:
+`HydraRoute` оставлен, потому что он удобен:
 
-- domain list management
-- UI
-- DNS/ipset matching
-- mark selection
+- управление списком доменов;
+- UI;
+- сопоставление DNS/ipset;
+- выбор и маркировка трафика.
 
-`XKeen` now does:
+`XKeen` теперь делает следующее:
 
-- local redirect handling
-- xray runtime on port `61219`
-- routing to `VLESS Reality` or `direct`
+- локальную обработку redirect;
+- runtime `xray` на порту `61219`;
+- маршрутизацию в `VLESS Reality` или `direct`.
 
-## Current Relevant Files
+## Текущие важные файлы
 
-Legacy manual files:
+Старые ручные файлы:
 
-- `/opt/etc/xray/<SOCKS_USERNAME>_config.json`
-- `/opt/etc/xray/routing_config.json`
+- `/opt/etc/xray/<SOCKS_USERNAME>_config.json`;
+- `/opt/etc/xray/routing_config.json`.
 
-Current XKeen files:
+Текущие файлы XKeen:
 
-- `/opt/etc/xray/configs/01_log.json`
-- `/opt/etc/xray/configs/02_transport.json`
-- `/opt/etc/xray/configs/03_inbounds.json`
-- `/opt/etc/xray/configs/04_outbounds.json`
-- `/opt/etc/xray/configs/05_routing.json`
-- `/opt/etc/xray/configs/06_policy.json`
-- `/opt/etc/init.d/S24xray`
+- `/opt/etc/xray/configs/01_log.json`;
+- `/opt/etc/xray/configs/02_transport.json`;
+- `/opt/etc/xray/configs/03_inbounds.json`;
+- `/opt/etc/xray/configs/04_outbounds.json`;
+- `/opt/etc/xray/configs/05_routing.json`;
+- `/opt/etc/xray/configs/06_policy.json`;
+- `/opt/etc/init.d/S24xray`.
 
-HydraRoute files:
+Файлы HydraRoute:
 
-- `/opt/etc/HydraRoute/domain.conf`
-- `/opt/etc/HydraRoute/hrneo.conf`
-- `/opt/var/log/LOGhrneo.log`
+- `/opt/etc/HydraRoute/domain.conf`;
+- `/opt/etc/HydraRoute/hrneo.conf`;
+- `/opt/var/log/LOGhrneo.log`.
 
-## Important Local Fixes
+## Важные локальные фиксы
 
-These are not optional details; they are part of the working state.
+Это не необязательные детали, а часть рабочего состояния.
 
-### 1. XKeen generated init script fix
+### 1. Исправление init-скрипта, сгенерированного XKeen
 
-Generated `/opt/etc/init.d/S24xray` was broken on this router.
+Сгенерированный `/opt/etc/init.d/S24xray` на этом роутере был сломан.
 
-Local fixes applied:
+Примененные локальные правки:
 
-- inserted `name_client="xray"`
-- replaced `busybox ps` with plain `ps`
+- добавлен `name_client="xray"`;
+- `busybox ps` заменен на обычный `ps`.
 
-Without this the service looked for configs under `/opt/etc//configs` and failed.
+Без этого сервис искал конфиги в `/opt/etc//configs` и падал.
 
-### 2. XKeen transport template compatibility fix
+### 2. Исправление совместимости transport-шаблона XKeen
 
-Stock `02_transport.json` used deprecated global `transport` config rejected by `Xray 26.2.6`.
+Стоковый `02_transport.json` использовал устаревший глобальный `transport`, который `Xray 26.2.6` отвергает.
 
-Current fix:
+Текущий фикс:
 
 ```json
 {}
 ```
 
-at:
+в файле:
 
-- `/opt/etc/xray/configs/02_transport.json`
+- `/opt/etc/xray/configs/02_transport.json`.
 
-### 3. XKeen installer is interactive
+### 3. Установщик XKeen интерактивный
 
-During install the minimal choices used were:
+Во время установки использовались минимальные ответы:
 
-- GeoIP: `0`
-- GeoSite: `0`
-- automatic updates / cron: `0`
+- GeoIP: `0`;
+- GeoSite: `0`;
+- automatic updates / cron: `0`.
 
-## Current Outbound
+## Текущий outbound
 
-Current `XKeen` outbound is based on the same working server/profile:
+Текущий outbound `XKeen` основан на том же рабочем сервере и профиле:
 
-- server: `<VLESS_SERVER_HOST>`
-- port: `<VLESS_SERVER_PORT>`
-- protocol: `VLESS`
-- transport: `TCP`
-- security: `Reality`
-- flow: `xtls-rprx-vision`
-- fingerprint: `random`
-- SNI/serverName: `<REALITY_SERVER_NAME>`
+- сервер: `<VLESS_SERVER_HOST>`;
+- порт: `<VLESS_SERVER_PORT>`;
+- протокол: `VLESS`;
+- транспорт: `TCP`;
+- защита: `Reality`;
+- flow: `xtls-rprx-vision`;
+- fingerprint: `random`;
+- SNI/serverName: `<REALITY_SERVER_NAME>`.
 
-## Current Operational Guidance
+## Текущие эксплуатационные рекомендации
 
-Do not remove `HydraRoute` unless there is a strong reason.
+Не убирать `HydraRoute`, если нет сильной причины.
 
-Current recommended production approach:
+Текущий рекомендуемый production-подход:
 
-- keep `HydraRoute` for UI and policy selection
-- keep `XKeen` for the actual marked-traffic data path
+- оставить `HydraRoute` для UI и выбора политики;
+- оставить `XKeen` для фактического data path помеченного трафика.
 
-If routing seems stale after changing HydraRoute list:
+Если после изменения списка `HydraRoute` маршрутизация выглядит устаревшей:
 
-- verify `domain.conf`
-- verify `ipset HydraRoute`
-- consider browser cache / old live connections before assuming policy failure
+- проверить `domain.conf`;
+- проверить `ipset HydraRoute`;
+- учитывать кэш браузера и старые живые соединения, прежде чем считать политику сломанной.

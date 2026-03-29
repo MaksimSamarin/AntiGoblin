@@ -1,12 +1,12 @@
-# XKeen Cutover Checklist
+# Чеклист переключения на XKeen
 
-Use this only during a planned migration window.
+Использовать только во время запланированного окна миграции.
 
-## Goal
+## Цель
 
-Switch from the current `HydraRoute + Proxy0 + manual xray` path to an `Xkeen`-managed path in a controlled and reversible way.
+Переключиться с текущего пути `HydraRoute + Proxy0 + manual xray` на путь под управлением `XKeen` контролируемо и с готовым откатом.
 
-## Prepared Assets
+## Подготовленные артефакты
 
 - backup: [xkeen_backup_state.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_backup_state.ps1)
 - preflight: [xkeen_preflight.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_preflight.ps1)
@@ -14,57 +14,57 @@ Switch from the current `HydraRoute + Proxy0 + manual xray` path to an `Xkeen`-m
 - apply drafts: [xkeen_apply_drafts.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_apply_drafts.ps1)
 - rollback notes: [xkeen_rollback_notes.md](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_rollback_notes.md)
 
-## Sequence
+## Последовательность
 
-1. Run [xkeen_backup_state.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_backup_state.ps1).
-2. Run [xkeen_preflight.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_preflight.ps1).
-3. Run [xkeen_stage_drafts.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_stage_drafts.ps1).
-4. Stop the current manual `xray` path and pause HydraRoute influence.
-5. Run `xkeen -i` on the router.
-6. Confirm `/opt/etc/xray/configs` now exists and `xkeen` policy was created.
-7. Run [xkeen_apply_drafts.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_apply_drafts.ps1).
-8. Start the `Xkeen`-managed service.
-9. Attach only the test client `192.168.2.106` to `xkeen` policy.
-10. Validate:
-    - ordinary HTTPS
-    - long-lived HTTPS
-    - `Codex compact`
+1. Запустить [xkeen_backup_state.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_backup_state.ps1).
+2. Запустить [xkeen_preflight.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_preflight.ps1).
+3. Запустить [xkeen_stage_drafts.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_stage_drafts.ps1).
+4. Остановить текущий ручной путь `xray` и временно снять влияние `HydraRoute`.
+5. Запустить `xkeen -i` на роутере.
+6. Убедиться, что появились `/opt/etc/xray/configs` и policy `xkeen`.
+7. Запустить [xkeen_apply_drafts.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_apply_drafts.ps1).
+8. Запустить сервис под управлением `XKeen`.
+9. Назначить только тестовый клиент `192.168.2.106` на policy `xkeen`.
+10. Проверить:
+   - обычный HTTPS;
+   - долгий HTTPS;
+   - `Codex compact`.
 
-## Success Criteria
+## Критерии успеха
 
-- the test client has working internet through `Xkeen`
-- `Codex compact` no longer disconnects
-- the rest of the router remains unaffected
+- тестовый клиент получает рабочий интернет через `XKeen`;
+- `Codex compact` больше не рвется;
+- остальная часть роутера остается незатронутой.
 
-## Rollback Trigger
+## Когда откатываться
 
-Rollback immediately if:
+Откатываться сразу, если:
 
-- the test client loses general internet access
-- `xray/Xkeen` service does not stay up
-- router policy routing behaves unexpectedly
-- `Codex compact` still fails and the new path is not otherwise cleaner
+- тестовый клиент теряет обычный доступ в интернет;
+- сервис `xray/XKeen` не удерживается в рабочем состоянии;
+- policy routing на роутере ведет себя неожиданно;
+- `Codex compact` все еще падает, а новый путь не дает другой практической пользы.
 
-## Actual Notes From Successful Migration
+## Фактические заметки из успешной миграции
 
-The 2026-03-29 migration did eventually succeed, but with important platform-specific fixes:
+Миграция `2026-03-29` в итоге сработала, но потребовала платформенных фиксов:
 
-- `xkeen -i` is interactive and must be answered
-  - GeoIP: `0`
-  - GeoSite: `0`
-  - automatic updates: `0`
-- `XKeen` expected the router UI policy `xkeen` to exist; it did not create that policy automatically
-- generated `/opt/etc/init.d/S24xray` needed manual repair:
-  - add `name_client="xray"`
-  - replace `busybox ps` with plain `ps`
-- stock `/opt/etc/xray/configs/02_transport.json` was incompatible with current `Xray 26.2.6`
-  - current working fix is `{}` in that file
+- `xkeen -i` интерактивный и требует ответов:
+  - GeoIP: `0`;
+  - GeoSite: `0`;
+  - automatic updates: `0`.
+- `XKeen` ожидал, что policy `xkeen` уже создана в UI роутера; сам он ее автоматически не создавал.
+- сгенерированный `/opt/etc/init.d/S24xray` пришлось чинить вручную:
+  - добавить `name_client="xray"`;
+  - заменить `busybox ps` на обычный `ps`.
+- стоковый `/opt/etc/xray/configs/02_transport.json` оказался несовместим с текущим `Xray 26.2.6`;
+  - текущий рабочий фикс — `{}` в этом файле.
 
-## Current Result
+## Текущий результат
 
-After those fixes:
+После этих фиксов:
 
-- `XKeen` xray runs on `61219`
-- `HydraRoute` continues to supply selection/marking
-- marked traffic is redirected by chain `xkeen`
-- `Codex compact` works on the new path
+- `XKeen`-`xray` работает на `61219`;
+- `HydraRoute` продолжает давать выбор и маркировку;
+- помеченный трафик перенаправляется через цепочку `xkeen`;
+- `Codex compact` работает по новому пути.

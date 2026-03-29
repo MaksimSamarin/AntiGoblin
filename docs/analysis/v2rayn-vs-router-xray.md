@@ -1,171 +1,183 @@
-# v2rayN vs Router xray
+# Сравнение v2rayN и xray на роутере
 
-## Purpose
+## Назначение
 
-This note compares the known working PC path with the router path that fails on `Codex compact`.
+Эта заметка сравнивает известный рабочий путь на ПК с роутерным путем, который ломался на `Codex compact`.
 
-## Working PC Client
+## Рабочий клиент на ПК
 
-Path:
+Путь:
+
 - `C:\Users\Home-PC\Desktop\v2rayN-windows-64`
 
-Detected components:
-- GUI: `v2rayN V7.18.0 X64`
-- Core: `Xray 26.2.4 (go1.25.6 windows/amd64)`
+Обнаруженные компоненты:
 
-Relevant `guiNConfig.json` observations:
+- GUI: `v2rayN V7.18.0 X64`;
+- core: `Xray 26.2.4 (go1.25.6 windows/amd64)`.
 
-- `TunModeItem.EnableTun = true`
-- `TunModeItem.AutoRoute = true`
-- `TunModeItem.StrictRoute = true`
-- `TunModeItem.Stack = "gvisor"`
-- `TunModeItem.Mtu = 9000`
-- inbound SOCKS local port: `10808`
-- inbound sniffing enabled
-- `RouteOnly = false`
-- `MuxEnabled = false`
-- `Loglevel = "warning"`
-- `DomainStrategy = "AsIs"`
-- `EnableIPv6Address = false`
+Важные наблюдения из `guiNConfig.json`:
 
-Active selected profile from `guiNDB.db` (`IndexId = 5076900947224219232`):
+- `TunModeItem.EnableTun = true`;
+- `TunModeItem.AutoRoute = true`;
+- `TunModeItem.StrictRoute = true`;
+- `TunModeItem.Stack = "gvisor"`;
+- `TunModeItem.Mtu = 9000`;
+- локальный SOCKS inbound-порт: `10808`;
+- sniffing на inbound включен;
+- `RouteOnly = false`;
+- `MuxEnabled = false`;
+- `Loglevel = "warning"`;
+- `DomainStrategy = "AsIs"`;
+- `EnableIPv6Address = false`.
 
-- Remarks: `vdpsina-samara_pc`
-- Address: `<VLESS_SERVER_HOST>`
-- Port: `<VLESS_SERVER_PORT>`
-- Protocol family: `VLESS`
-- Network: `tcp`
-- Stream security: `reality`
-- Flow: `xtls-rprx-vision`
-- Security: `none`
-- Fingerprint: `random`
-- SNI: `<REALITY_SERVER_NAME>`
-- Public key: same as router profile
-- ShortId: same as router profile
-- User ID: same as router profile
+Активный выбранный профиль из `guiNDB.db` (`IndexId = 5076900947224219232`):
 
-## Router Client
+- remarks: `vdpsina-samara_pc`;
+- address: `<VLESS_SERVER_HOST>`;
+- port: `<VLESS_SERVER_PORT>`;
+- protocol family: `VLESS`;
+- network: `tcp`;
+- stream security: `reality`;
+- flow: `xtls-rprx-vision`;
+- security: `none`;
+- fingerprint: `random`;
+- SNI: `<REALITY_SERVER_NAME>`;
+- public key: тот же, что у роутерного профиля;
+- shortId: тот же, что у роутерного профиля;
+- user ID: тот же, что у роутерного профиля.
 
-Observed router environment:
+## Клиент на роутере
 
-- Router xray: `26.2.6 (go1.25.7 linux/arm64)`
-- Inbound: SOCKS on `1300`
-- Sniffing enabled
-- `routeOnly = true`
-- Traffic delivery path:
-  - LAN client
-  - HydraRoute/ipset
-  - Keenetic fwmark / proxy client
-  - `t2s0`
-  - SOCKS inbound on router xray
-  - VLESS outbound
+Наблюдавшееся окружение роутера:
 
-## Key Differences
+- router xray: `26.2.6 (go1.25.7 linux/arm64)`;
+- inbound: SOCKS на `1300`;
+- sniffing включен;
+- `routeOnly = true`;
+- путь доставки трафика:
+  - LAN-клиент;
+  - HydraRoute/ipset;
+  - Keenetic fwmark / proxy client;
+  - `t2s0`;
+  - SOCKS inbound на router xray;
+  - VLESS outbound.
 
-### 1. Delivery model
+## Ключевые различия
 
-PC:
-- `v2rayN` uses TUN mode with `gvisor` stack and strict routing
+### 1. Модель доставки
 
-Router:
-- traffic is injected by Keenetic proxy routing into a SOCKS inbound
-- xray is not handling a local TUN stack
+ПК:
 
-This is currently the strongest architectural difference.
+- `v2rayN` использует TUN-режим со стеком `gvisor` и strict routing.
 
-### 2. Inbound sniffing mode
+Роутер:
 
-PC:
-- sniffing enabled
-- `RouteOnly = false`
+- трафик подается в SOCKS inbound через proxy routing Keenetic;
+- `xray` не работает с локальным TUN-стеком.
 
-Router:
-- sniffing enabled
-- `routeOnly = true`
+Это было самым сильным архитектурным отличием.
 
-This may affect how destination metadata is applied internally.
+### 2. Режим inbound sniffing
 
-Update after live test on 2026-03-29:
+ПК:
 
-- router was temporarily switched from `routeOnly = true` to `routeOnly = false`
-- `Codex compact` still failed with the same disconnect error
-- therefore this difference is currently considered less likely to be the root cause
+- sniffing включен;
+- `RouteOnly = false`.
 
-### 3. Domain strategy
+Роутер:
 
-PC:
-- `DomainStrategy = "AsIs"`
+- sniffing включен;
+- `routeOnly = true`.
 
-Router:
-- routing config uses `IPOnDemand`
+Это могло влиять на то, как внутри применяются destination metadata.
 
-This is a smaller but still meaningful difference for domain/IP handling.
+Обновление после live-теста от `2026-03-29`:
 
-### 4. IPv6 behavior
+- роутер временно переключался с `routeOnly = true` на `routeOnly = false`;
+- `Codex compact` все равно падал с той же ошибкой;
+- поэтому это различие теперь считается менее вероятной корневой причиной.
 
-PC:
-- `EnableIPv6Address = false`
+### 3. Стратегия доменов
 
-Router:
-- HydraRoute logs and system state show mixed IPv4 and IPv6 DNS handling in general
-- actual observed `chatgpt.com` compact path was mainly IPv4 Fastly IPs
+ПК:
 
-### 5. Runtime and platform
+- `DomainStrategy = "AsIs"`.
 
-PC:
-- Windows + v2rayN + Xray 26.2.4
+Роутер:
 
-Router:
-- Keenetic/Entware + Xray 26.2.6
+- routing-конфиг использует `IPOnDemand`.
 
-Version delta is small. Architecture and traffic injection model are much more important.
+Это меньшее, но все же заметное отличие в работе с доменами и IP.
 
-### 6. Outbound profile parity
+### 4. Поведение IPv6
 
-The active PC profile and router outbound are effectively the same server/profile:
+ПК:
 
-- same host
-- same port
-- same UUID
-- same `flow`
-- same `Reality` parameters
-- same fingerprint policy
+- `EnableIPv6Address = false`.
 
-This makes the outbound server/profile itself much less likely to be the root cause.
+Роутер:
 
-## Current Interpretation
+- логи `HydraRoute` и состояние системы показывали смешанную работу с IPv4 и IPv6 DNS;
+- реально наблюдавшийся путь `chatgpt.com compact` был в основном через IPv4 Fastly IP.
 
-The remote VLESS server is unlikely to be the root cause, because it works through `v2rayN` on PC.
+### 5. Runtime и платформа
 
-The most likely root cause is now one of:
+ПК:
 
-- Keenetic delivery path into SOCKS inbound
-- difference between TUN-mode client behavior and router SOCKS-inbound behavior
-- `Codex compact` being sensitive to this exact connection model even though generic long-lived HTTPS works
+- Windows + `v2rayN` + `Xray 26.2.4`.
 
-## New Strong Evidence From Live Socket Monitoring
+Роутер:
 
-Router monitoring showed that the local process feeding xray SOCKS is:
+- Keenetic/Entware + `Xray 26.2.6`.
 
-- `hev-socks5-tu`
+Разница версий невелика. Архитектура и модель подачи трафика были заметно важнее.
 
-Observed socket relationship:
+### 6. Паритет outbound-профиля
 
-- `hev-socks5-tu -> 192.168.2.1:1300`
-- `xray <- :1300`
+Активный профиль на ПК и outbound на роутере по сути совпадали:
 
-Observed close behavior:
+- тот же host;
+- тот же port;
+- тот же UUID;
+- тот же `flow`;
+- те же параметры `Reality`;
+- та же политика fingerprint.
 
-- xray side entered `CLOSE_WAIT`
-- peer side entered `FIN_WAIT2`
+Это делало сам outbound-сервер и профиль гораздо менее вероятной корневой причиной.
 
-Current interpretation:
+## Текущая интерпретация
 
-- the inbound SOCKS side appears to be closed by the local proxy-delivery layer before xray itself initiates closure
-- this makes `hev-socks5-tu` / Keenetic proxy delivery much more suspicious than the outbound VLESS profile
+Удаленный VLESS-сервер маловероятно был корнем проблемы, потому что через `v2rayN` на ПК он работал.
 
-## Most Useful Next Checks
+Самые вероятные причины на тот момент были такими:
 
-1. compare whether `RouteOnly = false` on router changes behavior
-2. compare router routing `domainStrategy` with PC `AsIs`
-3. verify whether Codex compact depends on a specific HTTP/2 or reconnect pattern that survives TUN but not SOCKS-injected routing
+- путь доставки Keenetic в SOCKS inbound;
+- различие между TUN-mode клиентом и поведением роутерного SOCKS-inbound;
+- чувствительность `Codex compact` именно к такой модели соединения, даже если обычный долгий HTTPS работал.
+
+## Новое сильное подтверждение из live-мониторинга сокетов
+
+Мониторинг роутера показал, что локальный процесс, который кормит SOCKS у `xray`, это:
+
+- `hev-socks5-tu`.
+
+Наблюдаемая связь сокетов:
+
+- `hev-socks5-tu -> 192.168.2.1:1300`;
+- `xray <- :1300`.
+
+Наблюдаемое поведение при закрытии:
+
+- сторона `xray` переходила в `CLOSE_WAIT`;
+- сторона пира переходила в `FIN_WAIT2`.
+
+Текущая интерпретация:
+
+- inbound SOCKS, похоже, закрывался локальным слоем доставки раньше, чем `xray` сам инициировал закрытие;
+- это делало `hev-socks5-tu` / Keenetic proxy delivery гораздо более подозрительными, чем outbound-профиль VLESS.
+
+## Самые полезные следующие проверки
+
+1. сравнить, меняет ли что-то `RouteOnly = false` на роутере;
+2. сравнить `domainStrategy` на роутере с `AsIs` на ПК;
+3. проверить, зависит ли `Codex compact` от специфического HTTP/2 или reconnect-паттерна, который переживает TUN, но не SOCKS-injected routing.

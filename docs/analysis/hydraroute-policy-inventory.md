@@ -1,22 +1,22 @@
-# HydraRoute Policy Inventory
+# Инвентаризация политики HydraRoute
 
-This file captures the current effective selective-routing intent from HydraRoute so it can be migrated into a single `Xkeen`/`xray` routing model later.
+Этот файл фиксирует текущее фактическое намерение выборочной маршрутизации в `HydraRoute`, чтобы позже его можно было перенести в единую модель routing на `Xkeen`/`xray`.
 
-## Current HydraRoute Mode
+## Текущий режим HydraRoute
 
-From `/opt/etc/HydraRoute/hrneo.conf`:
+Из `/opt/etc/HydraRoute/hrneo.conf`:
 
-- `GlobalRouting=false`
-- `DirectRouteEnabled=true`
-- `PolicyOrder=HydraRoute`
-- only domains listed in `domain.conf` are intended to go through proxy/VPN
-- everything else is intended to stay direct
+- `GlobalRouting=false`;
+- `DirectRouteEnabled=true`;
+- `PolicyOrder=HydraRoute`;
+- через proxy/VPN должен идти только набор доменов из `domain.conf`;
+- все остальное должно оставаться `direct`.
 
-## Domain Inventory
+## Инвентаризация доменов
 
-Normalized from `/opt/etc/HydraRoute/domain.conf`.
+Нормализовано по `/opt/etc/HydraRoute/domain.conf`.
 
-### Proxy/VPN Domains
+### Домены, которые должны идти через proxy/VPN
 
 - `2ip.io`
 - `2ip.ru`
@@ -154,22 +154,17 @@ Normalized from `/opt/etc/HydraRoute/domain.conf`.
 - `youtube.com`
 - `ytimg.com`
 
-### Current Direct Exceptions Outside HydraRoute
-
-These are already handled on the current router xray side and must not be forgotten during migration:
+### Текущие direct-исключения вне HydraRoute
 
 - `stalcraft.net`
 - `exbo.net`
 - `cdn77.org`
 
-## Migration Intent
+## Замысел миграции
 
-When moving to `Xkeen`, the clean target behavior is:
+Если в будущем логика будет переноситься целиком в `Xkeen`, то смысл этой политики такой:
 
-1. assign `Xkeen` policy to the selected device(s)
-2. let `xray/Xkeen` receive the device traffic
-3. route listed domains through `vless-reality`
-4. route everything else to `direct`
-5. keep explicit direct exceptions for `stalcraft.net`, `exbo.net`, `cdn77.org`
-
-This reproduces the intent of the current HydraRoute setup without keeping HydraRoute in the final data path.
+1. назначить policy `xkeen` выбранным устройствам;
+2. домены из списка выше направлять в VPN;
+3. `stalcraft.net`, `exbo.net`, `cdn77.org` оставлять `direct`;
+4. все остальное отправлять в `direct`.

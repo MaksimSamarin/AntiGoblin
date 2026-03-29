@@ -1,257 +1,180 @@
-# Codex Compact Debug Checklist
-
-Этот чек-лист нужен, чтобы локализовать обрыв `OpenAI Codex compact` в цепочке:
+# Чеклист отладки Codex Compact
 
 `PC/LAN client -> Keenetic -> HydraRoute/ipset -> Keenetic proxy routing -> xray SOCKS -> VLESS -> chatgpt.com`
 
 Симптом:
-- ошибка `stream disconnected before completion`
-- обычно проявляется через 1-2 минуты
-- тот же VLESS-сервер работает через `v2rayN` на ПК
+
+- ошибка `stream disconnected before completion`;
+- обычно проявляется через 1-2 минуты;
+- тот же VLESS-сервер работает через `v2rayN` на ПК.
 
 ## Цель
 
-Понять, где именно рвется long-lived соединение:
-- на клиенте
-- в policy routing Keenetic
-- в `xray`
-- в `conntrack`/iptables/ipset
-- на уровне `MTU/MSS`
+Понять, на каком уровне ломается путь:
+
+- на клиенте;
+- в policy routing Keenetic;
+- в `xray`;
+- в `conntrack`/`iptables`/`ipset`;
+- на уровне `MTU/MSS`.
 
 ## 1. Базовая фиксация состояния
 
-Подключиться:
-
 ```bash
-ssh root@192.168.2.1
-```
-
-Сразу записать базовый контекст:
-
-```bash
-uname -a
 date
-uptime
-ip addr show
-ip rule show
-iptables -t mangle -L -n -v
-ipset list HydraRoute | head -50
 ps | grep -E 'xray|hydra'
 netstat -tlnp | grep 1300
+ipset list HydraRoute | head -30
+iptables -t mangle -L -n -v
+tail -n 50 /opt/var/log/LOGhrneo.log
 ```
 
-Что смотрим:
-- `xray` запущен и слушает `1300`
-- ipset `HydraRoute` существует
-- в mangle-правилах есть счетчики, которые растут на интересующем трафике
+Ожидания:
 
-## 2. Проверка, что chatgpt.com действительно идет через HydraRoute
+- `xray` запущен и слушает `1300`;
+- `ipset HydraRoute` существует;
+- в `mangle`-правилах есть растущие счетчики на интересующем трафике.
 
-Во время запуска проблемного запроса посмотреть лог HydraRoute:
+## 2. Проверка, что `chatgpt.com` действительно идет через HydraRoute
+
+На роутере:
 
 ```bash
+grep -n 'chatgpt.com' /opt/etc/HydraRoute/domain.conf
 tail -f /opt/var/log/LOGhrneo.log
+ipset list HydraRoute | grep -E '8\\.|151\\.|199\\.'
 ```
 
-Параллельно проверить наличие нужных IP в ipset:
+Ожидания:
 
-```bash
-ipset list HydraRoute | grep -E '8\.6\.|8\.47\.|151\.101\.|146\.75\.'
-```
-
-Что смотрим:
-- домен `chatgpt.com` или связанные с ним адреса реально попадают в HydraRoute
-- IP появляются в ipset до начала проблемного long-lived запроса
+- домен `chatgpt.com` или связанные адреса реально попадают в `HydraRoute`;
+- соответствующие IP появляются в `ipset`.
 
 ## 3. Включение временного лога xray
 
-Перед этим сохранить текущие настройки логирования из `/opt/etc/xray`.
-
-Временно включить более подробный лог:
+Перед тестом:
 
 ```bash
-grep -R "\"log\"" /opt/etc/xray
-```
-
-Если логирование выключено, на время диагностики включить `loglevel: "info"` или `debug`, затем перезапустить:
-
-```bash
+cp /opt/etc/xray/vpngroup_config.json /opt/etc/xray/vpngroup_config.json.bak-codex
+sed -i 's/"loglevel": "warning"/"loglevel": "info"/' /opt/etc/xray/vpngroup_config.json
 killall xray
-xray run -confdir /opt/etc/xray > /opt/var/log/xray-stdout.log 2> /opt/var/log/xray-stderr.log &
 ```
 
-Смотреть лог вживую:
+Проверка:
 
 ```bash
-tail -f /opt/var/log/xray-stderr.log
+tail -f /opt/var/log/xray-error.log
+tail -f /opt/var/log/xray-access.log
 ```
 
-Что смотрим:
-- ошибки transport/session/timeout
-- сообщения о закрытии соединения
-- рестарт процесса
-- падения по памяти или внутренние ошибки xray
+Ищем:
+
+- `sniffed domain: chatgpt.com`;
+- `taking detour`;
+- `tunneling request`;
+- transport/session ошибки;
+- `broken pipe`, если они появятся.
 
 ## 4. Поймать момент обрыва
 
-Запустить проблемный запрос с клиента и одновременно смотреть:
+Во время запуска `compact`:
 
 ```bash
-tail -f /opt/var/log/LOGhrneo.log
+watch -n 1 "conntrack -L | grep 192.168.2.106 | grep 443 | head"
 ```
+
+Дополнительно:
 
 ```bash
-tail -f /opt/var/log/xray-stderr.log
+netstat -tanp | grep ':1300'
 ```
 
-```bash
-watch -n 2 "ps | grep xray"
-```
+Смысл:
 
-Если `watch` отсутствует, то просто повторять:
-
-```bash
-ps | grep xray
-```
-
-Что фиксируем:
-- точное время старта запроса
-- точное время обрыва
-- были ли в эту секунду сообщения в `HydraRoute`
-- были ли в эту секунду сообщения в `xray`
-- продолжал ли жить процесс `xray`
+- понять, кто первым закрывает соединение;
+- увидеть, долго ли живет поток;
+- отделить падение `xray` от закрытия входящего SOCKS-сокета.
 
 ## 5. Проверка conntrack и таймаутов
 
-Посмотреть системные таймауты conntrack:
-
 ```bash
-sysctl -a 2>/dev/null | grep conntrack
+cat /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_established
+cat /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_close_wait
+cat /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_fin_wait
 ```
 
-Если доступен модуль статистики:
+Смысл:
 
-```bash
-cat /proc/net/nf_conntrack | grep 443 | head
-```
-
-или:
-
-```bash
-conntrack -L | grep 443
-```
-
-Что смотрим:
-- не исчезает ли запись соединения слишком рано
-- нет ли признаков aggressive timeout
-- не очищает ли что-то таблицу состояний
+- исключить слишком агрессивные системные TCP-timeout.
 
 ## 6. Проверка MSS/MTU
 
-Снять MTU интерфейсов:
+Проверка интерфейсов:
 
 ```bash
-ip link show
-ifconfig 2>/dev/null
+ip link
 ```
 
-Проверить правила TCPMSS:
+Временный диагностический тест:
 
 ```bash
-iptables -t mangle -S | grep -i mss
-iptables -t mangle -L -n -v | grep -i mss
+iptables -t mangle -A FORWARD -o t2s0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 ```
 
-Что смотрим:
-- есть ли MSS clamping
-- одинаково ли выглядит путь для LAN и WAN
-- нет ли слишком большого MTU на одном из участков цепочки
+Откат:
 
-Практический признак:
-- если короткие запросы работают, а длинные или потоковые отваливаются, проблема часто в `MTU/MSS` или таймаутах потока
+```bash
+iptables -t mangle -D FORWARD -o t2s0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+```
+
+Смысл:
+
+- проверить гипотезу про слишком крупные TCP-сегменты по пути.
 
 ## 7. Сравнение с рабочим сценарием
 
-Нужно сравнить два кейса:
+Что уже важно было сравнить:
 
-1. `chatgpt.com` через роутерную схему `HydraRoute -> xray -> VLESS`
-2. тот же запрос через `v2rayN` на ПК
-
-Что сравнить:
-- время жизни соединения
-- размер/длительность запроса
-- есть ли обрыв только на роутерном маршруте
-
-Если только роутерный путь ломается, это резко снижает вероятность проблемы на стороне самого VLESS-сервера.
+- тот же VLESS-сервер через `v2rayN` на ПК работает;
+- generic long-lived HTTPS через VPN надо проверить отдельно;
+- поведение на роутере и на ПК различается именно моделью доставки трафика.
 
 ## 8. Проверка счетчиков iptables во время теста
 
-До теста:
-
 ```bash
 iptables -t mangle -L -n -v
+iptables -t nat -L -n -v
 ```
 
-После воспроизведения:
+Смысл:
 
-```bash
-iptables -t mangle -L -n -v
-```
+- убедиться, что трафик реально проходит через ожидаемые цепочки;
+- увидеть, не перестает ли матчиться правило в момент обрыва.
 
-Что смотрим:
-- растут ли нужные счетчики на маркировке
-- не происходит ли неожиданного обхода нужной цепочки
-
-## 9. Минимальная гипотезная развилка
+## 9. Минимальная развилка гипотез
 
 Если:
-- `HydraRoute` отрабатывает нормально
-- IP попадает в `ipset`
-- счетчики iptables растут
-- `xray` не падает
-- но long-lived stream все равно рвется
 
-то первыми проверяем:
-- `MTU/MSS`
-- HTTP/2-специфичное поведение
-- router-side timeout/conntrack
+- `xray` не падает;
+- `chatgpt.com` реально туннелируется;
+- обычный long-lived HTTPS работает;
+- а `compact` все равно рвется;
 
-Если:
-- в момент сбоя есть ошибки в `xray-stderr.log`
+то наиболее вероятны:
 
-то основной фокус:
-- параметры `xray`
-- transport/session timeout
-- конкретные особенности SOCKS -> VLESS path
-
-Если:
-- `xray` перезапускается или исчезает процесс
-
-то основной фокус:
-- crash/oom
-- бинарная совместимость
-- нехватка памяти или файловых дескрипторов
+- проблема в слое доставки трафика до `xray`;
+- проблема в `hev-socks5-tunnel` / built-in proxy-client path Keenetic;
+- чувствительность `Codex compact` к специфическому streaming/reconnect-паттерну.
 
 ## 10. Что сохранить после прогона
 
-После одной полноценной неудачной попытки сохранить:
+Сохранить:
 
-- время начала и конца теста
-- кусок `LOGhrneo.log`
-- кусок `xray-stderr.log`
-- вывод `iptables -t mangle -L -n -v`
-- вывод `ipset list HydraRoute | head -50`
-- вывод `ip rule show`
-- вывод `ps | grep -E 'xray|hydra'`
-- вывод `ip link show`
-- вывод правил `iptables -t mangle -S | grep -i mss`
+- хвосты `xray-error.log` и `xray-access.log`;
+- вывод `conntrack`;
+- счетчики `iptables`;
+- текущее содержимое `/var/run/proxy-cfg-t2s0`, если используется старый путь.
 
 ## 11. Самый полезный следующий шаг после этого чек-листа
 
-Если после прогона станет видно, что соединение живет, но поток обрывается без падения `xray`, следующим шагом стоит сделать отдельный эксперимент:
-
-- один тест с максимальным логированием `xray`
-- один тест с фокусом только на `MTU/MSS`
-- один контрольный тест через `v2rayN` с тем же сценарием
-
-Так будет проще отделить сетевую проблему роутера от проблемы конфигурации `xray`.
+Если старый путь все еще используется и виден `hev-socks5-tunnel`, самый полезный следующий шаг — проверить его runtime-конфиг и таймауты, особенно `read-write-timeout`.

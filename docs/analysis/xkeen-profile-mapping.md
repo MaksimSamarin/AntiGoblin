@@ -1,48 +1,45 @@
-# XKeen Profile Mapping
+# Сопоставление профиля для XKeen
 
-This note maps the current working manual router profile to the files XKeen expects.
+Эта заметка показывает, как текущий рабочий ручной профиль роутера переносится в файлы, которые ожидает `XKeen`.
 
-## Source Profile
+## Исходный профиль
 
-Current manual profile source:
+Текущий источник ручного профиля:
 
 - [prompt.md](/e:/Домашние проекты/VPN на роутере/docs/prompt.md)
-- current router file: `/opt/etc/xray/<SOCKS_USERNAME>_config.json`
+- текущий файл на роутере: `/opt/etc/xray/<SOCKS_USERNAME>_config.json`
 
-## Values To Preserve
+## Значения, которые нужно сохранить
 
-- server: `<VLESS_SERVER_HOST>`
-- port: `<VLESS_SERVER_PORT>`
-- protocol: `VLESS`
-- transport: `TCP`
-- security: `Reality`
-- UUID: `<VLESS_UUID>`
-- flow: `xtls-rprx-vision`
-- public key: `<REALITY_PUBLIC_KEY>`
-- SNI/serverName: `<REALITY_SERVER_NAME>`
-- shortId: `<REALITY_SHORT_ID>`
-- fingerprint: `random`
+- сервер: `<VLESS_SERVER_HOST>`;
+- порт: `<VLESS_SERVER_PORT>`;
+- протокол: `VLESS`;
+- транспорт: `TCP`;
+- защита: `Reality`;
+- UUID: `<VLESS_UUID>`;
+- flow: `xtls-rprx-vision`;
+- public key: `<REALITY_PUBLIC_KEY>`;
+- SNI/serverName: `<REALITY_SERVER_NAME>`;
+- shortId: `<REALITY_SHORT_ID>`;
+- fingerprint: `random`.
 
-## XKeen Draft Files
+## Черновые файлы XKeen
 
-- outbound draft:
+- черновик outbound:
   - [04_outbounds.vdpsina-reality-draft.json](/e:/Домашние проекты/VPN на роутере/configs/xkeen/04_outbounds.vdpsina-reality-draft.json)
-- routing draft:
+- черновик routing:
   - [05_routing.hydraroute-draft.json](/e:/Домашние проекты/VPN на роутере/configs/xkeen/05_routing.hydraroute-draft.json)
 
-## Key Notes
+## Ключевые замечания
 
-- XKeen stock template uses `fingerprint: chrome`; this draft changes it to `random`
-  to match the currently working PC/router outbound profile more closely.
-- XKeen stock outbound template defaults to port `443`; this draft uses the real server
-  port `<VLESS_SERVER_PORT>`.
-- direct exceptions for:
-  - `stalcraft.net`
-  - `exbo.net`
+- Стоковый шаблон `XKeen` использует `fingerprint: chrome`; в этом draft он заменен на `random`, чтобы быть ближе к реально рабочему outbound-профилю ПК и роутера.
+- Стоковый outbound-шаблон `XKeen` по умолчанию использует порт `443`; в этом draft подставлен настоящий порт сервера `<VLESS_SERVER_PORT>`.
+- Direct-исключения для:
+  - `stalcraft.net`;
+  - `exbo.net`;
   - `cdn77.org`
-  are preserved in the routing draft.
+  сохранены в routing draft.
 
-## Migration Intent
+## Замысел миграции
 
-When the migration window starts, the relevant XKeen template files should be replaced
-with the draft versions from this repository before `xkeen -i` is used as the active path.
+Когда начнется окно миграции, соответствующие шаблонные файлы `XKeen` нужно заменить draft-версиями из этого репозитория, прежде чем `xkeen -i` начнет использоваться как активный путь.

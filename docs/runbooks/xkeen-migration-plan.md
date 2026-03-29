@@ -1,71 +1,71 @@
-# XKeen Migration Plan
+# План миграции на XKeen
 
-## Goal
+## Цель
 
-Replace the current `HydraRoute + Proxy0 + manual xray` selective path with an `Xkeen`-managed path, but do it in a controlled way with rollback ready.
+Заменить текущий выборочный путь `HydraRoute + Proxy0 + manual xray` на путь под управлением `XKeen`, но сделать это контролируемо и с готовым откатом.
 
-## Preconditions
+## Предусловия
 
-- `xkeen` utility is installed at `/opt/sbin/xkeen`
-- current manual router path is still active
-- no `xkeen -i` migration has been run yet
+- утилита `xkeen` установлена в `/opt/sbin/xkeen`;
+- текущий ручной путь на роутере все еще активен;
+- миграция через `xkeen -i` еще не запускалась или не завершалась штатно.
 
-## Stage 1: Backup
+## Этап 1. Резервная копия
 
-Run:
+Запустить:
 
 - [xkeen_backup_state.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_backup_state.ps1)
 
-Expected output:
+Ожидаемый результат:
 
-- backup tarball saved under `snapshots/xkeen-migration/<timestamp>/`
+- backup-архив сохраняется в `snapshots/xkeen-migration/<timestamp>/`.
 
-## Stage 2: Inspect current XKeen layout
+## Этап 2. Осмотр текущего layout XKeen
 
-Run:
+Запустить:
 
 - [xkeen_probe_layout.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_probe_layout.ps1)
 - [xkeen_preflight.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_preflight.ps1)
 
-Purpose:
+Задача:
 
-- confirm current xray layout
-- confirm no `xkeen` policy is already active
-- review what `xkeen` expects to manage
-- confirm required kernel and `iptables` features before cutover
+- подтвердить текущий layout `xray`;
+- убедиться, что policy `xkeen` еще не активна или не конфликтует;
+- понять, чем именно хочет управлять `xkeen`;
+- проверить наличие нужных kernel/`iptables` возможностей перед cutover.
 
-## Stage 3: Controlled migration window
+## Этап 3. Контролируемое окно миграции
 
-Only during a planned test window:
+Только в заранее запланированное окно:
 
-1. stop the manual xray path
-2. temporarily disable HydraRoute influence on routing
-3. run [xkeen_stage_drafts.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_stage_drafts.ps1)
-4. run `xkeen -i`
-5. inspect generated:
-   - `/opt/etc/xray/configs`
-   - `/opt/etc/init.d/S24xray`
-   - `rci/show/ip/policy`
-6. run [xkeen_apply_drafts.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_apply_drafts.ps1)
-7. start XKeen-managed xray
-8. attach only one test client/device to `xkeen` policy
+1. остановить ручной путь `xray`;
+2. временно снять влияние `HydraRoute` на маршрутизацию;
+3. запустить [xkeen_stage_drafts.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_stage_drafts.ps1);
+4. выполнить `xkeen -i`;
+5. проверить сгенерированные сущности:
+   - `/opt/etc/xray/configs`;
+   - `/opt/etc/init.d/S24xray`;
+   - `rci/show/ip/policy`;
+6. запустить [xkeen_apply_drafts.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_apply_drafts.ps1);
+7. запустить `xray` под управлением `XKeen`;
+8. повесить на policy `xkeen` только одно тестовое устройство.
 
-## Stage 4: First validation
+## Этап 4. Первая валидация
 
-Validate in this order:
+Проверять в таком порядке:
 
-1. ordinary HTTPS browsing
-2. long-lived HTTPS test
-3. `Codex compact`
+1. обычный HTTPS;
+2. долгий HTTPS;
+3. `Codex compact`.
 
-Do not add complex selective domain routing until full-device routing for one client is stable.
+Не добавлять сложную выборочную доменную маршрутизацию, пока full-device routing хотя бы для одного клиента не стабилен.
 
-## Stage 5: Rollback
+## Этап 5. Откат
 
-If migration fails:
+Если миграция не удалась:
 
-- use [xkeen-cutover-checklist.md](/e:/Домашние проекты/VPN на роутере/docs/runbooks/xkeen-cutover-checklist.md) as the migration-window sequence
-- use [xkeen_rollback_notes.md](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_rollback_notes.md)
-- restore `/opt/etc/xray`
-- restore original service/start method
-- return device to old routing path
+- использовать [xkeen-cutover-checklist.md](/e:/Домашние проекты/VPN на роутере/docs/runbooks/xkeen-cutover-checklist.md) как последовательность в окне миграции;
+- использовать [xkeen_rollback_notes.md](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_rollback_notes.md);
+- восстановить `/opt/etc/xray`;
+- вернуть исходный способ запуска сервиса;
+- вернуть устройство на старый маршрут.
