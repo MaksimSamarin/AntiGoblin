@@ -21,6 +21,12 @@
 - `HydraRoute` остается слоем выбора и UI;
 - `XKeen` стал фактическим транспортным путем для помеченного трафика.
 
+Важное уточнение:
+
+- `HydraRoute` отвечает за селекцию трафика через `domain.conf`, `ip.list`, `ipset HydraRoute` и `connmark 0xffffaab`;
+- `XKeen/xray` отвечает уже за финальное routing-решение внутри `xray`;
+- поэтому для IP-only сервисов одного добавления домена или CIDR в `HydraRoute` может быть недостаточно: соответствующие сети иногда нужно дублировать еще и в `xray routing`.
+
 Это значит, что старый проблемный путь:
 
 ```text
@@ -30,7 +36,7 @@ HydraRoute -> Proxy0 -> hev-socks5-tunnel -> xray SOCKS :1300 -> VLESS
 для выбранного трафика был заменен на:
 
 ```text
-HydraRoute -> connmark 0xffffaab -> XKeen REDIRECT :61219 -> xray -> VLESS
+HydraRoute -> connmark 0xffffaab -> XKeen/xray -> VLESS
 ```
 
 ## Что было доказано
@@ -56,6 +62,7 @@ HydraRoute -> connmark 0xffffaab -> XKeen REDIRECT :61219 -> xray -> VLESS
 
 - локальную обработку redirect;
 - runtime `xray` на порту `61219`;
+- при включенном UDP-расширении еще и `tproxy` на `61220`;
 - маршрутизацию в `VLESS Reality` или `direct`.
 
 ## Текущие важные файлы
@@ -139,6 +146,14 @@ HydraRoute -> connmark 0xffffaab -> XKeen REDIRECT :61219 -> xray -> VLESS
 
 - оставить `HydraRoute` для UI и выбора политики;
 - оставить `XKeen` для фактического data path помеченного трафика.
+
+Отдельный важный вывод по Telegram:
+
+- Telegram корректно матчился в `HydraRoute` по доменам и CIDR;
+- но в гибридной схеме ломался уже после попадания в `xray`;
+- причина оказалась в том, что часть Telegram-трафика приходила в `xray` как IP-only и не совпадала с domain-rules;
+- из-за этого такой трафик внутри `xray` падал в финальный `direct`;
+- исправление: добавить Telegram CIDR в `05_routing.json` как отдельное `ip`-правило на `vless-reality`.
 
 Если после изменения списка `HydraRoute` маршрутизация выглядит устаревшей:
 

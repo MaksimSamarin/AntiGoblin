@@ -45,12 +45,31 @@ LAN-клиент
   -> VLESS Reality outbound или direct
 ```
 
+Для сервисов, которым нужен не только TCP, но и UDP-путь, гибрид позже был расширен:
+
+```text
+HydraRoute -> connmark 0xffffaab
+  -> TCP: nat xkeen -> REDIRECT 61219 -> xray inbound "redirect"
+  -> UDP: mangle xkeen_udp -> TPROXY 61220 -> xray inbound "tproxy"
+  -> xray routing -> VLESS Reality или direct
+```
+
 ### Важное следствие
 
 Система сейчас гибридная:
 
 - `HydraRoute` решает, что должно попасть в специальный путь;
 - `XKeen/xray` решает, как именно этот трафик реально проксировать.
+
+Это значит, что логика сейчас двухслойная:
+
+- `HydraRoute` отвечает за селекцию трафика через `domain.conf`, `ip.list`, `ipset HydraRoute` и `connmark 0xffffaab`;
+- `XKeen/xray` отвечает за финальное routing-решение уже внутри `xray`.
+
+Из этого следует важное практическое правило:
+
+- добавить домен или CIDR только в `HydraRoute` иногда недостаточно;
+- если сервис приходит в `xray` как IP-only трафик без sniffable домена, соответствующий CIDR нужно продублировать еще и в `xray routing`.
 
 ## Объекты и пути на роутере
 
@@ -119,7 +138,7 @@ misc:
 Новая рабочая схема:
 
 ```text
-HydraRoute -> connmark 0xffffaab -> XKeen REDIRECT 61219 -> xray -> VLESS
+HydraRoute -> connmark 0xffffaab -> XKeen/xray -> VLESS
 ```
 
 Это подтверждает:
@@ -193,6 +212,41 @@ HydraRoute -> connmark 0xffffaab -> XKeen REDIRECT 61219 -> xray -> VLESS
 
 - оставить `HydraRoute` для управления доменами и UI;
 - оставить `XKeen` для фактического data path.
+
+## Telegram: отдельный вывод по гибридной схеме
+
+После перехода на гибридный `HydraRoute + XKeen` выяснилось:
+
+- Telegram работал через старый встроенный путь Keenetic;
+- через текущий TCP-only `XKeen`-хук начал ломаться;
+- при этом домены Telegram и его CIDR в `HydraRoute` применялись корректно.
+
+Проверка показала:
+
+- `HydraRoute` успешно матчила `t.me` и `telegram.org`;
+- Telegram-сети присутствовали в `ipset HydraRoute`;
+- трафик клиента реально попадал в `xkeen` и доходил до `xray`;
+- но часть Telegram-трафика была IP-only и приходила в `xray` без sniffable домена;
+- из-за финального правила `outboundTag: direct` такой трафик внутри `xray` уходил напрямую, а не в `vless-reality`.
+
+Фикс:
+
+- в `05_routing.json` добавлено отдельное IP-правило для Telegram CIDR:
+  - `149.154.160.0/20`
+  - `91.105.192.0/23`
+  - `91.108.4.0/22`
+  - `91.108.8.0/22`
+  - `91.108.12.0/22`
+  - `91.108.16.0/22`
+  - `91.108.20.0/22`
+  - `91.108.56.0/22`
+  - `95.161.64.0/20`
+
+Вывод:
+
+- проблема Telegram была не в `HydraRoute`;
+- проблема была не в отсутствии Telegram CIDR на входе;
+- проблема была в том, что `xray routing` не знал, что делать с Telegram IP-only трафиком после попадания в `XKeen`.
 
 ## Замечания по изменению политики
 
