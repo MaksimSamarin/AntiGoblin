@@ -359,3 +359,13 @@ tail -f /opt/var/log/LOGhrneo.log
 # текущие конфиги XKeen
 ls -la /opt/etc/xray/configs
 ```
+
+## Полное зеркало CIDR в xray
+
+Итоговое практическое состояние схемы:
+
+- весь список CIDR из `HydraRoute ip.list` зеркалируется в `xray routing` как общий `ip`-блок на `vless-reality`;
+- `HydraRoute` по-прежнему отвечает за селекцию, `ipset` и `connmark 0xffffaab`;
+- `xray` больше не зависит только от точечных IP-исключений для отдельных сервисов и не отправляет IP-only трафик в финальный `direct` просто потому, что не хватило локального `ip`-правила.
+
+Это стало следующим шагом после частных фиксов для Telegram и GitHub Copilot.

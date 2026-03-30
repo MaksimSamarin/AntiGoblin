@@ -101,3 +101,8 @@
 
 - Telegram потребовал отдельные Telegram CIDR в `xray`;
 - GitHub Copilot потребовал отдельный блок GitHub/Copilot/Microsoft/Azure доменов и сетей в `xray`.
+## Новый Практический Итог
+
+- после частных фиксов для Telegram и GitHub Copilot схема доведена до более общего состояния;
+- теперь в `xray routing` зеркалируется весь список CIDR из `HydraRoute ip.list`;
+- это снижает количество кейсов, когда трафик уже выбран `HydraRoute`, но внутри `xray` все еще падает в финальный `direct` из-за IP-only поведения сервиса.
