@@ -248,6 +248,73 @@ HydraRoute -> connmark 0xffffaab -> XKeen/xray -> VLESS
 - проблема была не в отсутствии Telegram CIDR на входе;
 - проблема была в том, что `xray routing` не знал, что делать с Telegram IP-only трафиком после попадания в `XKeen`.
 
+## GitHub Copilot: отдельный вывод по гибридной схеме
+
+После починки `Codex compact` выяснилось, что `GitHub Copilot` в selective-режиме все еще не работает, хотя при полном туннеле для всего устройства токен выдавался корректно.
+
+Диагностика показала:
+
+- `_ping`-проверки `api.github.com`, `api.githubcopilot.com` и `copilot-proxy.githubusercontent.com` отвечали `HTTP 200`;
+- `HydraRoute` корректно матчила основные GitHub/Copilot/Microsoft-домены;
+- наблюдаемые Copilot IP действительно присутствовали в `ipset HydraRoute`;
+- такие TCP-сессии реально получали `connmark 0xffffaab` и уходили в `xkeen -> 61219`;
+- при этом сервер Copilot все равно отвечал `403 NotAuthorized / not available in your location`.
+
+Практический вывод:
+
+- проблема была не только в селекции на уровне `HydraRoute`;
+- проблема была в том, что `xray routing` не содержал отдельного блока правил для Copilot/GitHub/Microsoft/Azure service-chain;
+- часть трафика после попадания в `xray` могла уходить в финальный `direct`, несмотря на то, что `HydraRoute` уже выбрала этот поток как VPN-трафик.
+
+Фикс:
+
+- в `05_routing.json` добавлены Copilot/GitHub/Microsoft/Azure домены:
+  - `github.com`
+  - `github.dev`
+  - `githubapp.com`
+  - `githubassets.com`
+  - `githubcopilot.com`
+  - `githubstatus.com`
+  - `githubusercontent.com`
+  - `appcenter.ms`
+  - `azure.com`
+  - `azureedge.net`
+  - `azurefd.net`
+  - `azurewebsites.net`
+  - `bing.com`
+  - `services.bingapis.com`
+  - `dual-a-0001.a-msedge.net`
+  - `exp-tas.com`
+  - `live.com`
+  - `microsoft.com`
+  - `microsoftapp.net`
+  - `trafficmanager.net`
+  - `visualstudio.com`
+  - `vscode.dev`
+  - `windows.net`
+- в `05_routing.json` добавлены связанные CIDR:
+  - `4.225.11.0/24`
+  - `8.6.112.0/21`
+  - `8.47.69.0/24`
+  - `13.69.239.0/24`
+  - `13.89.179.0/24`
+  - `13.107.5.0/24`
+  - `13.107.253.0/24`
+  - `20.42.72.0/24`
+  - `20.50.88.0/24`
+  - `20.199.39.0/24`
+  - `20.250.119.0/24`
+  - `34.160.81.0/24`
+  - `104.208.16.0/24`
+  - `140.82.112.0/20`
+  - `172.64.155.0/24`
+
+Итог:
+
+- `GitHub Copilot` начал работать в selective-сценарии;
+- корневая причина оказалась той же природы, что и у Telegram:
+  `HydraRoute` выбирала трафик правильно, но без отдельного Copilot-блока в `xray routing` этого было недостаточно.
+
 ## Замечания по изменению политики
 
 Если домен удален из UI/списка `HydraRoute`:

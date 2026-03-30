@@ -155,6 +155,19 @@ HydraRoute -> connmark 0xffffaab -> XKeen/xray -> VLESS
 - из-за этого такой трафик внутри `xray` падал в финальный `direct`;
 - исправление: добавить Telegram CIDR в `05_routing.json` как отдельное `ip`-правило на `vless-reality`.
 
+Отдельный важный вывод по GitHub Copilot:
+
+- `HydraRoute` корректно матчила основные GitHub/Copilot/Microsoft-домены;
+- `_ping`-диагностика Copilot отвечала успешно по `api.github.com`, `api.githubcopilot.com` и `copilot-proxy.githubusercontent.com`;
+- но selective-режим все равно падал с `403 NotAuthorized / not available in your location`;
+- причина оказалась той же природы, что и у Telegram: без отдельного Copilot/GitHub/Microsoft/Azure блока в `xray routing` часть service-chain внутри `xray` уходила в финальный `direct`.
+
+Исправление:
+
+- добавить Copilot/GitHub/Microsoft/Azure домены и накопленные CIDR в `05_routing.json` на `vless-reality`.
+
+После этого `GitHub Copilot` начал работать в selective-сценарии.
+
 Если после изменения списка `HydraRoute` маршрутизация выглядит устаревшей:
 
 - проверить `domain.conf`;

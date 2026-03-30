@@ -61,6 +61,7 @@
 - убран несовместимый глобальный шаблон `transport`.
 - для гибридной схемы добавлен UDP/TProxy-путь на `61220`;
 - в `xray routing` добавлены Telegram CIDR, потому что один `HydraRoute` не покрывал IP-only Telegram-трафик внутри `xray`.
+- в `xray routing` добавлен отдельный Copilot/GitHub/Microsoft/Azure блок, потому что одного `HydraRoute` тоже оказалось недостаточно для selective-режима GitHub Copilot.
 
 ## Важные локальные фиксы
 
@@ -95,3 +96,8 @@
 
 - новый домен или CIDR в `HydraRoute` не всегда автоматически означает правильный outbound внутри `xray`;
 - если сервис ломается уже после попадания в `XKeen`, надо проверять, не нужен ли ему отдельный `domain` или `ip` rule в `05_routing.json`.
+
+Подтвержденный пример этого правила:
+
+- Telegram потребовал отдельные Telegram CIDR в `xray`;
+- GitHub Copilot потребовал отдельный блок GitHub/Copilot/Microsoft/Azure доменов и сетей в `xray`.
