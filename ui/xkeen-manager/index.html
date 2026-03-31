@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>XKeen Traffic Manager</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">XKeen Traffic Manager</p>
+        <h1>Локальный интерфейс для правил XKeen/xray</h1>
+        <p class="lede">
+          Небольшая панель для управления группами, доменами и CIDR без HydraRoute.
+          Генерирует готовый <code>05_routing.json</code> для <code>XKeen/xray</code>.
+        </p>
+      </div>
+      <div class="hero-actions">
+        <button id="loadSampleBtn" type="button">Загрузить шаблон</button>
+        <button id="importStateBtn" type="button">Импорт state</button>
+        <button id="importRoutingBtn" type="button">Импорт routing.json</button>
+        <button id="exportStateBtn" type="button">Скачать state</button>
+        <button id="exportRoutingBtn" type="button" class="primary">Скачать routing.json</button>
+      </div>
+      <input id="importStateInput" type="file" accept=".json,application/json" hidden>
+      <input id="importRoutingInput" type="file" accept=".json,application/json" hidden>
+    </header>
+
+    <main class="layout">
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">Базовые настройки</p>
+            <h2>Общие параметры</h2>
+          </div>
+        </div>
+
+        <div class="grid two">
+          <label>
+            <span>Название набора</span>
+            <input id="profileName" type="text" placeholder="Домашний XKeen">
+          </label>
+          <label>
+            <span>Стратегия доменов</span>
+            <select id="domainStrategy">
+              <option value="IPIfNonMatch">IPIfNonMatch</option>
+              <option value="AsIs">AsIs</option>
+              <option value="IPOnDemand">IPOnDemand</option>
+            </select>
+          </label>
+        </div>
+
+        <label>
+          <span>Inbound теги</span>
+          <input id="inboundTags" type="text" placeholder="redirect, tproxy">
+          <small>Через запятую. По умолчанию: <code>redirect, tproxy</code>.</small>
+        </label>
+
+        <label>
+          <span>Домены, которые всегда идут в direct</span>
+          <textarea id="directDomains" rows="6" placeholder="stalcraft.net&#10;exbo.net&#10;cdn77.org"></textarea>
+          <small>По одному домену на строку.</small>
+        </label>
+
+        <label>
+          <span>Финальный fallback outbound</span>
+          <select id="fallbackOutbound">
+            <option value="direct">direct</option>
+            <option value="vless-reality">vless-reality</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">Группы</p>
+            <h2>Правила трафика</h2>
+          </div>
+          <button id="addGroupBtn" type="button">Добавить группу</button>
+        </div>
+        <div id="groups"></div>
+      </section>
+
+      <section class="panel output-panel">
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">Предпросмотр</p>
+            <h2>Итоговый routing.json</h2>
+          </div>
+          <div class="hero-actions compact-actions">
+            <button id="copyApplyCmdBtn" type="button">Копировать apply-команду</button>
+            <button id="copyRoutingBtn" type="button">Копировать JSON</button>
+          </div>
+        </div>
+        <div class="stats" id="stats"></div>
+        <div class="apply-box">
+          <p>После скачивания JSON можно применить его так:</p>
+          <code id="applyCommand">.\scripts\xkeen\apply_xkeen_routing_file.ps1 -RoutingFile .\05_routing.generated.json</code>
+        </div>
+        <pre id="routingPreview"></pre>
+      </section>
+    </main>
+  </div>
+
+  <template id="groupTemplate">
+    <article class="group-card">
+      <div class="group-head">
+        <div class="group-title-wrap">
+          <input class="group-name" type="text" placeholder="Новая группа">
+          <label class="toggle">
+            <input class="group-enabled" type="checkbox" checked>
+            <span>Активна</span>
+          </label>
+        </div>
+        <button class="danger remove-group" type="button">Удалить</button>
+      </div>
+
+      <div class="grid two">
+        <label>
+          <span>Outbound</span>
+          <select class="group-outbound">
+            <option value="vless-reality">vless-reality</option>
+            <option value="direct">direct</option>
+          </select>
+        </label>
+        <label>
+          <span>Комментарий</span>
+          <input class="group-note" type="text" placeholder="Например: Copilot / Telegram / AI">
+        </label>
+      </div>
+
+      <div class="grid two">
+        <label>
+          <span>Домены</span>
+          <textarea class="group-domains" rows="9" placeholder="chatgpt.com&#10;openai.com"></textarea>
+        </label>
+        <label>
+          <span>CIDR / IP сети</span>
+          <textarea class="group-cidrs" rows="9" placeholder="140.82.112.0/20&#10;20.199.39.0/24"></textarea>
+        </label>
+      </div>
+    </article>
+  </template>
+
+  <script src="./app.js"></script>
+</body>
+</html>

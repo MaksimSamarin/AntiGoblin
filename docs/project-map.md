@@ -106,3 +106,10 @@
 - после частных фиксов для Telegram и GitHub Copilot схема доведена до более общего состояния;
 - теперь в `xray routing` зеркалируется весь список CIDR из `HydraRoute ip.list`;
 - это снижает количество кейсов, когда трафик уже выбран `HydraRoute`, но внутри `xray` все еще падает в финальный `direct` из-за IP-only поведения сервиса.
+
+## Локальный UI Для XKeen
+
+- в проект добавлен MVP-интерфейс для будущего ухода от `HydraRoute`;
+- UI лежит в `ui/xkeen-manager/`;
+- запуск через `scripts/xkeen/start_xkeen_manager_ui.ps1`;
+- текущая цель UI: хранить группы доменов и CIDR в одном месте и генерировать `05_routing.json` для `XKeen/xray`.

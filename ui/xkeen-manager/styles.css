@@ -1,0 +1,126 @@
+:root {
+  color-scheme: dark;
+  --bg: #0e1621;
+  --bg-soft: #132131;
+  --panel: #18283b;
+  --panel-2: #1d3046;
+  --line: #29425c;
+  --text: #eef5fb;
+  --muted: #9bb2c8;
+  --accent: #4fc3a1;
+  --accent-2: #f0c76e;
+  --shadow: 0 20px 50px rgba(0, 0, 0, 0.28);
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at top left, rgba(79, 195, 161, 0.12), transparent 24rem),
+    radial-gradient(circle at top right, rgba(240, 199, 110, 0.1), transparent 18rem),
+    linear-gradient(180deg, #0b131d, var(--bg));
+  color: var(--text);
+}
+
+.page { max-width: 1600px; margin: 0 auto; padding: 32px 24px 40px; }
+.hero { display: grid; gap: 20px; margin-bottom: 28px; }
+.eyebrow, .panel-kicker { margin: 0 0 10px; font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
+.hero h1, .panel h2 { margin: 0; line-height: 1.1; }
+.hero h1 { font-size: clamp(30px, 4vw, 46px); }
+.lede { margin: 12px 0 0; max-width: 900px; color: var(--muted); }
+.hero-actions, .stats { display: flex; flex-wrap: wrap; gap: 12px; }
+.compact-actions { justify-content: flex-end; }
+.layout { display: grid; grid-template-columns: 1.05fr 1.25fr 1.25fr; gap: 20px; align-items: start; }
+
+.panel {
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent), var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.grid { display: grid; gap: 14px; }
+.grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+label { display: grid; gap: 8px; margin-bottom: 14px; }
+label span { font-size: 14px; font-weight: 600; }
+small { color: var(--muted); }
+
+input, select, textarea, button { font: inherit; }
+
+input, select, textarea {
+  width: 100%;
+  color: var(--text);
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+  outline: none;
+}
+
+textarea { resize: vertical; min-height: 120px; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,195,161,0.18); }
+
+button {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 11px 16px;
+  color: var(--text);
+  background: var(--panel-2);
+  cursor: pointer;
+}
+
+button.primary {
+  background: linear-gradient(135deg, var(--accent), #2c8c72);
+  color: #08120f;
+  border-color: transparent;
+  font-weight: 700;
+}
+
+.danger { color: #ffd3d3; }
+.group-card { border: 1px solid var(--line); border-radius: 20px; background: rgba(7,15,24,0.26); padding: 16px; margin-bottom: 14px; }
+.group-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; margin-bottom: 14px; }
+.group-title-wrap { display: grid; gap: 10px; width: 100%; }
+.group-name { font-size: 18px; font-weight: 700; }
+.toggle { display: flex; align-items: center; gap: 10px; margin: 0; }
+.toggle input { width: 18px; height: 18px; }
+.output-panel { position: sticky; top: 20px; }
+.stat-pill { border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; color: var(--muted); background: rgba(255,255,255,0.03); }
+.apply-box {
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255,255,255,0.03);
+  padding: 14px;
+}
+.apply-box p { margin: 0 0 10px; color: var(--muted); }
+.apply-box code {
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--accent-2);
+}
+pre { margin: 0; padding: 16px; border-radius: 18px; border: 1px solid var(--line); background: #0a121b; color: #d8edf4; overflow: auto; max-height: 70vh; font-size: 12px; line-height: 1.45; }
+code { color: var(--accent-2); }
+
+@media (max-width: 1200px) {
+  .layout { grid-template-columns: 1fr; }
+  .output-panel { position: static; }
+}
+
+@media (max-width: 760px) {
+  .page { padding: 18px 14px 28px; }
+  .grid.two { grid-template-columns: 1fr; }
+  .panel-header, .group-head { flex-direction: column; align-items: stretch; }
+}
