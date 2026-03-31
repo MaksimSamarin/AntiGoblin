@@ -25,6 +25,7 @@
 - экспортировать `state.json`;
 - экспортировать итоговый `05_routing.json`.
 - показывать готовую `apply`-команду для накатки файла на роутер.
+- при первом открытии загружать боевой снапшот `routing.json`, заранее снятый с роутера.
 
 ## Что Пока Не Делает
 
@@ -70,6 +71,8 @@ http://127.0.0.1:8765/
   - [index.html](/e:/Домашние проекты/VPN на роутере/ui/xkeen-manager/index.html)
   - [app.js](/e:/Домашние проекты/VPN на роутере/ui/xkeen-manager/app.js)
   - [styles.css](/e:/Домашние проекты/VPN на роутере/ui/xkeen-manager/styles.css)
+- live snapshot для автозагрузки:
+  - [router-live-routing.json](/e:/Домашние проекты/VPN на роутере/ui/xkeen-manager/router-live-routing.json)
 - sample state:
   - [xkeen-ui-state.sample.json](/e:/Домашние проекты/VPN на роутере/configs/xkeen/xkeen-ui-state.sample.json)
 

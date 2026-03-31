@@ -1,6 +1,7 @@
-const STORAGE_KEY = "xkeen-manager-state-v1";
+const STORAGE_KEY = "xkeen-manager-state-v2";
+const BUNDLED_ROUTING_URL = "./router-live-routing.json";
 
-const sampleState = {
+const fallbackState = {
   profileName: "Домашний XKeen",
   domainStrategy: "IPIfNonMatch",
   inboundTags: ["redirect", "tproxy"],
@@ -8,22 +9,13 @@ const sampleState = {
   fallbackOutbound: "direct",
   groups: [
     {
-      id: "sample-ai",
-      name: "AI",
-      note: "ChatGPT / OpenAI / Anthropic",
+      id: crypto.randomUUID(),
+      name: "VPN",
+      note: "Резервное состояние, если снапшот не загружен",
       enabled: true,
       outboundTag: "vless-reality",
-      domains: ["chatgpt.com", "openai.com", "oaistatic.com", "anthropic.com", "claude.ai", "claude.com"],
+      domains: [],
       cidrs: []
-    },
-    {
-      id: "sample-telegram",
-      name: "Telegram",
-      note: "Пример группы с доменами и CIDR",
-      enabled: true,
-      outboundTag: "vless-reality",
-      domains: ["t.me", "telegram.org", "telegram.me", "tdesktop.com"],
-      cidrs: ["149.154.160.0/20", "91.108.4.0/22", "91.108.8.0/22"]
     }
   ]
 };
@@ -54,34 +46,70 @@ const els = {
 };
 
 bindTopLevel();
-render();
+bootstrap();
+
+async function bootstrap() {
+  if (!state) {
+    state = await loadBundledState();
+    persistAndRender();
+    return;
+  }
+
+  render();
+}
 
 function bindTopLevel() {
-  els.profileName.addEventListener("input", () => { state.profileName = els.profileName.value; persistAndRender(); });
-  els.domainStrategy.addEventListener("change", () => { state.domainStrategy = els.domainStrategy.value; persistAndRender(); });
-  els.inboundTags.addEventListener("input", () => { state.inboundTags = splitLinesOrCsv(els.inboundTags.value); persistAndRender(); });
-  els.directDomains.addEventListener("input", () => { state.directDomains = splitLinesOrCsv(els.directDomains.value); persistAndRender(); });
-  els.fallbackOutbound.addEventListener("change", () => { state.fallbackOutbound = els.fallbackOutbound.value; persistAndRender(); });
+  els.profileName.addEventListener("input", () => {
+    state.profileName = els.profileName.value;
+    persistAndRender();
+  });
+
+  els.domainStrategy.addEventListener("change", () => {
+    state.domainStrategy = els.domainStrategy.value;
+    persistAndRender();
+  });
+
+  els.inboundTags.addEventListener("input", () => {
+    state.inboundTags = splitLinesOrCsv(els.inboundTags.value);
+    persistAndRender();
+  });
+
+  els.directDomains.addEventListener("input", () => {
+    state.directDomains = splitLinesOrCsv(els.directDomains.value);
+    persistAndRender();
+  });
+
+  els.fallbackOutbound.addEventListener("change", () => {
+    state.fallbackOutbound = els.fallbackOutbound.value;
+    persistAndRender();
+  });
 
   els.addGroupBtn.addEventListener("click", () => {
     state.groups.push(createEmptyGroup());
     persistAndRender();
   });
 
-  els.loadSampleBtn.addEventListener("click", () => {
-    state = structuredClone(sampleState);
+  els.loadSampleBtn.addEventListener("click", async () => {
+    state = await loadBundledState();
     persistAndRender();
   });
 
-  els.exportStateBtn.addEventListener("click", () => downloadJson(`${slugify(state.profileName || "xkeen")}-state.json`, state));
-  els.exportRoutingBtn.addEventListener("click", () => downloadJson("05_routing.generated.json", buildRoutingDocument(state)));
+  els.exportStateBtn.addEventListener("click", () => {
+    downloadJson(`${slugify(state.profileName || "xkeen")}-state.json`, state);
+  });
+
+  els.exportRoutingBtn.addEventListener("click", () => {
+    downloadJson("05_routing.generated.json", buildRoutingDocument(state));
+  });
+
   els.importStateBtn.addEventListener("click", () => els.importStateInput.click());
   els.importRoutingBtn.addEventListener("click", () => els.importRoutingInput.click());
 
   els.importStateInput.addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    state = normalizeState(JSON.parse(await file.text()));
+    const text = await file.text();
+    state = normalizeState(JSON.parse(text));
     persistAndRender();
     event.target.value = "";
   });
@@ -89,7 +117,8 @@ function bindTopLevel() {
   els.importRoutingInput.addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    state = importFromRouting(JSON.parse(await file.text()));
+    const text = await file.text();
+    state = importFromRouting(JSON.parse(text));
     persistAndRender();
     event.target.value = "";
   });
@@ -97,13 +126,17 @@ function bindTopLevel() {
   els.copyRoutingBtn.addEventListener("click", async () => {
     await navigator.clipboard.writeText(JSON.stringify(buildRoutingDocument(state), null, 2));
     els.copyRoutingBtn.textContent = "Скопировано";
-    setTimeout(() => { els.copyRoutingBtn.textContent = "Копировать JSON"; }, 1200);
+    setTimeout(() => {
+      els.copyRoutingBtn.textContent = "Копировать JSON";
+    }, 1200);
   });
 
   els.copyApplyCmdBtn.addEventListener("click", async () => {
     await navigator.clipboard.writeText(els.applyCommand.textContent);
     els.copyApplyCmdBtn.textContent = "Скопировано";
-    setTimeout(() => { els.copyApplyCmdBtn.textContent = "Копировать apply-команду"; }, 1200);
+    setTimeout(() => {
+      els.copyApplyCmdBtn.textContent = "Копировать apply-команду";
+    }, 1200);
   });
 }
 
@@ -119,6 +152,7 @@ function render() {
 
 function renderGroups() {
   els.groups.innerHTML = "";
+
   state.groups.forEach((group) => {
     const node = els.groupTemplate.content.firstElementChild.cloneNode(true);
     const nameEl = node.querySelector(".group-name");
@@ -142,6 +176,7 @@ function renderGroups() {
     outboundEl.addEventListener("change", () => updateGroup(group.id, { outboundTag: outboundEl.value }));
     domainsEl.addEventListener("input", () => updateGroup(group.id, { domains: splitLinesOrCsv(domainsEl.value) }));
     cidrsEl.addEventListener("input", () => updateGroup(group.id, { cidrs: splitLinesOrCsv(cidrsEl.value) }));
+
     removeBtn.addEventListener("click", () => {
       state.groups = state.groups.filter((item) => item.id !== group.id);
       persistAndRender();
@@ -175,18 +210,49 @@ function buildRoutingDocument(inputState) {
   const directDomains = uniq(inputState.directDomains);
 
   if (directDomains.length) {
-    rules.push({ type: "field", inboundTag: inboundTags, domain: directDomains, outboundTag: "direct" });
+    rules.push({
+      type: "field",
+      inboundTag: inboundTags,
+      domain: directDomains,
+      outboundTag: "direct"
+    });
   }
 
   for (const group of inputState.groups.filter((item) => item.enabled)) {
     const domains = uniq(group.domains);
     const cidrs = uniq(group.cidrs);
-    if (domains.length) rules.push({ type: "field", inboundTag: inboundTags, domain: domains, outboundTag: group.outboundTag });
-    if (cidrs.length) rules.push({ type: "field", inboundTag: inboundTags, ip: cidrs, outboundTag: group.outboundTag });
+
+    if (domains.length) {
+      rules.push({
+        type: "field",
+        inboundTag: inboundTags,
+        domain: domains,
+        outboundTag: group.outboundTag
+      });
+    }
+
+    if (cidrs.length) {
+      rules.push({
+        type: "field",
+        inboundTag: inboundTags,
+        ip: cidrs,
+        outboundTag: group.outboundTag
+      });
+    }
   }
 
-  rules.push({ type: "field", inboundTag: inboundTags, outboundTag: inputState.fallbackOutbound || "direct" });
-  return { routing: { domainStrategy: inputState.domainStrategy || "IPIfNonMatch", rules } };
+  rules.push({
+    type: "field",
+    inboundTag: inboundTags,
+    outboundTag: inputState.fallbackOutbound || "direct"
+  });
+
+  return {
+    routing: {
+      domainStrategy: inputState.domainStrategy || "IPIfNonMatch",
+      rules
+    }
+  };
 }
 
 function importFromRouting(doc) {
@@ -198,6 +264,7 @@ function importFromRouting(doc) {
   for (const rule of rules) {
     if (!rule.outboundTag || (rule.outboundTag === "direct" && !rule.domain && !rule.ip)) continue;
     if (rule.outboundTag === "direct" && Array.isArray(rule.domain)) continue;
+
     const key = rule.outboundTag;
     if (!grouped.has(key)) {
       grouped.set(key, {
@@ -210,13 +277,14 @@ function importFromRouting(doc) {
         cidrs: []
       });
     }
+
     const target = grouped.get(key);
     if (Array.isArray(rule.domain)) target.domains.push(...rule.domain);
     if (Array.isArray(rule.ip)) target.cidrs.push(...rule.ip);
   }
 
   const imported = {
-    profileName: "Импортированный routing",
+    profileName: "Текущее боевое состояние",
     domainStrategy: doc?.routing?.domainStrategy || "IPIfNonMatch",
     inboundTags: inboundTags.length ? inboundTags : ["redirect", "tproxy"],
     directDomains: uniq(directRule?.domain || []),
@@ -228,7 +296,10 @@ function importFromRouting(doc) {
     }))
   };
 
-  if (!imported.groups.length) imported.groups = [createEmptyGroup()];
+  if (!imported.groups.length) {
+    imported.groups = [createEmptyGroup()];
+  }
+
   return normalizeState(imported);
 }
 
@@ -244,8 +315,23 @@ function persistAndRender() {
 
 function loadState() {
   const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) return structuredClone(sampleState);
-  try { return normalizeState(JSON.parse(raw)); } catch { return structuredClone(sampleState); }
+  if (!raw) return null;
+  try {
+    return normalizeState(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+async function loadBundledState() {
+  try {
+    const response = await fetch(BUNDLED_ROUTING_URL, { cache: "no-store" });
+    if (!response.ok) throw new Error("router-live-routing.json fetch failed");
+    const routing = await response.json();
+    return importFromRouting(routing);
+  } catch {
+    return structuredClone(fallbackState);
+  }
 }
 
 function normalizeState(input) {
@@ -268,11 +354,24 @@ function normalizeState(input) {
 }
 
 function createEmptyGroup() {
-  return { id: crypto.randomUUID(), name: "Новая группа", note: "", enabled: true, outboundTag: "vless-reality", domains: [], cidrs: [] };
+  return {
+    id: crypto.randomUUID(),
+    name: "Новая группа",
+    note: "",
+    enabled: true,
+    outboundTag: "vless-reality",
+    domains: [],
+    cidrs: []
+  };
 }
 
 function splitLinesOrCsv(text) {
-  return uniq(text.split(/\r?\n|,/g).map((item) => item.trim()).filter(Boolean));
+  return uniq(
+    text
+      .split(/\r?\n|,/g)
+      .map((item) => item.trim())
+      .filter(Boolean)
+  );
 }
 
 function uniq(items) {
@@ -280,7 +379,7 @@ function uniq(items) {
 }
 
 function statPill(text) {
-  return `<span class=\"stat-pill\">${escapeHtml(text)}</span>`;
+  return `<span class="stat-pill">${escapeHtml(text)}</span>`;
 }
 
 function slugify(text) {
