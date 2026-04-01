@@ -2,84 +2,105 @@
 
 ## Что Это
 
-Локальный MVP-интерфейс для управления правилами `XKeen/xray` без `HydraRoute`.
+Локальная и роутерная панель для управления `XKeen/xray` без ручного редактирования `04_outbounds.json` и `05_routing.json`.
 
-Цель:
+Источник истины для панели:
+- `/opt/share/xkeen-manager/xkeen-ui-state.json`
 
-- хранить группы в одном месте;
-- редактировать домены и CIDR через простой UI;
-- генерировать готовый `05_routing.json` для `XKeen/xray`;
-- постепенно уйти от гибридной схемы `HydraRoute -> XKeen`.
+Боевые файлы `xray`:
+- `/opt/etc/xray/configs/04_outbounds.json`
+- `/opt/etc/xray/configs/05_routing.json`
 
-## Что Уже Умеет
+Backend:
+- `/opt/share/xkeen-manager/api/routing.cgi`
+- `/opt/share/xkeen-manager/api/xkeen-selfheal.sh`
 
-- редактировать `direct`-домены;
-- создавать группы;
-- задавать для группы:
-  - имя;
-  - комментарий;
-  - `outboundTag`;
-  - список доменов;
-  - список CIDR;
-- импортировать существующий `routing.json`;
-- экспортировать `state.json`;
-- экспортировать итоговый `05_routing.json`.
-- показывать готовую `apply`-команду для накатки файла на роутер.
-- при первом открытии загружать боевой снапшот `routing.json`, заранее снятый с роутера.
+Веб-сервер:
+- `uhttpd` на `8899`
 
-## Что Пока Не Делает
+## Как Работает
 
-- не пишет файлы на роутер напрямую;
-- не применяет конфиг автоматически;
-- не редактирует `04_outbounds.json`;
-- не заменяет пока все возможности `HydraRoute`.
+- UI читает и сохраняет `xkeen-ui-state.json`
+- `Сохранить` пишет только `state`
+- `Сохранить и применить`:
+  - сохраняет `state`
+  - генерирует `04_outbounds.json`
+  - генерирует `05_routing.json`
+  - делает backup боевых файлов
+  - перезапускает `xray`
+- `Восстановить` чинит runtime:
+  - `xkeen`
+  - `xkeen_udp`
+  - `ip rule`
+  - процесс `xray`
 
-Это намеренно маленький MVP.
+## Кнопки
 
-## Как Запустить
+- `Импорт`
+  Загружает сохраненный `state` из файла.
+
+- `Скачать`
+  Сохраняет текущий `state` в файл.
+
+- `Сохранить`
+  Сохраняет только профиль и группы на роутере, без применения в `xray`.
+
+- `Сохранить и применить`
+  Сохраняет `state` и применяет его в боевые конфиги `xray`.
+
+- `Восстановить`
+  Восстанавливает runtime-хуки и процесс `xray`, если Keenetic пересобрал `iptables`.
+
+## Локальный Запуск
 
 ```powershell
 .\scripts\xkeen\start_xkeen_manager_ui.ps1
 ```
 
-По умолчанию UI откроется на:
+Адрес:
 
 ```text
 http://127.0.0.1:8765/
 ```
 
-## Как Применить Сгенерированный JSON
+## Развертывание На Роутере
 
-1. В UI нажать `Скачать routing.json`.
-2. В папке с загруженным файлом выполнить:
+Полный стек одной командой:
 
 ```powershell
-.\scripts\xkeen\apply_xkeen_routing_file.ps1 -RoutingFile .\05_routing.generated.json
+$env:ROUTER_SSH_PASSWORD='keenetic'
+.\scripts\xkeen\deploy_xkeen_manager_stack_to_router.ps1
 ```
 
-Скрипт:
+Или по частям:
 
-- валидирует JSON локально;
-- делает backup текущего `/opt/etc/xray/configs/05_routing.json`;
-- загружает новый файл на роутер;
-- вручную перезапускает `xray`;
-- проверяет, что listeners `61219` и `61220` поднялись.
+```powershell
+$env:ROUTER_SSH_PASSWORD='keenetic'
+.\scripts\xkeen\deploy_xkeen_manager_ui_to_router.ps1
+.\scripts\xkeen\deploy_xkeen_manager_backend_to_router.ps1
+.\scripts\xkeen\start_xkeen_manager_ui_router.ps1
+```
 
-## Где Лежат Файлы
+Адрес:
 
-- UI:
-  - [index.html](/e:/Домашние проекты/VPN на роутере/ui/xkeen-manager/index.html)
-  - [app.js](/e:/Домашние проекты/VPN на роутере/ui/xkeen-manager/app.js)
-  - [styles.css](/e:/Домашние проекты/VPN на роутере/ui/xkeen-manager/styles.css)
-- live snapshot для автозагрузки:
-  - [router-live-routing.json](/e:/Домашние проекты/VPN на роутере/ui/xkeen-manager/router-live-routing.json)
-- sample state:
-  - [xkeen-ui-state.sample.json](/e:/Домашние проекты/VPN на роутере/configs/xkeen/xkeen-ui-state.sample.json)
+```text
+http://192.168.2.1:8899/
+```
 
-## Ближайший Следующий Шаг
+Остановить:
 
-Если MVP приживется, следующая разумная эволюция такая:
+```powershell
+$env:ROUTER_SSH_PASSWORD='keenetic'
+.\scripts\xkeen\stop_xkeen_manager_ui_router.ps1
+```
 
-1. хранить не только UI-state, но и нормализованный project source of truth;
-2. добавить генерацию не только `05_routing.json`, но и сопутствующего набора файлов;
-3. добавить безопасную кнопку `stage/apply` через существующие PowerShell-скрипты.
+## Проверки После Применения
+
+После успешного применения `xray` должен слушать:
+
+- `61219/tcp`
+- `61220/udp`
+
+Runtime self-heal пишет лог сюда:
+
+- `/opt/var/log/xkeen-selfheal.log`
