@@ -11,6 +11,7 @@ TMP_AUTH_HEADERS="/tmp/xkeen-auth-headers.txt"
 LOG_PATH="/opt/var/log/xray-manual.log"
 XRAY_BIN="/opt/sbin/xray"
 SELFHEAL_PATH="/opt/share/xkeen-manager/api/xkeen-selfheal.sh"
+TMP_RESTART_SCRIPT="/tmp/xkeen-apply-restart.sh"
 
 json_ok() {
   printf 'Status: 200 OK\r\n'
@@ -57,31 +58,94 @@ restart_xray() {
   netstat -lnptu 2>/dev/null | grep -q '61219'
 }
 
+queue_restart_xray() {
+  cat > "$TMP_RESTART_SCRIPT" <<EOF
+#!/bin/sh
+killall xray 2>/dev/null || true
+sleep 1
+XRAY_LOCATION_ASSET=/opt/etc/xray/dat XRAY_LOCATION_CONFDIR=/opt/etc/xray/configs \
+  /opt/sbin/start-stop-daemon -S -b -m -p /opt/var/run/xray-ui.pid -x "$XRAY_BIN" -- run >>"$LOG_PATH" 2>&1
+sleep 4
+if [ -x "$SELFHEAL_PATH" ]; then
+  "$SELFHEAL_PATH" --force >>"$LOG_PATH" 2>&1
+fi
+rm -f "$TMP_RESTART_SCRIPT"
+EOF
+  chmod +x "$TMP_RESTART_SCRIPT" 2>/dev/null || true
+  nohup "$TMP_RESTART_SCRIPT" >/dev/null 2>&1 &
+}
+
+build_bypass_ipset_inline() {
+  ipset create xkeen_bypass hash:net family inet -exist
+  ipset flush xkeen_bypass 2>/dev/null || true
+
+  cat <<'EOF' | while IFS= read -r domain; do
+api.io.mi.com
+api.home.mi.com
+home.mi.com
+ot.io.mi.com
+app.chat.global.xiaomi.net
+resolver.msg.global.xiaomi.net
+data.mistat.xiaomi.com
+EOF
+    [ -n "$domain" ] || continue
+    nslookup "$domain" 2>/dev/null | /opt/bin/awk '
+      /^Name:/ { seen_name=1; next }
+      seen_name && /^Address [0-9]+: / { print $3; next }
+      seen_name && /^Address: / { print $2; next }
+    ' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -Ev '^(127\.|192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)' | while IFS= read -r ip; do
+      [ -n "$ip" ] || continue
+      ipset add xkeen_bypass "$ip"/32 -exist 2>/dev/null || true
+    done
+  done
+
+  cat <<'EOF' | while IFS= read -r ip; do
+5.28.195.2
+47.241.213.210
+EOF
+    [ -n "$ip" ] || continue
+    ipset add xkeen_bypass "$ip"/32 -exist 2>/dev/null || true
+  done
+}
+
+validate_confdir() {
+  /opt/sbin/xray run -test -confdir /opt/etc/xray/configs >/dev/null 2>&1
+}
+
 repair_runtime() {
   if [ -x "$SELFHEAL_PATH" ]; then
     "$SELFHEAL_PATH" --force >/dev/null 2>&1
     return $?
   fi
 
+  build_bypass_ipset_inline
   iptables -t nat -N xkeen 2>/dev/null || true
   iptables -t nat -F xkeen 2>/dev/null || true
+  iptables -t nat -A xkeen -d 192.168.2.0/24 -j RETURN 2>/dev/null || true
+  iptables -t nat -A xkeen -d 224.0.0.0/4 -j RETURN 2>/dev/null || true
+  iptables -t nat -A xkeen -d 255.255.255.255/32 -j RETURN 2>/dev/null || true
   iptables -t nat -A xkeen -d 192.168.1.102/32 -j RETURN 2>/dev/null || true
+  iptables -t nat -A xkeen -p tcp -m set --match-set xkeen_bypass dst -j RETURN 2>/dev/null || true
   iptables -t nat -A xkeen -p tcp -j REDIRECT --to-ports 61219 2>/dev/null || true
+  iptables -t nat -A xkeen -j RETURN 2>/dev/null || true
   iptables -t nat -D PREROUTING -m connmark --mark 0xffffaab -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || true
-  iptables -t nat -C PREROUTING -m connmark --mark 0xffffaac -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || \
-    iptables -t nat -I PREROUTING 1 -m connmark --mark 0xffffaac -m conntrack ! --ctstate INVALID -j xkeen
+  iptables -t nat -C PREROUTING -m connmark --mark 0xffffaaa -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || \
+    iptables -t nat -I PREROUTING 1 -m connmark --mark 0xffffaaa -m conntrack ! --ctstate INVALID -j xkeen
 
-  ip rule add fwmark 0x111 lookup 111 2>/dev/null || true
-  ip route add local default dev lo table 111 2>/dev/null || true
+  while ip rule show | grep -q 'fwmark 0x111 lookup 111'; do
+    ip rule del fwmark 0x111 lookup 111 2>/dev/null || break
+  done
 
-  iptables -t mangle -N xkeen_udp 2>/dev/null || true
-  iptables -t mangle -F xkeen_udp 2>/dev/null || true
-  iptables -t mangle -A xkeen_udp -d 192.168.1.102/32 -j RETURN 2>/dev/null || true
-  iptables -t mangle -A xkeen_udp -p udp -m socket --transparent -j MARK --set-mark 0x111 2>/dev/null || true
-  iptables -t mangle -A xkeen_udp -p udp -j TPROXY --on-ip 0.0.0.0 --on-port 61220 --tproxy-mark 0x111 2>/dev/null || true
   iptables -t mangle -D PREROUTING -m connmark --mark 0xffffaab -m conntrack ! --ctstate INVALID -p udp -j xkeen_udp 2>/dev/null || true
-  iptables -t mangle -C PREROUTING -m connmark --mark 0xffffaac -m conntrack ! --ctstate INVALID -p udp -j xkeen_udp 2>/dev/null || \
-    iptables -t mangle -I PREROUTING 1 -m connmark --mark 0xffffaac -m conntrack ! --ctstate INVALID -p udp -j xkeen_udp
+  iptables -t mangle -D PREROUTING -m connmark --mark 0xffffaaa -m conntrack ! --ctstate INVALID -p udp -j xkeen_udp 2>/dev/null || true
+  iptables -t mangle -F xkeen_udp 2>/dev/null || true
+  iptables -t mangle -X xkeen_udp 2>/dev/null || true
+
+  iptables -t mangle -D PREROUTING -m connmark --mark 0xffffaaa -m conntrack ! --ctstate INVALID -p udp -j xkeen_quic 2>/dev/null || true
+  iptables -t mangle -F xkeen_quic 2>/dev/null || true
+  iptables -t mangle -X xkeen_quic 2>/dev/null || true
+  ipset destroy xkeen_vpn 2>/dev/null || true
+  ipset destroy xkeen_quic_bypass 2>/dev/null || true
 
   restart_xray || return 1
   return 0
@@ -362,15 +426,15 @@ case "$REQUEST_METHOD" in
     }
     cp "$TMP_NEW" "$SNAPSHOT_PATH" 2>/dev/null || true
 
-    if restart_xray; then
-      json_ok "{\"ok\":true,\"backup\":\"$BACKUP\"}"
+    if validate_confdir; then
+      queue_restart_xray
+      json_ok "{\"ok\":true,\"backup\":\"$BACKUP\",\"queuedRestart\":true}"
     else
       if [ -f "$BACKUP" ]; then
         cp "$BACKUP" "$ROUTING_PATH"
         cp "$BACKUP" "$SNAPSHOT_PATH" 2>/dev/null || true
-        restart_xray >/dev/null 2>&1 || true
       fi
-      json_err "xray failed to restart, rollback applied"
+      json_err "xray config validation failed, rollback applied"
     fi
 
     rm -f "$TMP_BODY" "$TMP_NEW" "$TMP_STATE" "$TMP_NEW.body"

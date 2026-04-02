@@ -1,115 +1,72 @@
 # Карта проекта
 
-Это набор рабочих заметок, конфигов и скриптов по маршрутизации VPN на Keenetic.
+## Главное
 
-## Источник истины
+Проект сейчас держится на трех частях:
 
-- основной технический документ: `docs/architecture.md`;
-- краткий handoff: `docs/prompt.md`.
+- `AntiGoblin` UI
+- `Keenetic policy xkeen`
+- `XKeen/xray`
 
-## Текущее итоговое состояние
+## Ключевые каталоги
 
-Рабочая схема после сессии `2026-03-29`:
+- `ui/xkeen-manager/`
+  Фронт, стили, логика UI и router backend.
 
-- `HydraRoute` оставлен как слой выбора и UI;
-- `XKeen` поднят как рабочий транспортный путь;
-- `Codex compact` заработал.
+- `ui/xkeen-manager/backend/`
+  Живой runtime backend:
+  - `routing.cgi`
+  - `xkeen-selfheal.sh`
 
-Ключевой вывод:
+- `scripts/xkeen/`
+  Раскатка UI/backend на роутер и служебные скрипты проекта.
 
-- проблема была не в самом VLESS-сервере;
-- проблема была не в `xray` как таковом;
-- проблема сидела в старом пути `Proxy0 -> hev-socks5-tunnel`.
+- `configs/xkeen/`
+  Локальные шаблоны, снапшоты и sample state.
 
-## Что теперь делает каждый слой
+- `docs/`
+  Актуальная документация.
 
-`HydraRoute`:
+- `docs/troubleshooting.md`
+  Короткая памятка по уже найденным проблемам и решениям.
+  Там же зафиксирован временный инструмент отладки через `xray access log`.
 
-- хранит и редактирует список доменов через удобный UI;
-- слушает DNS-ответы;
-- наполняет `ipset HydraRoute`;
-- обеспечивает маркировку и выбор трафика.
+## Что живет на роутере
 
-`XKeen`:
+- UI:
+  - `/opt/share/xkeen-manager/`
+- state:
+  - `/opt/share/xkeen-manager/xkeen-ui-state.json`
+- API:
+  - `/opt/share/xkeen-manager/api/routing.cgi`
+  - `/opt/share/xkeen-manager/api/xkeen-selfheal.sh`
+- xray:
+  - `/opt/etc/xray/configs/04_outbounds.json`
+  - `/opt/etc/xray/configs/05_routing.json`
 
-- принимает уже отобранный трафик через `REDIRECT`;
-- запускает `xray` на `61219`;
-- отправляет трафик в `VLESS Reality` или `direct`.
+## Как думать про схему
 
-Актуальное уточнение после последующей диагностики:
+`AntiGoblin`:
 
-- гибрид больше не только TCP-only;
-- для части трафика поверх схемы добавлен `UDP`-путь:
-  - `xkeen_udp -> TPROXY 61220 -> xray inbound "tproxy"`.
+- хранит профили и группы;
+- генерирует `outbounds` и `routing`.
 
-Еще один важный вывод:
+`Keenetic policy xkeen`:
 
-- `HydraRoute` выбирает трафик;
-- но финальное решение `vless/direct` принимает уже `xray`;
-- поэтому для IP-only сервисов некоторые CIDR приходится дублировать в `xray routing`.
+- выбирает устройства;
+- ставит mark `0xffffaaa`.
 
-## Что поменяли по факту
+`iptables/xkeen`:
 
-Во время миграции и отладки было сделано следующее:
+- пропускает локалку и discovery в `RETURN`;
+- отправляет весь остальной `TCP` в `xray`.
 
-- установлен `XKeen`;
-- создана policy `xkeen` в UI роутера;
-- применены пользовательские drafts для:
-  - outbounds;
-  - routing.
-- исправлен сгенерированный `S24xray`;
-- убран несовместимый глобальный шаблон `transport`.
-- для гибридной схемы добавлен UDP/TProxy-путь на `61220`;
-- в `xray routing` добавлены Telegram CIDR, потому что один `HydraRoute` не покрывал IP-only Telegram-трафик внутри `xray`.
-- в `xray routing` добавлен отдельный Copilot/GitHub/Microsoft/Azure блок, потому что одного `HydraRoute` тоже оказалось недостаточно для selective-режима GitHub Copilot.
+`xray`:
 
-## Важные локальные фиксы
+- получает весь `TCP` устройств из `xkeen`;
+- внутри себя уже решает `vless-reality` или `direct`.
 
-Без них `XKeen` на этой системе не заводился:
+`UDP`:
 
-- в `/opt/etc/init.d/S24xray` вручную возвращен `name_client="xray"`;
-- в том же файле `busybox ps` заменен на обычный `ps`;
-- `/opt/etc/xray/configs/02_transport.json` заменен на `{}` из-за несовместимости шаблона с `Xray 26.2.6`.
-
-## Что не надо забыть
-
-Если в будущем снова запускать `xkeen -i` или регенерировать конфиги:
-
-- `S24xray` может быть перезаписан;
-- `02_transport.json` может снова стать несовместимым.
-
-## Практический вывод
-
-Самая разумная боевая схема на текущий момент:
-
-- оставить `HydraRoute`;
-- оставить `XKeen`;
-- не возвращаться на `Proxy0` для проблемного трафика.
-
-Это не самая «чистая» архитектура, но она:
-
-- работает;
-- удобна в сопровождении;
-- сохраняет UI `HydraRoute`.
-
-При этом важно помнить:
-
-- новый домен или CIDR в `HydraRoute` не всегда автоматически означает правильный outbound внутри `xray`;
-- если сервис ломается уже после попадания в `XKeen`, надо проверять, не нужен ли ему отдельный `domain` или `ip` rule в `05_routing.json`.
-
-Подтвержденный пример этого правила:
-
-- Telegram потребовал отдельные Telegram CIDR в `xray`;
-- GitHub Copilot потребовал отдельный блок GitHub/Copilot/Microsoft/Azure доменов и сетей в `xray`.
-## Новый Практический Итог
-
-- после частных фиксов для Telegram и GitHub Copilot схема доведена до более общего состояния;
-- теперь в `xray routing` зеркалируется весь список CIDR из `HydraRoute ip.list`;
-- это снижает количество кейсов, когда трафик уже выбран `HydraRoute`, но внутри `xray` все еще падает в финальный `direct` из-за IP-only поведения сервиса.
-
-## Локальный UI Для XKeen
-
-- в проект добавлен MVP-интерфейс для будущего ухода от `HydraRoute`;
-- UI лежит в `ui/xkeen-manager/`;
-- запуск через `scripts/xkeen/start_xkeen_manager_ui.ps1`;
-- текущая цель UI: хранить группы доменов и CIDR в одном месте и генерировать `05_routing.json` для `XKeen/xray`.
+- сейчас идет напрямую;
+- `xkeen_udp` и `xkeen_quic` отключены.

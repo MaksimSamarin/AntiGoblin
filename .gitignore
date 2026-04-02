@@ -1,3 +1,4 @@
 .claude/
 snapshots/
 *.tar.gz
+archive/*.zip

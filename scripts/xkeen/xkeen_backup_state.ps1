@@ -19,7 +19,6 @@ $commands = @(
   "sh -c 'iptables -t mangle -S > /tmp/xkeen-backup-$timestamp/iptables-mangle.txt'",
   "sh -c 'iptables -t nat -S > /tmp/xkeen-backup-$timestamp/iptables-nat.txt 2>/dev/null || true'",
   "ndmc -c 'show version' > /tmp/xkeen-backup-$timestamp/show-version.txt",
-  "sh -c 'cat /opt/etc/HydraRoute/hrneo.conf > /tmp/xkeen-backup-$timestamp/hrneo.conf 2>/dev/null || true'",
   "cd /tmp && /opt/bin/tar -czf xkeen-backup-$timestamp.tar.gz xkeen-backup-$timestamp",
   "ls -lh /tmp/xkeen-backup-$timestamp.tar.gz"
 )

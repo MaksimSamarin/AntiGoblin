@@ -1,44 +1,30 @@
 # Проект VPN на роутере
 
-Этот репозиторий собран как база знаний и набор рабочих артефактов по схеме `Keenetic + Entware + HydraRoute + XKeen/xray`.
+Репозиторий хранит текущую рабочую схему `Keenetic + Entware + XKeen/xray + AntiGoblin`.
 
-Основные точки входа:
+Текущее состояние:
 
-- [project-map.md](/e:/Домашние проекты/VPN на роутере/docs/project-map.md) — карта проекта и текущее состояние.
-- [architecture.md](/e:/Домашние проекты/VPN на роутере/docs/architecture.md) — основной технический документ.
-- [prompt.md](/e:/Домашние проекты/VPN на роутере/docs/prompt.md) — короткий handoff для новой сессии.
+- `HydraRoute` удален с роутера полностью.
+- `AntiGoblin` хранит профили, группы, `VLESS/Reality` и генерирует `04_outbounds.json` и `05_routing.json`.
+- Нативная политика Keenetic `xkeen` помечает устройства mark `0xffffaaa`.
+- Цепочка `xkeen` на роутере:
+  - пропускает локалку и discovery через `RETURN`;
+  - отправляет весь остальной `TCP` в `xray` через `REDIRECT 61219`.
+- `UDP` сейчас идет напрямую мимо `xray`.
 
-## Структура
+Источник истины:
 
-- `docs/`
-- `docs/analysis/`
-- `docs/runbooks/`
-- `configs/sing-box/`
+- `/opt/share/xkeen-manager/xkeen-ui-state.json`
+
+Главные каталоги:
+
+- `ui/xkeen-manager/`
 - `configs/xkeen/`
-- `scripts/router/`
 - `scripts/xkeen/`
-- `snapshots/router-configs/`
+- `docs/`
 
-## Текущий фокус
+Точки входа:
 
-- расследование причин сбоев `Codex compact` в схеме маршрутизации Keenetic;
-- фиксация рабочего гибридного решения `HydraRoute + XKeen`;
-- сохранение runbook-ов, конфигов и утилит для повторного развертывания и отката.
-
-## Полезные точки входа
-
-- [codex-compact-debug-checklist.md](/e:/Домашние проекты/VPN на роутере/docs/runbooks/codex-compact-debug-checklist.md)
-- [xkeen-migration-plan.md](/e:/Домашние проекты/VPN на роутере/docs/runbooks/xkeen-migration-plan.md)
-- [xkeen-cutover-checklist.md](/e:/Домашние проекты/VPN на роутере/docs/runbooks/xkeen-cutover-checklist.md)
-- [v2rayn-vs-router-xray.md](/e:/Домашние проекты/VPN на роутере/docs/analysis/v2rayn-vs-router-xray.md)
-- [xkeen-profile-mapping.md](/e:/Домашние проекты/VPN на роутере/docs/analysis/xkeen-profile-mapping.md)
-- [xkeen_backup_state.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_backup_state.ps1)
-- [xkeen_probe_layout.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_probe_layout.ps1)
-- [xkeen_preflight.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_preflight.ps1)
-- [xkeen_stage_drafts.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_stage_drafts.ps1)
-- [xkeen_apply_drafts.ps1](/e:/Домашние проекты/VPN на роутере/scripts/xkeen/xkeen_apply_drafts.ps1)
-
-## Требования к скриптам
-
-- Перед запуском PowerShell-скриптов нужно экспортировать `ROUTER_SSH_PASSWORD`.
-- `snapshots/`, `.claude/` и backup-архивы специально исключены из git.
+- [project-map.md](/e:/Домашние проекты/VPN на роутере/docs/project-map.md)
+- [architecture.md](/e:/Домашние проекты/VPN на роутере/docs/architecture.md)
+- [prompt.md](/e:/Домашние проекты/VPN на роутере/docs/prompt.md)
