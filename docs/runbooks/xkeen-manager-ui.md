@@ -1,14 +1,21 @@
-# AntiGoblin UI
+# Runbook: AntiGoblin UI
 
 ## Что это
 
-Локальная и роутерная панель для управления `XKeen/xray` без ручного редактирования `04_outbounds.json` и `05_routing.json`.
+`AntiGoblin` — router-hosted UI для управления:
 
-Источник истины:
+- профилями
+- routing-группами
+- `VLESS Reality`
+- сгенерированным `xray`-конфигом на роутере
+
+## Файлы на роутере
+
+UI state:
 
 - `/opt/share/xkeen-manager/xkeen-ui-state.json`
 
-Боевые файлы `xray`:
+Сгенерированные файлы `xray`:
 
 - `/opt/etc/xray/configs/04_outbounds.json`
 - `/opt/etc/xray/configs/05_routing.json`
@@ -18,53 +25,86 @@ Backend:
 - `/opt/share/xkeen-manager/api/routing.cgi`
 - `/opt/share/xkeen-manager/api/xkeen-selfheal.sh`
 
-## Как работает
+## Действия в UI
 
-- UI читает и сохраняет `xkeen-ui-state.json`
-- `Сохранить` пишет только state
-- `Сохранить и применить`:
-  - сохраняет state
-  - генерирует `04_outbounds.json`
-  - генерирует `05_routing.json`
-  - делает backup боевых файлов
-  - перезапускает `xray`
-- `Рестарт` чинит runtime:
-  - `xkeen`
-  - hook `PREROUTING -> xkeen`
-  - процесс `xray`
+### `Сохранить`
 
-## Локальный запуск
+Пишет только UI state на роутере.
+
+### `Сохранить и применить`
+
+Делает все сразу:
+
+- сохраняет state
+- генерирует `04_outbounds.json`
+- генерирует `05_routing.json`
+- валидирует `xray`-конфиг
+- делает backup
+- перезапускает `xray`
+
+### `Рестарт`
+
+Чинит только runtime:
+
+- цепочку `xkeen`
+- hook `PREROUTING -> xkeen`
+- процесс `xray`, если это нужно
+
+State при этом заново не генерирует.
+
+## Деплой
+
+### Полный стек
 
 ```powershell
-.\scripts\xkeen\start_xkeen_manager_ui.ps1
+$env:ROUTER_SSH_PASSWORD = 'пароль-ssh-роутера'
+$env:ROUTER_SSH_USER = 'root' # опционально
+.\scripts\xkeen\deploy_xkeen_manager_stack_to_router.ps1 -RouterHost 192.168.1.1
 ```
 
-Адрес:
+Открыть:
 
 ```text
-http://127.0.0.1:8765/
+http://192.168.1.1:8899/
 ```
 
-## Развертывание на роутере
+### Только UI
 
 ```powershell
-$env:ROUTER_SSH_PASSWORD='keenetic'
-.\scripts\xkeen\deploy_xkeen_manager_stack_to_router.ps1
+.\scripts\xkeen\deploy_xkeen_manager_ui_to_router.ps1 -RouterHost 192.168.1.1
 ```
 
-Адрес:
+### Только backend
 
-```text
-http://192.168.2.1:8899/
+```powershell
+.\scripts\xkeen\deploy_xkeen_manager_backend_to_router.ps1 -RouterHost 192.168.1.1
 ```
 
-## Проверки
+## Авторизация
 
-После успешного применения `xray` должен слушать:
+UI использует логин и пароль от веб-интерфейса Keenetic.
 
-- `61219/tcp`
-- `61220/udp`
+Разделение такое:
 
-Self-heal пишет лог сюда:
+- вход в UI  
+  логин и пароль от Keenetic web UI
+- deploy-скрипты  
+  SSH-доступ через `ROUTER_SSH_USER` и `ROUTER_SSH_PASSWORD`
 
-- `/opt/var/log/xkeen-selfheal.log`
+## Что считать нормальным runtime
+
+Нормальная живая схема:
+
+- устройства находятся в политике `xkeen`
+- есть hook `PREROUTING` для mark `0xffffaaa`
+- `TCP` уходит в `61219`
+- `UDP` идет напрямую
+- локалка и discovery идут через `RETURN`
+
+## Базовая проверка после apply
+
+- `xray` запущен
+- порт `61219` слушается
+- цепочка `xkeen` существует
+- `PREROUTING -> xkeen` существует
+- UI на `:8899` открывается

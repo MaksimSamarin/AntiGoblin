@@ -1,6 +1,11 @@
+param(
+  [string]$RouterHost = "192.168.1.1",
+  [string]$RouterUser = $(if ($env:ROUTER_SSH_USER) { $env:ROUTER_SSH_USER } else { 'root' })
+)
+
 $routerPassword = if ($env:ROUTER_SSH_PASSWORD) { $env:ROUTER_SSH_PASSWORD } else { throw "Set ROUTER_SSH_PASSWORD before running this script." }
 $sec = ConvertTo-SecureString $routerPassword -AsPlainText -Force
-$cred = New-Object System.Management.Automation.PSCredential('root', $sec)
+$cred = New-Object System.Management.Automation.PSCredential($RouterUser, $sec)
 
 Import-Module Posh-SSH
 
@@ -8,7 +13,7 @@ $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $backupDir = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "snapshots\xkeen-migration\$timestamp"
 New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
 
-$session = New-SSHSession -ComputerName 192.168.2.1 -Credential $cred -AcceptKey -ConnectionTimeout 10
+$session = New-SSHSession -ComputerName $RouterHost -Credential $cred -AcceptKey -ConnectionTimeout 10
 
 $commands = @(
   "mkdir -p /tmp/xkeen-backup-$timestamp",
@@ -31,7 +36,7 @@ foreach ($command in $commands) {
 }
 
 $scpParams = @{
-  ComputerName = '192.168.2.1'
+  ComputerName = $RouterHost
   Credential   = $cred
   AcceptKey    = $true
   Path         = "/tmp/xkeen-backup-$timestamp.tar.gz"

@@ -1,15 +1,15 @@
-# Заметки по откату XKeen
+# XKeen Rollback Notes
 
-Используй этот путь отката, если текущая схема `AntiGoblin + xkeen + xray` ломает маршрутизацию.
+Use this path if the current `AntiGoblin + xkeen + xray` runtime breaks routing on the router.
 
-## Быстрый откат
+## Fast Rollback
 
-1. Восстановить `/opt/etc/xray` из последнего backup-архива, созданного `xkeen_backup_state.ps1`.
-2. Восстановить `xkeen-ui-state.json`, если был поврежден state.
-3. Перезапустить `xray`.
-4. Прогнать `xkeen-selfheal.sh --force`, чтобы вернуть живую цепочку `xkeen`.
+1. Restore `/opt/etc/xray` from the latest backup created by `xkeen_backup_state.ps1`.
+2. Restore `/opt/share/xkeen-manager/xkeen-ui-state.json` if state was damaged.
+3. Restart `xray`.
+4. Run `xkeen-selfheal.sh --force` to rebuild the live `xkeen` chain.
 
-## Ручные проверки на роутере
+## Router Checks
 
 ```sh
 ps | grep -E '[x]ray|[u]httpd'
@@ -20,8 +20,8 @@ iptables -t mangle -S PREROUTING | grep xkeen
 ls -l /opt/etc/xray/configs
 ```
 
-## Важно
+## Important
 
-- не восстанавливать `HydraRoute`;
-- не поднимать обратно `xkeen_udp` и `xkeen_quic` без отдельной причины;
-- сначала откатывать state и `xray`-конфиги, потом уже runtime.
+- do not restore retired runtime experiments
+- do not re-enable `xkeen_udp` or `xkeen_quic` unless there is a proven reason
+- restore state and `xray` config first, then runtime

@@ -1,12 +1,13 @@
 param(
-  [string]$RouterHost = "192.168.2.1",
+  [string]$RouterHost = "192.168.1.1",
   [int]$Port = 8899,
+  [string]$RouterUser = $(if ($env:ROUTER_SSH_USER) { $env:ROUTER_SSH_USER } else { 'root' }),
   [string]$RemoteRoot = "/opt/share/xkeen-manager"
 )
 
 $routerPassword = if ($env:ROUTER_SSH_PASSWORD) { $env:ROUTER_SSH_PASSWORD } else { throw "Set ROUTER_SSH_PASSWORD before running this script." }
 $sec = ConvertTo-SecureString $routerPassword -AsPlainText -Force
-$cred = New-Object System.Management.Automation.PSCredential('root', $sec)
+$cred = New-Object System.Management.Automation.PSCredential($RouterUser, $sec)
 
 Import-Module Posh-SSH -ErrorAction Stop
 
@@ -19,7 +20,7 @@ try {
     "killall lighttpd 2>/dev/null || true",
     "pkill -f '/opt/sbin/uhttpd -f -p 0.0.0.0:$Port' 2>/dev/null || true",
     "rm -f $RemoteRoot/httpd-auth.conf",
-    "cd $RemoteRoot && /opt/sbin/uhttpd -f -p 0.0.0.0:$Port -h $RemoteRoot -I index.html -x /api -i .cgi=/bin/sh -r 'XKeen Manager' >/opt/var/log/xkeen-manager-uhttpd.log 2>&1 &",
+    "cd $RemoteRoot && /opt/sbin/uhttpd -f -p 0.0.0.0:$Port -h $RemoteRoot -I index.html -x /api -i .cgi=/bin/sh -r 'AntiGoblin' >/opt/var/log/xkeen-manager-uhttpd.log 2>&1 &",
     "sleep 2",
     "netstat -lnpt 2>/dev/null | grep ':$Port ' || true",
     "tail -n 10 /opt/var/log/xkeen-manager-uhttpd.log 2>/dev/null || true"

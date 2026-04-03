@@ -6,6 +6,9 @@ XRAY_ASSET_DIR="/opt/etc/xray/dat"
 XRAY_CONF_DIR="/opt/etc/xray/configs"
 STATE_PATH="/opt/share/xkeen-manager/xkeen-ui-state.json"
 LOCK_DIR="/tmp/xkeen-selfheal.lock"
+RUNTIME_DIR="/opt/share/xkeen-manager/runtime"
+BYPASS_DOMAINS_PATH="$RUNTIME_DIR/bypass-domains.txt"
+BYPASS_CIDRS_PATH="$RUNTIME_DIR/bypass-cidrs.txt"
 
 needs_repair=0
 force_mode=0
@@ -23,23 +26,17 @@ has_rule() {
 }
 
 xray_ready() {
-  netstat -lnptu 2>/dev/null | grep -q '61219' && \
-  netstat -lnptu 2>/dev/null | grep -q '61220'
+  netstat -lnpt 2>/dev/null | grep -q ':61219 '
 }
 
 build_bypass_ipset() {
   ipset create xkeen_bypass hash:net family inet -exist
   ipset flush xkeen_bypass 2>/dev/null || true
 
-  cat <<'EOF' | while IFS= read -r domain; do
-api.io.mi.com
-api.home.mi.com
-home.mi.com
-ot.io.mi.com
-app.chat.global.xiaomi.net
-resolver.msg.global.xiaomi.net
-data.mistat.xiaomi.com
-EOF
+  [ -f "$BYPASS_DOMAINS_PATH" ] || : > "$BYPASS_DOMAINS_PATH"
+  [ -f "$BYPASS_CIDRS_PATH" ] || : > "$BYPASS_CIDRS_PATH"
+
+  sed 's/#.*$//' "$BYPASS_DOMAINS_PATH" | sed '/^[[:space:]]*$/d' | while IFS= read -r domain; do
     [ -n "$domain" ] || continue
     nslookup "$domain" 2>/dev/null | /opt/bin/awk '
       /^Name:/ { seen_name=1; next }
@@ -51,19 +48,29 @@ EOF
     done
   done
 
-  cat <<'EOF' | while IFS= read -r ip; do
-5.28.195.2
-47.241.213.210
-EOF
-    [ -n "$ip" ] || continue
-    ipset add xkeen_bypass "$ip"/32 -exist 2>/dev/null || true
+  sed 's/#.*$//' "$BYPASS_CIDRS_PATH" | sed '/^[[:space:]]*$/d' | while IFS= read -r cidr; do
+    [ -n "$cidr" ] || continue
+    ipset add xkeen_bypass "$cidr" -exist 2>/dev/null || true
+  done
+}
+
+append_local_returns() {
+  iptables -t nat -A xkeen -d 224.0.0.0/4 -j RETURN 2>/dev/null || true
+  iptables -t nat -A xkeen -d 255.255.255.255/32 -j RETURN 2>/dev/null || true
+
+  ip route show | /opt/bin/awk '
+    $1 ~ /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/ && $2 == "dev" {
+      print $1
+    }
+  ' | sort -u | while IFS= read -r subnet; do
+    [ -n "$subnet" ] || continue
+    iptables -t nat -A xkeen -d "$subnet" -j RETURN 2>/dev/null || true
   done
 }
 
 check_runtime() {
   has_rule iptables -t nat -S xkeen || needs_repair=1
   has_rule iptables -t nat -C PREROUTING -m connmark --mark 0xffffaaa -m conntrack ! --ctstate INVALID -j xkeen || needs_repair=1
-  has_rule iptables -t nat -C xkeen -d 192.168.2.0/24 -j RETURN || needs_repair=1
   has_rule iptables -t nat -C xkeen -d 224.0.0.0/4 -j RETURN || needs_repair=1
   has_rule iptables -t nat -C xkeen -d 255.255.255.255/32 -j RETURN || needs_repair=1
   has_rule iptables -t nat -C xkeen -p tcp -m set --match-set xkeen_bypass dst -j RETURN || needs_repair=1
@@ -74,13 +81,11 @@ check_runtime() {
 }
 
 repair_hooks() {
+  mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
   build_bypass_ipset
   iptables -t nat -N xkeen 2>/dev/null || true
   iptables -t nat -F xkeen 2>/dev/null || true
-  iptables -t nat -A xkeen -d 192.168.2.0/24 -j RETURN 2>/dev/null || true
-  iptables -t nat -A xkeen -d 224.0.0.0/4 -j RETURN 2>/dev/null || true
-  iptables -t nat -A xkeen -d 255.255.255.255/32 -j RETURN 2>/dev/null || true
-  iptables -t nat -A xkeen -d 192.168.1.102/32 -j RETURN 2>/dev/null || true
+  append_local_returns
   iptables -t nat -A xkeen -p tcp -m set --match-set xkeen_bypass dst -j RETURN 2>/dev/null || true
   iptables -t nat -A xkeen -p tcp -j REDIRECT --to-ports 61219 2>/dev/null || true
   iptables -t nat -A xkeen -j RETURN 2>/dev/null || true

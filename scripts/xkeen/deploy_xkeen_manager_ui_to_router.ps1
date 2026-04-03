@@ -1,11 +1,12 @@
 param(
-  [string]$RouterHost = "192.168.2.1",
+  [string]$RouterHost = "192.168.1.1",
+  [string]$RouterUser = $(if ($env:ROUTER_SSH_USER) { $env:ROUTER_SSH_USER } else { 'root' }),
   [string]$RemoteRoot = "/opt/share/xkeen-manager"
 )
 
 $routerPassword = if ($env:ROUTER_SSH_PASSWORD) { $env:ROUTER_SSH_PASSWORD } else { throw "Set ROUTER_SSH_PASSWORD before running this script." }
 $sec = ConvertTo-SecureString $routerPassword -AsPlainText -Force
-$cred = New-Object System.Management.Automation.PSCredential('root', $sec)
+$cred = New-Object System.Management.Automation.PSCredential($RouterUser, $sec)
 
 Import-Module Posh-SSH -ErrorAction Stop
 
@@ -54,17 +55,11 @@ $session = New-SSHSession -ComputerName $RouterHost -Credential $cred -AcceptKey
 
 try {
   $prep = @(
-    "mkdir -p $RemoteRoot",
-    "test -f /opt/etc/xray/configs/05_routing.json",
-    "cp /opt/etc/xray/configs/05_routing.json $RemoteRoot/router-live-routing.json",
-    "ls -lh $RemoteRoot/router-live-routing.json"
+    "mkdir -p $RemoteRoot"
   )
 
   foreach ($command in $prep) {
     $result = Invoke-SSHCommand -SSHSession $session -Command $command -TimeOut 30000
-    if ($result.ExitStatus -ne 0 -and $command -eq "test -f /opt/etc/xray/configs/05_routing.json") {
-      throw "Remote file /opt/etc/xray/configs/05_routing.json not found."
-    }
     if ($result.Output) { $result.Output }
     if ($result.Error) { Write-Output '--- STDERR ---'; $result.Error }
   }

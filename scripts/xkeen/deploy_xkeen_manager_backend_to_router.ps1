@@ -1,18 +1,22 @@
 param(
-  [string]$RouterHost = "192.168.2.1",
+  [string]$RouterHost = "192.168.1.1",
+  [string]$RouterUser = $(if ($env:ROUTER_SSH_USER) { $env:ROUTER_SSH_USER } else { 'root' }),
   [string]$RemoteRoot = "/opt/share/xkeen-manager",
-  [string]$RemoteApiDir = "/opt/share/xkeen-manager/api"
+  [string]$RemoteApiDir = "/opt/share/xkeen-manager/api",
+  [string]$RemoteRuntimeDir = "/opt/share/xkeen-manager/runtime"
 )
 
 $routerPassword = if ($env:ROUTER_SSH_PASSWORD) { $env:ROUTER_SSH_PASSWORD } else { throw "Set ROUTER_SSH_PASSWORD before running this script." }
 $sec = ConvertTo-SecureString $routerPassword -AsPlainText -Force
-$cred = New-Object System.Management.Automation.PSCredential('root', $sec)
+$cred = New-Object System.Management.Automation.PSCredential($RouterUser, $sec)
 
 Import-Module Posh-SSH -ErrorAction Stop
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $localApi = Join-Path $repoRoot 'ui\xkeen-manager\backend\routing.cgi'
 $localSelfHeal = Join-Path $repoRoot 'ui\xkeen-manager\backend\xkeen-selfheal.sh'
+$localBypassDomains = Join-Path $repoRoot 'configs\xkeen\bypass-domains.sample.txt'
+$localBypassCidrs = Join-Path $repoRoot 'configs\xkeen\bypass-cidrs.sample.txt'
 
 function Send-RemoteFileBase64 {
   param(
@@ -50,6 +54,12 @@ if (-not (Test-Path $localApi)) {
 if (-not (Test-Path $localSelfHeal)) {
   throw "Missing self-heal file: $localSelfHeal"
 }
+if (-not (Test-Path $localBypassDomains)) {
+  throw "Missing bypass domains sample: $localBypassDomains"
+}
+if (-not (Test-Path $localBypassCidrs)) {
+  throw "Missing bypass CIDRs sample: $localBypassCidrs"
+}
 
 $session = New-SSHSession -ComputerName $RouterHost -Credential $cred -AcceptKey -ConnectionTimeout 10
 
@@ -57,10 +67,10 @@ try {
   $prep = @(
     "mkdir -p $RemoteRoot",
     "mkdir -p $RemoteApiDir",
+    "mkdir -p $RemoteRuntimeDir",
     "opkg update >/dev/null 2>&1 || true",
     "opkg install uhttpd_kn >/dev/null 2>&1 || true",
-    "test -f /opt/etc/xray/configs/05_routing.json",
-    "cp /opt/etc/xray/configs/05_routing.json $RemoteRoot/router-live-routing.json"
+    "test -f /opt/etc/xray/configs/05_routing.json"
   )
 
   foreach ($command in $prep) {
@@ -71,6 +81,19 @@ try {
 
   Send-RemoteFileBase64 -Session $session -LocalPath $localApi -RemotePath "$RemoteApiDir/routing.cgi"
   Send-RemoteFileBase64 -Session $session -LocalPath $localSelfHeal -RemotePath "$RemoteApiDir/xkeen-selfheal.sh"
+  $ensureRuntime = @(
+    @{ Local = $localBypassDomains; Remote = "$RemoteRuntimeDir/bypass-domains.txt" },
+    @{ Local = $localBypassCidrs; Remote = "$RemoteRuntimeDir/bypass-cidrs.txt" }
+  )
+  foreach ($item in $ensureRuntime) {
+    $remoteExists = Invoke-SSHCommand -SSHSession $session -Command "test -f '$($item.Remote)' && echo EXISTS || echo MISSING" -TimeOut 30000
+    if ($remoteExists.Output -contains 'EXISTS') {
+      Write-Output "Keeping existing runtime file: $($item.Remote)"
+      continue
+    }
+    Send-RemoteFileBase64 -Session $session -LocalPath $item.Local -RemotePath $item.Remote
+    Write-Output "Seeded runtime file: $($item.Remote)"
+  }
 
   $cronCmd = @"
 ( /opt/bin/crontab -l 2>/dev/null || true ) | grep -Fv '/opt/share/xkeen-manager/api/xkeen-selfheal.sh' > /tmp/xkeen-cron.new

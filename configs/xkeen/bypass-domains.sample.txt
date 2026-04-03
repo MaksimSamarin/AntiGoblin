@@ -1,0 +1,4 @@
+# One domain per line.
+# These destinations bypass xray before REDIRECT and go directly through the router.
+# Use this for services that break when TCP is transparently redirected.
+

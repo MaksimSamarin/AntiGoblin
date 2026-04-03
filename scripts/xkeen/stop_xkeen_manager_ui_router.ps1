@@ -1,11 +1,12 @@
 param(
-  [string]$RouterHost = "192.168.2.1",
-  [int]$Port = 8899
+  [string]$RouterHost = "192.168.1.1",
+  [int]$Port = 8899,
+  [string]$RouterUser = $(if ($env:ROUTER_SSH_USER) { $env:ROUTER_SSH_USER } else { 'root' })
 )
 
 $routerPassword = if ($env:ROUTER_SSH_PASSWORD) { $env:ROUTER_SSH_PASSWORD } else { throw "Set ROUTER_SSH_PASSWORD before running this script." }
 $sec = ConvertTo-SecureString $routerPassword -AsPlainText -Force
-$cred = New-Object System.Management.Automation.PSCredential('root', $sec)
+$cred = New-Object System.Management.Automation.PSCredential($RouterUser, $sec)
 
 Import-Module Posh-SSH -ErrorAction Stop
 

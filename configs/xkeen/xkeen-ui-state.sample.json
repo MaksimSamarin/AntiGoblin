@@ -1,49 +1,44 @@
 {
-  "profileName": "Домашний XKeen",
-  "domainStrategy": "IPIfNonMatch",
-  "inboundTags": [
-    "redirect",
-    "tproxy"
-  ],
-  "directDomains": [
-    "stalcraft.net",
-    "exbo.net",
-    "cdn77.org"
-  ],
-  "fallbackOutbound": "direct",
-  "groups": [
+  "activeProfileId": "profile-1",
+  "profiles": [
     {
-      "id": "sample-ai",
-      "name": "AI",
-      "note": "ChatGPT, OpenAI, Anthropic",
-      "enabled": true,
-      "outboundTag": "vless-reality",
-      "domains": [
-        "chatgpt.com",
-        "openai.com",
-        "oaistatic.com",
-        "anthropic.com",
-        "claude.ai",
-        "claude.com"
-      ],
-      "cidrs": []
-    },
-    {
-      "id": "sample-telegram",
-      "name": "Telegram",
-      "note": "Пример доменов и сетей",
-      "enabled": true,
-      "outboundTag": "vless-reality",
-      "domains": [
-        "t.me",
-        "telegram.org",
-        "telegram.me",
-        "tdesktop.com"
-      ],
-      "cidrs": [
-        "149.154.160.0/20",
-        "91.108.4.0/22",
-        "91.108.8.0/22"
+      "id": "profile-1",
+      "name": "Profile 1",
+      "domainStrategy": "IPIfNonMatch",
+      "fallbackOutbound": "direct",
+      "proxyConfig": {
+        "address": "vpn.example.com",
+        "port": 443,
+        "uuid": "00000000-0000-0000-0000-000000000000",
+        "flow": "xtls-rprx-vision",
+        "publicKey": "YOUR_REALITY_PUBLIC_KEY",
+        "serverName": "www.cloudflare.com",
+        "shortId": "0123456789abcdef",
+        "fingerprint": "random"
+      },
+      "groups": [
+        {
+          "id": "group-ai",
+          "name": "AI",
+          "note": "Example VPN group",
+          "enabled": true,
+          "outboundTag": "vless-reality",
+          "domains": [
+            "chatgpt.com",
+            "openai.com",
+            "claude.ai"
+          ],
+          "cidrs": []
+        },
+        {
+          "id": "group-direct",
+          "name": "Direct",
+          "note": "Example direct group",
+          "enabled": true,
+          "outboundTag": "direct",
+          "domains": [],
+          "cidrs": []
+        }
       ]
     }
   ]

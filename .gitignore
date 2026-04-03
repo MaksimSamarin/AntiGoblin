@@ -2,3 +2,5 @@
 snapshots/
 *.tar.gz
 archive/*.zip
+configs/xkeen/*.router-live.json
+ui/xkeen-manager/router-live-routing.json

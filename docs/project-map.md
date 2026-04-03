@@ -1,72 +1,93 @@
 # Карта проекта
 
-## Главное
+## Главные части
 
-Проект сейчас держится на трех частях:
+Проект сейчас состоит из трех практических частей:
 
-- `AntiGoblin` UI
-- `Keenetic policy xkeen`
-- `XKeen/xray`
+- UI `AntiGoblin`
+- router backend и self-heal
+- deploy и обслуживающие скрипты для `Keenetic + Entware`
 
-## Ключевые каталоги
+## Карта каталогов
 
-- `ui/xkeen-manager/`
-  Фронт, стили, логика UI и router backend.
+### `ui/xkeen-manager/`
 
-- `ui/xkeen-manager/backend/`
-  Живой runtime backend:
-  - `routing.cgi`
-  - `xkeen-selfheal.sh`
+Фронтенд router-hosted UI:
 
-- `scripts/xkeen/`
-  Раскатка UI/backend на роутер и служебные скрипты проекта.
+- `index.html`
+- `app.js`
+- `styles.css`
+- logo assets
 
-- `configs/xkeen/`
-  Локальные шаблоны, снапшоты и sample state.
+### `ui/xkeen-manager/backend/`
 
-- `docs/`
-  Актуальная документация.
+Router backend и поддержка runtime:
 
-- `docs/troubleshooting.md`
-  Короткая памятка по уже найденным проблемам и решениям.
-  Там же зафиксирован временный инструмент отладки через `xray access log`.
+- `routing.cgi`  
+  API для UI, сохранение state, apply, probe, restart
+- `xkeen-selfheal.sh`  
+  Восстановление runtime и очистка старых хвостов
 
-## Что живет на роутере
+### `scripts/xkeen/`
 
-- UI:
-  - `/opt/share/xkeen-manager/`
-- state:
-  - `/opt/share/xkeen-manager/xkeen-ui-state.json`
-- API:
-  - `/opt/share/xkeen-manager/api/routing.cgi`
-  - `/opt/share/xkeen-manager/api/xkeen-selfheal.sh`
-- xray:
-  - `/opt/etc/xray/configs/04_outbounds.json`
-  - `/opt/etc/xray/configs/05_routing.json`
+Deploy и операционные скрипты:
 
-## Как думать про схему
+- `deploy_xkeen_manager_stack_to_router.ps1`
+- `deploy_xkeen_manager_ui_to_router.ps1`
+- `deploy_xkeen_manager_backend_to_router.ps1`
+- `start_xkeen_manager_ui_router.ps1`
+- `stop_xkeen_manager_ui_router.ps1`
+- `xkeen_backup_state.ps1`
+- `xkeen_rollback_notes.md`
 
-`AntiGoblin`:
+### `configs/xkeen/`
 
-- хранит профили и группы;
-- генерирует `outbounds` и `routing`.
+Только generic sample-конфиги:
 
-`Keenetic policy xkeen`:
+- `xkeen-ui-state.sample.json`
+- `04_outbounds.sample.json`
+- `bypass-domains.sample.txt`
+- `bypass-cidrs.sample.txt`
 
-- выбирает устройства;
-- ставит mark `0xffffaaa`.
+В этой папке не должно быть live-снапшотов роутера и личных черновиков.
 
-`iptables/xkeen`:
+### `docs/`
 
-- пропускает локалку и discovery в `RETURN`;
-- отправляет весь остальной `TCP` в `xray`.
+Актуальная документация:
 
-`xray`:
+- [architecture.md](architecture.md)
+- [project-map.md](project-map.md)
+- [PROMPT.md](PROMPT.md)
+- [troubleshooting.md](troubleshooting.md)
+- [runbooks/xkeen-manager-ui.md](runbooks/xkeen-manager-ui.md)
 
-- получает весь `TCP` устройств из `xkeen`;
-- внутри себя уже решает `vless-reality` или `direct`.
+## Runtime-файлы на роутере
 
-`UDP`:
+UI и state:
 
-- сейчас идет напрямую;
-- `xkeen_udp` и `xkeen_quic` отключены.
+- `/opt/share/xkeen-manager/`
+- `/opt/share/xkeen-manager/xkeen-ui-state.json`
+
+Backend:
+
+- `/opt/share/xkeen-manager/api/routing.cgi`
+- `/opt/share/xkeen-manager/api/xkeen-selfheal.sh`
+
+Runtime bypass:
+
+- `/opt/share/xkeen-manager/runtime/bypass-domains.txt`
+- `/opt/share/xkeen-manager/runtime/bypass-cidrs.txt`
+
+Конфиги `xray`:
+
+- `/opt/etc/xray/configs/01_log.json`
+- `/opt/etc/xray/configs/03_inbounds.json`
+- `/opt/etc/xray/configs/04_outbounds.json`
+- `/opt/etc/xray/configs/05_routing.json`
+
+## Правила на будущее
+
+- В `configs/xkeen/` должны лежать только generic sample-файлы.
+- Live-дампы роутера нужно держать вне продуктовой части.
+- После каждого подтвержденного бага и решения нужно обновлять `docs/troubleshooting.md`.
+- После изменения архитектуры нужно обновлять `README.md`, `docs/architecture.md` и `docs/PROMPT.md`.

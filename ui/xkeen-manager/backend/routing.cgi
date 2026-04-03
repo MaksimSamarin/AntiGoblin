@@ -3,7 +3,6 @@
 ROUTING_PATH="/opt/etc/xray/configs/05_routing.json"
 OUTBOUNDS_PATH="/opt/etc/xray/configs/04_outbounds.json"
 STATE_PATH="/opt/share/xkeen-manager/xkeen-ui-state.json"
-SNAPSHOT_PATH="/opt/share/xkeen-manager/router-live-routing.json"
 TMP_BODY="/tmp/xkeen-routing-body.json"
 TMP_NEW="/tmp/xkeen-routing-new.json"
 TMP_STATE="/tmp/xkeen-state-new.json"
@@ -12,6 +11,9 @@ LOG_PATH="/opt/var/log/xray-manual.log"
 XRAY_BIN="/opt/sbin/xray"
 SELFHEAL_PATH="/opt/share/xkeen-manager/api/xkeen-selfheal.sh"
 TMP_RESTART_SCRIPT="/tmp/xkeen-apply-restart.sh"
+RUNTIME_DIR="/opt/share/xkeen-manager/runtime"
+BYPASS_DOMAINS_PATH="$RUNTIME_DIR/bypass-domains.txt"
+BYPASS_CIDRS_PATH="$RUNTIME_DIR/bypass-cidrs.txt"
 
 json_ok() {
   printf 'Status: 200 OK\r\n'
@@ -79,15 +81,10 @@ build_bypass_ipset_inline() {
   ipset create xkeen_bypass hash:net family inet -exist
   ipset flush xkeen_bypass 2>/dev/null || true
 
-  cat <<'EOF' | while IFS= read -r domain; do
-api.io.mi.com
-api.home.mi.com
-home.mi.com
-ot.io.mi.com
-app.chat.global.xiaomi.net
-resolver.msg.global.xiaomi.net
-data.mistat.xiaomi.com
-EOF
+  [ -f "$BYPASS_DOMAINS_PATH" ] || : > "$BYPASS_DOMAINS_PATH"
+  [ -f "$BYPASS_CIDRS_PATH" ] || : > "$BYPASS_CIDRS_PATH"
+
+  sed 's/#.*$//' "$BYPASS_DOMAINS_PATH" | sed '/^[[:space:]]*$/d' | while IFS= read -r domain; do
     [ -n "$domain" ] || continue
     nslookup "$domain" 2>/dev/null | /opt/bin/awk '
       /^Name:/ { seen_name=1; next }
@@ -99,12 +96,23 @@ EOF
     done
   done
 
-  cat <<'EOF' | while IFS= read -r ip; do
-5.28.195.2
-47.241.213.210
-EOF
-    [ -n "$ip" ] || continue
-    ipset add xkeen_bypass "$ip"/32 -exist 2>/dev/null || true
+  sed 's/#.*$//' "$BYPASS_CIDRS_PATH" | sed '/^[[:space:]]*$/d' | while IFS= read -r cidr; do
+    [ -n "$cidr" ] || continue
+    ipset add xkeen_bypass "$cidr" -exist 2>/dev/null || true
+  done
+}
+
+append_local_returns_inline() {
+  iptables -t nat -A xkeen -d 224.0.0.0/4 -j RETURN 2>/dev/null || true
+  iptables -t nat -A xkeen -d 255.255.255.255/32 -j RETURN 2>/dev/null || true
+
+  ip route show | /opt/bin/awk '
+    $1 ~ /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/ && $2 == "dev" {
+      print $1
+    }
+  ' | sort -u | while IFS= read -r subnet; do
+    [ -n "$subnet" ] || continue
+    iptables -t nat -A xkeen -d "$subnet" -j RETURN 2>/dev/null || true
   done
 }
 
@@ -118,13 +126,11 @@ repair_runtime() {
     return $?
   fi
 
+  mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
   build_bypass_ipset_inline
   iptables -t nat -N xkeen 2>/dev/null || true
   iptables -t nat -F xkeen 2>/dev/null || true
-  iptables -t nat -A xkeen -d 192.168.2.0/24 -j RETURN 2>/dev/null || true
-  iptables -t nat -A xkeen -d 224.0.0.0/4 -j RETURN 2>/dev/null || true
-  iptables -t nat -A xkeen -d 255.255.255.255/32 -j RETURN 2>/dev/null || true
-  iptables -t nat -A xkeen -d 192.168.1.102/32 -j RETURN 2>/dev/null || true
+  append_local_returns_inline
   iptables -t nat -A xkeen -p tcp -m set --match-set xkeen_bypass dst -j RETURN 2>/dev/null || true
   iptables -t nat -A xkeen -p tcp -j REDIRECT --to-ports 61219 2>/dev/null || true
   iptables -t nat -A xkeen -j RETURN 2>/dev/null || true
@@ -200,8 +206,17 @@ json_field() {
   sed -n "s/.*\"${FIELD_NAME}\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" "$TMP_BODY" | head -n 1
 }
 
+valid_probe_address() {
+  printf '%s' "$1" | grep -Eq '^[A-Za-z0-9.-]+$'
+}
+
+valid_probe_port() {
+  printf '%s' "$1" | grep -Eq '^[0-9]+$' || return 1
+  [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
+
 router_auth_login() {
-  REQUEST_HOST="$(printf '%s' "${HTTP_HOST:-192.168.2.1}" | sed 's/:.*$//')"
+  REQUEST_HOST="$(printf '%s' "${HTTP_HOST:-192.168.1.1}" | sed 's/:.*$//')"
   REQUEST_UA="${HTTP_USER_AGENT:-xkeen-manager}"
 
   LOGIN_B64="$(json_field 'loginB64')"
@@ -267,7 +282,7 @@ router_auth_login() {
 }
 
 router_auth_logout() {
-  REQUEST_HOST="$(printf '%s' "${HTTP_HOST:-192.168.2.1}" | sed 's/:.*$//')"
+  REQUEST_HOST="$(printf '%s' "${HTTP_HOST:-192.168.1.1}" | sed 's/:.*$//')"
   REQUEST_COOKIE="${HTTP_COOKIE:-}"
   SESSION_COOKIE_NAME="$(printf '%s' "$REQUEST_COOKIE" | sed -n 's/^\([^=;[:space:]]*\)=.*/\1/p' | head -n 1)"
 
@@ -284,7 +299,7 @@ router_auth_logout() {
 }
 
 require_router_session() {
-  REQUEST_HOST="$(printf '%s' "${HTTP_HOST:-192.168.2.1}" | sed 's/:.*$//')"
+  REQUEST_HOST="$(printf '%s' "${HTTP_HOST:-192.168.1.1}" | sed 's/:.*$//')"
   REQUEST_COOKIE="${HTTP_COOKIE:-}"
   REQUEST_UA="${HTTP_USER_AGENT:-xkeen-manager}"
 
@@ -377,14 +392,14 @@ case "$REQUEST_METHOD" in
     if [ "$KIND" = "probe" ]; then
       ADDRESS="$(sed -n 's/.*"address"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP_BODY" | head -n 1)"
       PORT="$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$TMP_BODY" | head -n 1)"
-      if [ -z "$ADDRESS" ] || [ -z "$PORT" ]; then
+      if [ -z "$ADDRESS" ] || [ -z "$PORT" ] || ! valid_probe_address "$ADDRESS" || ! valid_probe_port "$PORT"; then
         json_err "invalid probe payload"
         rm -f "$TMP_BODY"
         exit 0
       fi
 
       RESOLVED_IP="$(nslookup "$ADDRESS" 2>/dev/null | awk '/^Address [0-9]*: /{print $3} /^Address: /{print $2}' | tail -n 1)"
-      if sh -c "(echo >/dev/null) | /opt/bin/nc \"$ADDRESS\" \"$PORT\" >/dev/null 2>&1"; then
+      if /opt/bin/nc -w 5 "$ADDRESS" "$PORT" >/dev/null 2>&1; then
         json_ok "{\"ok\":true,\"address\":\"$ADDRESS\",\"port\":$PORT,\"resolvedIp\":\"$RESOLVED_IP\"}"
       else
         json_err "tcp connect failed"
@@ -424,15 +439,12 @@ case "$REQUEST_METHOD" in
       rm -f "$TMP_BODY" "$TMP_NEW"
       exit 0
     }
-    cp "$TMP_NEW" "$SNAPSHOT_PATH" 2>/dev/null || true
-
     if validate_confdir; then
       queue_restart_xray
       json_ok "{\"ok\":true,\"backup\":\"$BACKUP\",\"queuedRestart\":true}"
     else
       if [ -f "$BACKUP" ]; then
         cp "$BACKUP" "$ROUTING_PATH"
-        cp "$BACKUP" "$SNAPSHOT_PATH" 2>/dev/null || true
       fi
       json_err "xray config validation failed, rollback applied"
     fi

@@ -6,11 +6,11 @@
       "settings": {
         "vnext": [
           {
-            "address": "<VLESS_SERVER_HOST>",
-            "port": <VLESS_SERVER_PORT>,
+            "address": "vpn.example.com",
+            "port": 443,
             "users": [
               {
-                "id": "<VLESS_UUID>",
+                "id": "00000000-0000-0000-0000-000000000000",
                 "encryption": "none",
                 "flow": "xtls-rprx-vision",
                 "level": 0
@@ -23,10 +23,10 @@
         "network": "tcp",
         "security": "reality",
         "realitySettings": {
-          "publicKey": "<REALITY_PUBLIC_KEY>",
+          "publicKey": "YOUR_REALITY_PUBLIC_KEY",
           "fingerprint": "random",
-          "serverName": "<REALITY_SERVER_NAME>",
-          "shortId": "<REALITY_SHORT_ID>",
+          "serverName": "www.cloudflare.com",
+          "shortId": "0123456789abcdef",
           "spiderX": "/"
         }
       }

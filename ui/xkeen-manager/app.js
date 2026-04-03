@@ -1,6 +1,5 @@
 const STORAGE_KEY = "xkeen-manager-state-v7";
 const LANGUAGE_KEY = "xkeen-manager-lang-v1";
-const BUNDLED_ROUTING_URL = "./router-live-routing.json";
 const STATE_URL = "./api/routing.cgi?kind=state";
 const OUTBOUNDS_URL = "./api/routing.cgi?kind=outbounds";
 const PROBE_URL = "./api/routing.cgi?kind=probe";
@@ -47,7 +46,7 @@ const LOCALES = {
     importProxyBtn: "\u0418\u043c\u043f\u043e\u0440\u0442 vless://",
     probeProxyBtn: "\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c",
     addGroupBtn: "\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0433\u0440\u0443\u043f\u043f\u0443",
-    profileName: "\u0414\u043e\u043c\u0430\u0448\u043d\u0438\u0439 XKeen",
+    profileName: "\u041f\u0440\u043e\u0444\u0438\u043b\u044c 1",
     defaultProfileName: "\u041f\u0440\u043e\u0444\u0438\u043b\u044c",
     fallbackNote: "\u0420\u0435\u0437\u0435\u0440\u0432\u043d\u043e\u0435 \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435, \u0435\u0441\u043b\u0438 state \u043d\u0435 \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u043b\u0441\u044f",
     copied: "\u0421\u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u043d\u043e",
@@ -76,7 +75,7 @@ const LOCALES = {
     exportStateTitle: "\u0421\u043a\u0430\u0447\u0438\u0432\u0430\u0435\u0442 state-\u0444\u0430\u0439\u043b \u0441 \u0442\u0435\u043a\u0443\u0449\u0438\u043c\u0438 \u043f\u0440\u043e\u0444\u0438\u043b\u044f\u043c\u0438 \u0438 \u0433\u0440\u0443\u043f\u043f\u0430\u043c\u0438.",
     saveStateTitle: "\u0421\u043e\u0445\u0440\u0430\u043d\u044f\u0435\u0442 state \u043d\u0430 \u0440\u043e\u0443\u0442\u0435\u0440\u0435 \u0431\u0435\u0437 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u044f xray \u0438 \u0431\u0435\u0437 \u043f\u0440\u0438\u043c\u0435\u043d\u0435\u043d\u0438\u044f \u043c\u0430\u0440\u0448\u0440\u0443\u0442\u0438\u0437\u0430\u0446\u0438\u0438.",
     saveApplyTitle: "\u0421\u043e\u0445\u0440\u0430\u043d\u044f\u0435\u0442 state \u043d\u0430 \u0440\u043e\u0443\u0442\u0435\u0440\u0435, \u0433\u0435\u043d\u0435\u0440\u0438\u0440\u0443\u0435\u0442 05_routing.json, \u0434\u0435\u043b\u0430\u0435\u0442 backup \u0438 \u043f\u0435\u0440\u0435\u0437\u0430\u043f\u0443\u0441\u043a\u0430\u0435\u0442 xray.",
-    repairTitle: "\u041f\u0435\u0440\u0435\u0441\u043e\u0431\u0438\u0440\u0430\u0435\u0442 runtime XKeen/xray: \u0446\u0435\u043f\u043e\u0447\u043a\u0438 xkeen, xkeen_udp, ip rule \u0438 \u043f\u0440\u043e\u0446\u0435\u0441\u0441 xray.",
+    repairTitle: "\u041f\u0435\u0440\u0435\u0441\u043e\u0431\u0438\u0440\u0430\u0435\u0442 runtime XKeen/xray: \u0446\u0435\u043f\u043e\u0447\u043a\u0443 xkeen \u0438 \u043f\u0440\u043e\u0446\u0435\u0441\u0441 xray.",
     importProxyTitle: "\u0412\u0441\u0442\u0430\u0432\u043b\u044f\u0435\u0442 \u043f\u043e\u043b\u044f \u043f\u0440\u043e\u043a\u0441\u0438 \u0438\u0437 \u0441\u0441\u044b\u043b\u043a\u0438 vless://",
     probeProxyTitle: "\u041f\u0440\u043e\u0432\u0435\u0440\u044f\u0435\u0442 \u0441 \u0440\u043e\u0443\u0442\u0435\u0440\u0430, \u0440\u0435\u0437\u043e\u043b\u0432\u0438\u0442\u0441\u044f \u043b\u0438 \u0445\u043e\u0441\u0442 \u0438 \u043e\u0442\u043a\u0440\u044b\u0432\u0430\u0435\u0442\u0441\u044f \u043b\u0438 TCP-\u043f\u043e\u0440\u0442.",
     authRequiredMessage: "\u041d\u0443\u0436\u043d\u0430 \u0430\u043a\u0442\u0438\u0432\u043d\u0430\u044f \u0441\u0435\u0441\u0441\u0438\u044f \u0432 \u0432\u0435\u0431-\u0438\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441\u0435 Keenetic. \u0412\u043e\u0439\u0434\u0438 \u0432 \u0432\u0435\u0431-\u043c\u043e\u0440\u0434\u0443 \u0440\u043e\u0443\u0442\u0435\u0440\u0430 \u0438 \u043e\u0431\u043d\u043e\u0432\u0438 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0443.",
@@ -137,7 +136,7 @@ const LOCALES = {
     importProxyBtn: "Import vless://",
     probeProxyBtn: "Probe",
     addGroupBtn: "Add group",
-    profileName: "Home XKeen",
+    profileName: "Profile 1",
     defaultProfileName: "Profile",
     fallbackNote: "Fallback state when live state could not be loaded",
     copied: "Copied",
@@ -166,7 +165,7 @@ const LOCALES = {
     exportStateTitle: "Download the current state file with profiles and groups.",
     saveStateTitle: "Save state on the router without applying xray changes.",
     saveApplyTitle: "Save state, generate 05_routing.json, back up files, and restart xray.",
-    repairTitle: "Rebuild XKeen/xray runtime: xkeen chains, xkeen_udp, ip rule, and xray process.",
+    repairTitle: "Rebuild XKeen/xray runtime: xkeen chain and xray process.",
     importProxyTitle: "Fill proxy fields from a vless:// link.",
     probeProxyTitle: "Check from the router whether the host resolves and the TCP port opens.",
     authRequiredMessage: "An active Keenetic web session is required. Sign in to the router web UI and refresh the page.",
@@ -225,7 +224,7 @@ const fallbackState = {
           note: "",
           enabled: true,
           outboundTag: "direct",
-          domains: ["stalcraft.net", "exbo.net", "cdn77.org"],
+          domains: [],
           cidrs: []
         }
       ]
@@ -330,7 +329,7 @@ async function bootstrap() {
       return;
     }
 
-    state = await loadBundledState();
+    state = cloneFallback();
     persistAndRender();
   }
 }
@@ -360,8 +359,8 @@ function bindTopLevel() {
       els.authPassword.value = "";
       await bootstrap();
     } catch (error) {
-      showAuthOverlay(error.message || "Ошибка входа");
-      setAuthStatus("error", error.message || "Ошибка входа");
+      showAuthOverlay(error.message || T.invalidLogin);
+      setAuthStatus("error", error.message || T.invalidLogin);
     } finally {
       els.authSubmitBtn.disabled = false;
       els.authSubmitBtn.textContent = previous;
@@ -389,7 +388,7 @@ function bindTopLevel() {
   els.repairRuntimeBtn.title = T.repairTitle;
   els.importProxyBtn.title = T.importProxyTitle;
   els.probeProxyBtn.title = T.probeProxyTitle;
-  els.logoutBtn.title = "Завершает сессию UI и возвращает экран входа.";
+  els.logoutBtn.title = T.logoutTitle;
 
   els.logoutBtn.addEventListener("click", async () => {
     try {
@@ -399,7 +398,7 @@ function bindTopLevel() {
     }
     state = cloneFallback();
     render();
-    showAuthOverlay("Сессия завершена. Войди снова логином и паролем Keenetic.");
+    showAuthOverlay(T.logoutDone);
   });
 
   els.activeProfile.addEventListener("change", () => {
@@ -979,19 +978,6 @@ function loadState() {
   } catch (error) {
     pushDebug(`loadState failed: ${error.message}`);
     return null;
-  }
-}
-
-async function loadBundledState(force = false) {
-  try {
-    const response = await fetch(BUNDLED_ROUTING_URL, { cache: force ? "reload" : "no-store" });
-    if (!response.ok) throw new Error(`router-live-routing.json fetch failed: ${response.status}`);
-    const routing = parseJsonText(await response.text());
-    pushDebug(`loadBundledState ok: rules=${routing.routing?.rules?.length ?? 0}`);
-    return importFromRouting(routing);
-  } catch (error) {
-    pushDebug(`loadBundledState failed: ${error.message}`);
-    return cloneFallback();
   }
 }
 
