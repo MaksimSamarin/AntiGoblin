@@ -48,10 +48,10 @@ $env:ROUTER_SSH_PASSWORD = 'пароль-ssh-доступа'
 
 Что делает bootstrap:
 
-- при необходимости ставит `Posh-SSH` на рабочий ПК
+- подключается к роутеру по `SSH`
 - проверяет `Entware/OPKG` в `/opt`
 - ставит нужные пакеты Entware
-- создает политику Keenetic `xkeen`, если ее еще нет
+- создает UI-видимую политику Keenetic `xkeen`, если ее еще нет
 - раскладывает базовые sample-конфиги `xray`
 - выкатывает UI и backend
 - запускает `AntiGoblin` на `:8899`
@@ -70,6 +70,12 @@ http://192.168.1.1:8899/
 - заполнить `VLESS Reality`
 - включить нужные routing-группы
 - назначить нужные устройства в политику `xkeen` в Keenetic UI
+
+Инварианты проекта:
+
+- `AntiGoblin` имеет право трогать только устройства из политики `xkeen`
+- любые другие политики Keenetic, например `no_vpn`, не должны попадать в `xray`
+- bootstrap создает `xkeen` как дополнительную политику вида `Policy42+`, чтобы она была видна в Keenetic UI
 
 Полная пошаговая инструкция:
 
@@ -94,8 +100,14 @@ UI и backend на роутере:
 - `/opt/share/xkeen-manager/api/routing.cgi`
 - `/opt/share/xkeen-manager/api/xkeen-selfheal.sh`
 
-Bypass-группы теперь задаются прямо в UI-state.
-Если группе задан тип трафика `Bypass`, ее домены и CIDR собираются в runtime `xkeen_bypass` и обходят `xray` через `RETURN`.
+Bypass собирается из двух источников:
+
+- hardcoded runtime-файлы:
+  - `/opt/share/xkeen-manager/runtime/bypass-domains.txt`
+  - `/opt/share/xkeen-manager/runtime/bypass-cidrs.txt`
+- UI-группы с типом трафика `Bypass`
+
+Все эти направления попадают в runtime `xkeen_bypass` и обходят `xray` через `RETURN`.
 
 ## Правила проекта
 

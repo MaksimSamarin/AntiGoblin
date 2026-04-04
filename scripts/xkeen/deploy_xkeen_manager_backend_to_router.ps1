@@ -1,56 +1,71 @@
 param(
   [string]$RouterHost = "192.168.1.1",
-  [string]$RouterUser = $(if ($env:ROUTER_SSH_USER) { $env:ROUTER_SSH_USER } else { 'root' }),
+  [string]$RouterUser = 'root',
   [string]$RemoteRoot = "/opt/share/xkeen-manager",
   [string]$RemoteApiDir = "/opt/share/xkeen-manager/api",
   [string]$RemoteRuntimeDir = "/opt/share/xkeen-manager/runtime",
+  [string]$RemoteSelfhealLoop = "/opt/share/xkeen-manager/api/xkeen-selfheal-loop.sh",
+  [string]$RemoteSelfhealInit = "/opt/etc/init.d/S25antigoblin-selfheal",
   [string]$RemoteInitScript = "/opt/etc/init.d/S26antigoblin",
+  [string]$RemoteCronScript = "/opt/etc/cron.1min/50-antigoblin-selfheal",
   [string]$RemoteFsHook = "/opt/etc/ndm/fs.d/50-antigoblin.sh",
   [string]$RemoteUsbHook = "/opt/etc/ndm/usb.d/50-antigoblin.sh"
 )
 
-$routerPassword = if ($env:ROUTER_SSH_PASSWORD) { $env:ROUTER_SSH_PASSWORD } else { throw "Set ROUTER_SSH_PASSWORD before running this script." }
-$sec = ConvertTo-SecureString $routerPassword -AsPlainText -Force
-$cred = New-Object System.Management.Automation.PSCredential($RouterUser, $sec)
+$ErrorActionPreference = 'Stop'
 
-Import-Module Posh-SSH -ErrorAction Stop
+if (-not $PSBoundParameters.ContainsKey('RouterUser') -and $env:ROUTER_SSH_USER) {
+  $RouterUser = $env:ROUTER_SSH_USER
+}
+
+$null = if ($env:ROUTER_SSH_PASSWORD) { $env:ROUTER_SSH_PASSWORD } else { throw "Set ROUTER_SSH_PASSWORD before running this script." }
+$python = (Get-Command python -ErrorAction Stop).Source
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$sshHelper = Join-Path $PSScriptRoot 'router_ssh.py'
 $localApi = Join-Path $repoRoot 'ui\xkeen-manager\backend\routing.cgi'
 $localSelfHeal = Join-Path $repoRoot 'ui\xkeen-manager\backend\xkeen-selfheal.sh'
+$localSelfhealLoop = Join-Path $repoRoot 'scripts\xkeen\antigoblin-selfheal-loop.sh'
+$localSelfhealInit = Join-Path $repoRoot 'scripts\xkeen\antigoblin-selfheal.initd.sh'
 $localInitScript = Join-Path $repoRoot 'scripts\xkeen\antigoblin.initd.sh'
+$localCronScript = Join-Path $repoRoot 'scripts\xkeen\antigoblin-selfheal.cron.sh'
 $localRemountHook = Join-Path $repoRoot 'scripts\xkeen\antigoblin-remount-hook.sh'
 $localBypassDomains = Join-Path $repoRoot 'configs\xkeen\bypass-domains.sample.txt'
 $localBypassCidrs = Join-Path $repoRoot 'configs\xkeen\bypass-cidrs.sample.txt'
 
-function Send-RemoteFileBase64 {
+function Invoke-RouterCommand {
   param(
-    [object]$Session,
-    [string]$LocalPath,
-    [string]$RemotePath
+    [string]$Command
   )
 
-  $bytes = [System.IO.File]::ReadAllBytes($LocalPath)
-  $b64 = [Convert]::ToBase64String($bytes)
-  $chunks = for ($i = 0; $i -lt $b64.Length; $i += 3500) {
-    $b64.Substring($i, [Math]::Min(3500, $b64.Length - $i))
-  }
-
-  Invoke-SSHCommand -SSHSession $Session -Command ": > /tmp/xkeen-api-upload.b64" -TimeOut 30000 | Out-Null
-
-  foreach ($chunk in $chunks) {
-    $append = Invoke-SSHCommand -SSHSession $Session -Command "printf '%s' '$chunk' >> /tmp/xkeen-api-upload.b64" -TimeOut 30000
-    if ($append.ExitStatus -ne 0) {
-      throw "Failed to append upload chunk for $RemotePath"
+  if ($Command -match "`n") {
+    $tmpFile = [System.IO.Path]::GetTempFileName()
+    try {
+      Set-Content -Path $tmpFile -Value $Command -NoNewline
+      Get-Content -Path $tmpFile -Raw | & $python $sshHelper --host $RouterHost --user $RouterUser run --stdin
     }
+    finally {
+      Remove-Item -LiteralPath $tmpFile -Force -ErrorAction SilentlyContinue
+    }
+  } else {
+    & $python $sshHelper --host $RouterHost --user $RouterUser run --command $Command
   }
+  if ($LASTEXITCODE -ne 0) {
+    throw "Router command failed: $Command"
+  }
+}
 
-  $finish = Invoke-SSHCommand -SSHSession $Session -Command "/opt/bin/base64 -d /tmp/xkeen-api-upload.b64 > '$RemotePath' && rm -f /tmp/xkeen-api-upload.b64 && chmod 755 '$RemotePath' && ls -lh '$RemotePath'" -TimeOut 30000
-  if ($finish.ExitStatus -ne 0) {
-    throw "Failed to decode/upload $RemotePath"
+function Send-RemoteFile {
+  param(
+    [string]$LocalPath,
+    [string]$RemotePath,
+    [string]$Mode = '755'
+  )
+
+  & $python $sshHelper --host $RouterHost --user $RouterUser upload --local $LocalPath --remote $RemotePath --mode $Mode
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to upload $RemotePath"
   }
-  if ($finish.Output) { $finish.Output }
-  if ($finish.Error) { Write-Output '--- STDERR ---'; $finish.Error }
 }
 
 if (-not (Test-Path $localApi)) {
@@ -59,8 +74,17 @@ if (-not (Test-Path $localApi)) {
 if (-not (Test-Path $localSelfHeal)) {
   throw "Missing self-heal file: $localSelfHeal"
 }
+if (-not (Test-Path $localSelfhealLoop)) {
+  throw "Missing self-heal loop script: $localSelfhealLoop"
+}
+if (-not (Test-Path $localSelfhealInit)) {
+  throw "Missing self-heal init script: $localSelfhealInit"
+}
 if (-not (Test-Path $localInitScript)) {
   throw "Missing init script: $localInitScript"
+}
+if (-not (Test-Path $localCronScript)) {
+  throw "Missing cron script: $localCronScript"
 }
 if (-not (Test-Path $localRemountHook)) {
   throw "Missing remount hook: $localRemountHook"
@@ -72,62 +96,50 @@ if (-not (Test-Path $localBypassCidrs)) {
   throw "Missing bypass CIDRs sample: $localBypassCidrs"
 }
 
-$session = New-SSHSession -ComputerName $RouterHost -Credential $cred -AcceptKey -ConnectionTimeout 10
+Invoke-RouterCommand -Command "mkdir -p $RemoteRoot"
+Invoke-RouterCommand -Command "mkdir -p $RemoteApiDir"
+Invoke-RouterCommand -Command "mkdir -p $RemoteRuntimeDir"
+Invoke-RouterCommand -Command "mkdir -p /opt/etc/cron.1min"
+Invoke-RouterCommand -Command "mkdir -p /opt/etc/xray/configs"
+Invoke-RouterCommand -Command "opkg update >/dev/null 2>&1 || true"
+Invoke-RouterCommand -Command "opkg install uhttpd_kn >/dev/null 2>&1 || true"
 
-try {
-  $prep = @(
-    "mkdir -p $RemoteRoot",
-    "mkdir -p $RemoteApiDir",
-    "mkdir -p $RemoteRuntimeDir",
-    "opkg update >/dev/null 2>&1 || true",
-    "opkg install uhttpd_kn >/dev/null 2>&1 || true",
-    "test -f /opt/etc/xray/configs/05_routing.json"
-  )
+Send-RemoteFile -LocalPath $localApi -RemotePath "$RemoteApiDir/routing.cgi"
+Send-RemoteFile -LocalPath $localSelfHeal -RemotePath "$RemoteApiDir/xkeen-selfheal.sh"
+Send-RemoteFile -LocalPath $localSelfhealLoop -RemotePath $RemoteSelfhealLoop
+Send-RemoteFile -LocalPath $localSelfhealInit -RemotePath $RemoteSelfhealInit
+Send-RemoteFile -LocalPath $localInitScript -RemotePath $RemoteInitScript
+Send-RemoteFile -LocalPath $localCronScript -RemotePath $RemoteCronScript
+Send-RemoteFile -LocalPath $localRemountHook -RemotePath $RemoteFsHook
+Send-RemoteFile -LocalPath $localRemountHook -RemotePath $RemoteUsbHook
 
-  foreach ($command in $prep) {
-    $result = Invoke-SSHCommand -SSHSession $session -Command $command -TimeOut 120000
-    if ($result.Output) { $result.Output }
-    if ($result.Error) { Write-Output '--- STDERR ---'; $result.Error }
+$ensureRuntime = @(
+  @{ Local = $localBypassDomains; Remote = "$RemoteRuntimeDir/bypass-domains.txt" },
+  @{ Local = $localBypassCidrs; Remote = "$RemoteRuntimeDir/bypass-cidrs.txt" }
+)
+foreach ($item in $ensureRuntime) {
+  $remoteExists = (& $python $sshHelper --host $RouterHost --user $RouterUser run --command "test -f '$($item.Remote)' && echo EXISTS || echo MISSING")
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to verify runtime file: $($item.Remote)"
   }
-
-  Send-RemoteFileBase64 -Session $session -LocalPath $localApi -RemotePath "$RemoteApiDir/routing.cgi"
-  Send-RemoteFileBase64 -Session $session -LocalPath $localSelfHeal -RemotePath "$RemoteApiDir/xkeen-selfheal.sh"
-  Send-RemoteFileBase64 -Session $session -LocalPath $localInitScript -RemotePath $RemoteInitScript
-  Send-RemoteFileBase64 -Session $session -LocalPath $localRemountHook -RemotePath $RemoteFsHook
-  Send-RemoteFileBase64 -Session $session -LocalPath $localRemountHook -RemotePath $RemoteUsbHook
-
-  $ensureRuntime = @(
-    @{ Local = $localBypassDomains; Remote = "$RemoteRuntimeDir/bypass-domains.txt" },
-    @{ Local = $localBypassCidrs; Remote = "$RemoteRuntimeDir/bypass-cidrs.txt" }
-  )
-  foreach ($item in $ensureRuntime) {
-    $remoteExists = Invoke-SSHCommand -SSHSession $session -Command "test -f '$($item.Remote)' && echo EXISTS || echo MISSING" -TimeOut 30000
-    if ($remoteExists.Output -contains 'EXISTS') {
-      Write-Output "Keeping existing runtime file: $($item.Remote)"
-      continue
-    }
-    Send-RemoteFileBase64 -Session $session -LocalPath $item.Local -RemotePath $item.Remote
-    Write-Output "Seeded runtime file: $($item.Remote)"
+  if ($remoteExists -match 'EXISTS') {
+    Write-Output "Keeping existing runtime file: $($item.Remote)"
+    continue
   }
-
-  $cronCmd = @"
-( /opt/bin/crontab -l 2>/dev/null || true ) | grep -Fv '/opt/share/xkeen-manager/api/xkeen-selfheal.sh' > /tmp/xkeen-cron.new
-echo '* * * * * /opt/share/xkeen-manager/api/xkeen-selfheal.sh >/dev/null 2>&1' >> /tmp/xkeen-cron.new
-echo '* * * * * sleep 15; /opt/share/xkeen-manager/api/xkeen-selfheal.sh >/dev/null 2>&1' >> /tmp/xkeen-cron.new
-echo '* * * * * sleep 30; /opt/share/xkeen-manager/api/xkeen-selfheal.sh >/dev/null 2>&1' >> /tmp/xkeen-cron.new
-echo '* * * * * sleep 45; /opt/share/xkeen-manager/api/xkeen-selfheal.sh >/dev/null 2>&1' >> /tmp/xkeen-cron.new
-/opt/bin/crontab /tmp/xkeen-cron.new
-rm -f /tmp/xkeen-cron.new
-/opt/etc/init.d/S05crond restart >/dev/null 2>&1 || true
-"@
-  $cronResult = Invoke-SSHCommand -SSHSession $session -Command $cronCmd -TimeOut 120000
-  if ($cronResult.Output) { $cronResult.Output }
-  if ($cronResult.Error) { Write-Output '--- STDERR ---'; $cronResult.Error }
-
-  $initResult = Invoke-SSHCommand -SSHSession $session -Command "chmod 755 '$RemoteInitScript' '$RemoteFsHook' '$RemoteUsbHook' && '$RemoteInitScript' restart >/dev/null 2>&1 || true" -TimeOut 120000
-  if ($initResult.Output) { $initResult.Output }
-  if ($initResult.Error) { Write-Output '--- STDERR ---'; $initResult.Error }
+  Send-RemoteFile -LocalPath $item.Local -RemotePath $item.Remote
+  Write-Output "Seeded runtime file: $($item.Remote)"
 }
-finally {
-  Remove-SSHSession -SSHSession $session | Out-Null
-}
+
+$cronCmd = @'
+rm -f /opt/var/spool/cron/crontabs/root 2>/dev/null || true
+CRON_INIT=""
+for candidate in /opt/etc/init.d/S10cron /opt/etc/init.d/S05crond; do
+  if [ -x "$candidate" ]; then
+    CRON_INIT="$candidate"
+    break
+  fi
+done
+[ -n "$CRON_INIT" ] && "$CRON_INIT" restart >/dev/null 2>&1 || true
+'@
+Invoke-RouterCommand -Command $cronCmd
+Invoke-RouterCommand -Command "chmod 755 '$RemoteSelfhealLoop' '$RemoteSelfhealInit' '$RemoteInitScript' '$RemoteCronScript' '$RemoteFsHook' '$RemoteUsbHook' && '$RemoteSelfhealInit' restart >/dev/null 2>&1 || true && '$RemoteInitScript' restart >/dev/null 2>&1 || true"

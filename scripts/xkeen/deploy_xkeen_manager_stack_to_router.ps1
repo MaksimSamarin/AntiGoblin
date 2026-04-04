@@ -1,8 +1,14 @@
 param(
   [string]$RouterHost = "192.168.1.1",
   [int]$Port = 8899,
-  [string]$RouterUser = $(if ($env:ROUTER_SSH_USER) { $env:ROUTER_SSH_USER } else { 'root' })
+  [string]$RouterUser = 'root'
 )
+
+$ErrorActionPreference = 'Stop'
+
+if (-not $PSBoundParameters.ContainsKey('RouterUser') -and $env:ROUTER_SSH_USER) {
+  $RouterUser = $env:ROUTER_SSH_USER
+}
 
 $routerPassword = if ($env:ROUTER_SSH_PASSWORD) { $env:ROUTER_SSH_PASSWORD } else { throw "Set ROUTER_SSH_PASSWORD before running this script." }
 

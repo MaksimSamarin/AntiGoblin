@@ -1,5 +1,7 @@
 #!/bin/sh
 
+PATH="/opt/bin:/opt/sbin:/sbin:/usr/sbin:/bin:/usr/bin:$PATH"
+
 ROUTING_PATH="/opt/etc/xray/configs/05_routing.json"
 OUTBOUNDS_PATH="/opt/etc/xray/configs/04_outbounds.json"
 STATE_PATH="/opt/share/xkeen-manager/xkeen-ui-state.json"
@@ -14,6 +16,7 @@ TMP_RESTART_SCRIPT="/tmp/xkeen-apply-restart.sh"
 RUNTIME_DIR="/opt/share/xkeen-manager/runtime"
 BYPASS_DOMAINS_PATH="$RUNTIME_DIR/bypass-domains.txt"
 BYPASS_CIDRS_PATH="$RUNTIME_DIR/bypass-cidrs.txt"
+XKEEN_MARK=""
 
 json_ok() {
   printf 'Status: 200 OK\r\n'
@@ -59,6 +62,24 @@ restart_xray() {
     /opt/sbin/start-stop-daemon -S -b -m -p /opt/var/run/xray-ui.pid -x "$XRAY_BIN" -- run >>"$LOG_PATH" 2>&1
   sleep 3
   netstat -lnptu 2>/dev/null | grep -q '61219'
+}
+
+get_xkeen_mark() {
+  ndmc -c 'show ip policy' 2>/dev/null | /opt/bin/awk '
+    /description = xkeen:/ {
+      want_mark=1
+      next
+    }
+    want_mark && /mark:/ {
+      print $2
+      exit
+    }
+  '
+}
+
+ensure_xkeen_mark() {
+  XKEEN_MARK="$(get_xkeen_mark)"
+  [ -n "$XKEEN_MARK" ]
 }
 
 build_bypass_ipset_inline() {
@@ -131,6 +152,7 @@ repair_runtime() {
     return $?
   fi
 
+  ensure_xkeen_mark || return 1
   mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
   build_bypass_ipset_inline
   iptables -t nat -N xkeen 2>/dev/null || true
@@ -139,19 +161,23 @@ repair_runtime() {
   iptables -t nat -A xkeen -p tcp -m set --match-set xkeen_bypass dst -j RETURN 2>/dev/null || true
   iptables -t nat -A xkeen -p tcp -j REDIRECT --to-ports 61219 2>/dev/null || true
   iptables -t nat -A xkeen -j RETURN 2>/dev/null || true
+  iptables -t nat -D PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || true
   iptables -t nat -D PREROUTING -m connmark --mark 0xffffaab -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || true
-  iptables -t nat -C PREROUTING -m connmark --mark 0xffffaaa -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || \
-    iptables -t nat -I PREROUTING 1 -m connmark --mark 0xffffaaa -m conntrack ! --ctstate INVALID -j xkeen
+  iptables -t nat -D PREROUTING -m connmark --mark 0xffffaaa -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || true
+  iptables -t nat -C PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || \
+    iptables -t nat -I PREROUTING 1 -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -j xkeen
 
   while ip rule show | grep -q 'fwmark 0x111 lookup 111'; do
     ip rule del fwmark 0x111 lookup 111 2>/dev/null || break
   done
 
+  iptables -t mangle -D PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -p udp -j xkeen_udp 2>/dev/null || true
   iptables -t mangle -D PREROUTING -m connmark --mark 0xffffaab -m conntrack ! --ctstate INVALID -p udp -j xkeen_udp 2>/dev/null || true
   iptables -t mangle -D PREROUTING -m connmark --mark 0xffffaaa -m conntrack ! --ctstate INVALID -p udp -j xkeen_udp 2>/dev/null || true
   iptables -t mangle -F xkeen_udp 2>/dev/null || true
   iptables -t mangle -X xkeen_udp 2>/dev/null || true
 
+  iptables -t mangle -D PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -p udp -j xkeen_quic 2>/dev/null || true
   iptables -t mangle -D PREROUTING -m connmark --mark 0xffffaaa -m conntrack ! --ctstate INVALID -p udp -j xkeen_quic 2>/dev/null || true
   iptables -t mangle -F xkeen_quic 2>/dev/null || true
   iptables -t mangle -X xkeen_quic 2>/dev/null || true
