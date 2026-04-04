@@ -64,8 +64,10 @@ const LOCALES = {
     activeGroups: "\u0410\u043a\u0442\u0438\u0432\u043d\u044b\u0445",
     vpnDomains: "VPN-\u0434\u043e\u043c\u0435\u043d\u043e\u0432",
     directDomains: "Direct-\u0434\u043e\u043c\u0435\u043d\u043e\u0432",
+    bypassDomains: "Bypass-\u0434\u043e\u043c\u0435\u043d\u043e\u0432",
     cidrShort: "CIDR",
     directGroupName: "Direct",
+    bypassGroupName: "Bypass",
     profileAdded: "\u041d\u043e\u0432\u044b\u0439 \u043f\u0440\u043e\u0444\u0438\u043b\u044c",
     profileCopySuffix: " \u043a\u043e\u043f\u0438\u044f",
     saveApplyDone: "\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043e \u0438 \u043f\u0440\u0438\u043c\u0435\u043d\u0435\u043d\u043e",
@@ -154,8 +156,10 @@ const LOCALES = {
     activeGroups: "Active",
     vpnDomains: "VPN domains",
     directDomains: "Direct domains",
+    bypassDomains: "Bypass domains",
     cidrShort: "CIDR",
     directGroupName: "Direct",
+    bypassGroupName: "Bypass",
     profileAdded: "New profile",
     profileCopySuffix: " copy",
     saveApplyDone: "Saved and applied",
@@ -779,6 +783,7 @@ function renderGroups() {
             <select class="group-outbound">
               <option value="vless-reality">vless-reality</option>
               <option value="direct">direct</option>
+              <option value="bypass">bypass</option>
             </select>
           </label>
           <label>
@@ -851,9 +856,11 @@ function renderPreview() {
 
   const activeGroups = profile.groups.filter((group) => group.enabled);
   const directGroups = activeGroups.filter((group) => group.outboundTag === "direct");
-  const vpnGroups = activeGroups.filter((group) => group.outboundTag !== "direct");
+  const bypassGroups = activeGroups.filter((group) => group.outboundTag === "bypass");
+  const vpnGroups = activeGroups.filter((group) => group.outboundTag !== "direct" && group.outboundTag !== "bypass");
 
   const directDomainCount = uniq(directGroups.flatMap((group) => group.domains)).length;
+  const bypassDomainCount = uniq(bypassGroups.flatMap((group) => group.domains)).length;
   const vpnDomainCount = uniq(vpnGroups.flatMap((group) => group.domains)).length;
   const cidrCount = uniq(activeGroups.flatMap((group) => group.cidrs)).length;
 
@@ -861,6 +868,7 @@ function renderPreview() {
     statPill(`${T.groups}: ${profile.groups.length}`),
     statPill(`${T.activeGroups}: ${activeGroups.length}`),
     statPill(`${T.directDomains}: ${directDomainCount}`),
+    statPill(`${T.bypassDomains}: ${bypassDomainCount}`),
     statPill(`${T.vpnDomains}: ${vpnDomainCount}`),
     statPill(`${T.cidrShort}: ${cidrCount}`)
   ].join("");
@@ -870,7 +878,30 @@ function buildRoutingDocument(inputState) {
   const inboundTags = ["redirect", "tproxy"];
   const rules = [];
 
-  for (const group of inputState.groups.filter((item) => item.enabled)) {
+  for (const group of inputState.groups.filter((item) => item.enabled && item.outboundTag === "direct")) {
+    const domains = uniq(group.domains);
+    const cidrs = uniq(group.cidrs);
+
+    if (domains.length) {
+      rules.push({
+        type: "field",
+        inboundTag: inboundTags,
+        domain: domains,
+        outboundTag: "direct"
+      });
+    }
+
+    if (cidrs.length) {
+      rules.push({
+        type: "field",
+        inboundTag: inboundTags,
+        ip: cidrs,
+        outboundTag: "direct"
+      });
+    }
+  }
+
+  for (const group of inputState.groups.filter((item) => item.enabled && item.outboundTag !== "direct" && item.outboundTag !== "bypass")) {
     const domains = uniq(group.domains);
     const cidrs = uniq(group.cidrs);
 

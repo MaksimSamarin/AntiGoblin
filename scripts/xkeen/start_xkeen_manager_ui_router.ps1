@@ -20,10 +20,7 @@ try {
     "killall lighttpd 2>/dev/null || true",
     "pkill -f '/opt/sbin/uhttpd -f -p 0.0.0.0:$Port' 2>/dev/null || true",
     "rm -f $RemoteRoot/httpd-auth.conf",
-    "cd $RemoteRoot && /opt/sbin/uhttpd -f -p 0.0.0.0:$Port -h $RemoteRoot -I index.html -x /api -i .cgi=/bin/sh -r 'AntiGoblin' >/opt/var/log/xkeen-manager-uhttpd.log 2>&1 &",
-    "sleep 2",
-    "netstat -lnpt 2>/dev/null | grep ':$Port ' || true",
-    "tail -n 10 /opt/var/log/xkeen-manager-uhttpd.log 2>/dev/null || true"
+    "sleep 1"
   )
 
   foreach ($command in $commands) {
@@ -31,6 +28,27 @@ try {
     if ($result.ExitStatus -ne 0 -and $command -eq "test -d $RemoteRoot") {
       throw "Remote UI directory not found: $RemoteRoot. Run deploy_xkeen_manager_ui_to_router.ps1 first."
     }
+    if ($result.Output) { $result.Output }
+    if ($result.Error) { Write-Output '--- STDERR ---'; $result.Error }
+  }
+
+  $alreadyListening = Invoke-SSHCommand -SSHSession $session -Command "if netstat -lnpt 2>/dev/null | grep -q ':$Port '; then echo YES; else echo NO; fi" -TimeOut 30000
+  if ($alreadyListening.Output -contains 'YES') {
+    Write-Output "UI already listening on $Port"
+  } else {
+    $start = Invoke-SSHCommand -SSHSession $session -Command ": > /opt/var/log/xkeen-manager-uhttpd.log && cd $RemoteRoot && /opt/sbin/uhttpd -f -p 0.0.0.0:$Port -h $RemoteRoot -I index.html -x /api -i .cgi=/bin/sh -r 'AntiGoblin' >/opt/var/log/xkeen-manager-uhttpd.log 2>&1 &" -TimeOut 30000
+    if ($start.Output) { $start.Output }
+    if ($start.Error) { Write-Output '--- STDERR ---'; $start.Error }
+  }
+
+  $verifyCommands = @(
+    "sleep 2",
+    "netstat -lnpt 2>/dev/null | grep ':$Port ' || true",
+    "tail -n 10 /opt/var/log/xkeen-manager-uhttpd.log 2>/dev/null || true"
+  )
+
+  foreach ($command in $verifyCommands) {
+    $result = Invoke-SSHCommand -SSHSession $session -Command $command -TimeOut 30000
     if ($result.Output) { $result.Output }
     if ($result.Error) { Write-Output '--- STDERR ---'; $result.Error }
   }

@@ -6,6 +6,7 @@ XRAY_ASSET_DIR="/opt/etc/xray/dat"
 XRAY_CONF_DIR="/opt/etc/xray/configs"
 STATE_PATH="/opt/share/xkeen-manager/xkeen-ui-state.json"
 LOCK_DIR="/tmp/xkeen-selfheal.lock"
+LOCK_PID_FILE="$LOCK_DIR/pid"
 RUNTIME_DIR="/opt/share/xkeen-manager/runtime"
 BYPASS_DOMAINS_PATH="$RUNTIME_DIR/bypass-domains.txt"
 BYPASS_CIDRS_PATH="$RUNTIME_DIR/bypass-cidrs.txt"
@@ -52,6 +53,27 @@ build_bypass_ipset() {
     [ -n "$cidr" ] || continue
     ipset add xkeen_bypass "$cidr" -exist 2>/dev/null || true
   done
+
+  if command -v jq >/dev/null 2>&1 && [ -f "$STATE_PATH" ]; then
+    jq -r '.profiles[]? | .groups[]? | select((.enabled != false) and (.outboundTag == "bypass")) | .domains[]?' "$STATE_PATH" 2>/dev/null | \
+      sed '/^[[:space:]]*$/d' | while IFS= read -r domain; do
+        [ -n "$domain" ] || continue
+        nslookup "$domain" 2>/dev/null | /opt/bin/awk '
+          /^Name:/ { seen_name=1; next }
+          seen_name && /^Address [0-9]+: / { print $3; next }
+          seen_name && /^Address: / { print $2; next }
+        ' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -Ev '^(127\.|192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)' | while IFS= read -r ip; do
+          [ -n "$ip" ] || continue
+          ipset add xkeen_bypass "$ip"/32 -exist 2>/dev/null || true
+        done
+      done
+
+    jq -r '.profiles[]? | .groups[]? | select((.enabled != false) and (.outboundTag == "bypass")) | .cidrs[]?' "$STATE_PATH" 2>/dev/null | \
+      sed '/^[[:space:]]*$/d' | while IFS= read -r cidr; do
+        [ -n "$cidr" ] || continue
+        ipset add xkeen_bypass "$cidr" -exist 2>/dev/null || true
+      done
+  fi
 }
 
 append_local_returns() {
@@ -106,13 +128,15 @@ repair_hooks() {
   iptables -t mangle -F xkeen_quic 2>/dev/null || true
   iptables -t mangle -X xkeen_quic 2>/dev/null || true
 
+  ipset destroy xkeen_redirect 2>/dev/null || true
   ipset destroy xkeen_vpn 2>/dev/null || true
   ipset destroy xkeen_quic_bypass 2>/dev/null || true
 }
 
 restart_xray() {
   killall xray 2>/dev/null || true
-  sleep 1
+  rm -f /opt/var/run/xray-ui.pid /opt/var/run/xray.pid 2>/dev/null || true
+  sleep 2
   XRAY_LOCATION_ASSET="$XRAY_ASSET_DIR" XRAY_LOCATION_CONFDIR="$XRAY_CONF_DIR" \
     /opt/sbin/start-stop-daemon -S -b -m -p /opt/var/run/xray-ui.pid -x "$XRAY_BIN" -- run >>"$LOG_PATH" 2>&1
   sleep 3
@@ -137,9 +161,29 @@ repair_runtime() {
   return 1
 }
 
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+acquire_lock() {
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    printf '%s\n' "$$" > "$LOCK_PID_FILE"
+    return 0
+  fi
+
+  if [ -f "$LOCK_PID_FILE" ]; then
+    OLD_PID="$(cat "$LOCK_PID_FILE" 2>/dev/null)"
+    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+      exit 0
+    fi
+  fi
+
+  rm -rf "$LOCK_DIR" 2>/dev/null || true
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    printf '%s\n' "$$" > "$LOCK_PID_FILE"
+    return 0
+  fi
+
   exit 0
-fi
+}
+
+acquire_lock
 
 trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
 

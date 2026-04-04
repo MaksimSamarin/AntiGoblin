@@ -53,28 +53,12 @@ read_body() {
 
 restart_xray() {
   killall xray 2>/dev/null || true
-  sleep 1
+  rm -f /opt/var/run/xray-ui.pid /opt/var/run/xray.pid 2>/dev/null || true
+  sleep 2
   XRAY_LOCATION_ASSET=/opt/etc/xray/dat XRAY_LOCATION_CONFDIR=/opt/etc/xray/configs \
     /opt/sbin/start-stop-daemon -S -b -m -p /opt/var/run/xray-ui.pid -x "$XRAY_BIN" -- run >>"$LOG_PATH" 2>&1
   sleep 3
   netstat -lnptu 2>/dev/null | grep -q '61219'
-}
-
-queue_restart_xray() {
-  cat > "$TMP_RESTART_SCRIPT" <<EOF
-#!/bin/sh
-killall xray 2>/dev/null || true
-sleep 1
-XRAY_LOCATION_ASSET=/opt/etc/xray/dat XRAY_LOCATION_CONFDIR=/opt/etc/xray/configs \
-  /opt/sbin/start-stop-daemon -S -b -m -p /opt/var/run/xray-ui.pid -x "$XRAY_BIN" -- run >>"$LOG_PATH" 2>&1
-sleep 4
-if [ -x "$SELFHEAL_PATH" ]; then
-  "$SELFHEAL_PATH" --force >>"$LOG_PATH" 2>&1
-fi
-rm -f "$TMP_RESTART_SCRIPT"
-EOF
-  chmod +x "$TMP_RESTART_SCRIPT" 2>/dev/null || true
-  nohup "$TMP_RESTART_SCRIPT" >/dev/null 2>&1 &
 }
 
 build_bypass_ipset_inline() {
@@ -100,6 +84,27 @@ build_bypass_ipset_inline() {
     [ -n "$cidr" ] || continue
     ipset add xkeen_bypass "$cidr" -exist 2>/dev/null || true
   done
+
+  if command -v jq >/dev/null 2>&1 && [ -f "$STATE_PATH" ]; then
+    jq -r '.profiles[]? | .groups[]? | select((.enabled != false) and (.outboundTag == "bypass")) | .domains[]?' "$STATE_PATH" 2>/dev/null | \
+      sed '/^[[:space:]]*$/d' | while IFS= read -r domain; do
+        [ -n "$domain" ] || continue
+        nslookup "$domain" 2>/dev/null | /opt/bin/awk '
+          /^Name:/ { seen_name=1; next }
+          seen_name && /^Address [0-9]+: / { print $3; next }
+          seen_name && /^Address: / { print $2; next }
+        ' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -Ev '^(127\.|192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)' | while IFS= read -r ip; do
+          [ -n "$ip" ] || continue
+          ipset add xkeen_bypass "$ip"/32 -exist 2>/dev/null || true
+        done
+      done
+
+    jq -r '.profiles[]? | .groups[]? | select((.enabled != false) and (.outboundTag == "bypass")) | .cidrs[]?' "$STATE_PATH" 2>/dev/null | \
+      sed '/^[[:space:]]*$/d' | while IFS= read -r cidr; do
+        [ -n "$cidr" ] || continue
+        ipset add xkeen_bypass "$cidr" -exist 2>/dev/null || true
+      done
+  fi
 }
 
 append_local_returns_inline() {
@@ -150,6 +155,7 @@ repair_runtime() {
   iptables -t mangle -D PREROUTING -m connmark --mark 0xffffaaa -m conntrack ! --ctstate INVALID -p udp -j xkeen_quic 2>/dev/null || true
   iptables -t mangle -F xkeen_quic 2>/dev/null || true
   iptables -t mangle -X xkeen_quic 2>/dev/null || true
+  ipset destroy xkeen_redirect 2>/dev/null || true
   ipset destroy xkeen_vpn 2>/dev/null || true
   ipset destroy xkeen_quic_bypass 2>/dev/null || true
 
@@ -399,7 +405,7 @@ case "$REQUEST_METHOD" in
       fi
 
       RESOLVED_IP="$(nslookup "$ADDRESS" 2>/dev/null | awk '/^Address [0-9]*: /{print $3} /^Address: /{print $2}' | tail -n 1)"
-      if /opt/bin/nc -w 5 "$ADDRESS" "$PORT" >/dev/null 2>&1; then
+      if printf '' | /opt/bin/nc "$ADDRESS" "$PORT" >/dev/null 2>&1; then
         json_ok "{\"ok\":true,\"address\":\"$ADDRESS\",\"port\":$PORT,\"resolvedIp\":\"$RESOLVED_IP\"}"
       else
         json_err "tcp connect failed"
@@ -440,8 +446,15 @@ case "$REQUEST_METHOD" in
       exit 0
     }
     if validate_confdir; then
-      queue_restart_xray
-      json_ok "{\"ok\":true,\"backup\":\"$BACKUP\",\"queuedRestart\":true}"
+      if restart_xray; then
+        repair_runtime >/dev/null 2>&1 || true
+        json_ok "{\"ok\":true,\"backup\":\"$BACKUP\",\"restarted\":true}"
+      else
+        if [ -f "$BACKUP" ]; then
+          cp "$BACKUP" "$ROUTING_PATH"
+        fi
+        json_err "xray restart failed, rollback applied"
+      fi
     else
       if [ -f "$BACKUP" ]; then
         cp "$BACKUP" "$ROUTING_PATH"

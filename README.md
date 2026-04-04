@@ -13,12 +13,12 @@
 После этого роутер использует:
 
 - политику Keenetic `xkeen` для выбора устройств
-- `iptables` для перехвата `TCP` трафика этой политики
+- `iptables` для перехвата только тех `TCP`-направлений, которые отмечены как `REDIRECT` в правилах UI
 - `xray` для маршрутизации в `vless-reality` или `direct`
 
 Текущая живая модель runtime:
 
-- `TCP` устройств из `xkeen` идет через `xray`
+- `TCP` устройств из `xkeen` идет через `xray` только для UI-групп с типом `REDIRECT`
 - `UDP` идет напрямую
 - локалка и discovery обходят `xray` через `RETURN`
 
@@ -34,34 +34,46 @@
   Подтвержденные баги, причины и рабочие решения.
 - [docs/runbooks/xkeen-manager-ui.md](docs/runbooks/xkeen-manager-ui.md)  
   Как пользоваться UI и как выкатывать проект.
+- [docs/runbooks/deploy-from-zero.md](docs/runbooks/deploy-from-zero.md)  
+  Развертывание с нуля одной командой.
 
 ## Развертывание
 
-Требования:
-
-- Keenetic с `Entware`, смонтированным в `/opt`
-- установленный в Entware `xray`
-- PowerShell на рабочей машине
-- модуль PowerShell `Posh-SSH`
-- переменная окружения `ROUTER_SSH_PASSWORD`
-- опционально `ROUTER_SSH_USER`, по умолчанию `root`
-
-Полный деплой:
+Базовый публичный сценарий теперь один:
 
 ```powershell
-$env:ROUTER_SSH_PASSWORD = 'пароль-ssh-роутера'
-# опционально
-$env:ROUTER_SSH_USER = 'root'
-.\scripts\xkeen\deploy_xkeen_manager_stack_to_router.ps1 -RouterHost 192.168.1.1
+$env:ROUTER_SSH_PASSWORD = 'пароль-ssh-доступа'
+.\scripts\xkeen\bootstrap_antigoblin_router.ps1 -RouterHost 192.168.1.1
 ```
 
-Открыть UI:
+Что делает bootstrap:
+
+- при необходимости ставит `Posh-SSH` на рабочий ПК
+- проверяет `Entware/OPKG` в `/opt`
+- ставит нужные пакеты Entware
+- создает политику Keenetic `xkeen`, если ее еще нет
+- раскладывает базовые sample-конфиги `xray`
+- выкатывает UI и backend
+- запускает `AntiGoblin` на `:8899`
+
+После этого открой:
 
 ```text
 http://192.168.1.1:8899/
 ```
 
-Для входа в UI используются логин и пароль от веб-интерфейса Keenetic.
+Для входа в UI используются логин и пароль от web-интерфейса `Keenetic`.
+
+После bootstrap вручную остается только:
+
+- открыть UI `AntiGoblin`
+- заполнить `VLESS Reality`
+- включить нужные routing-группы
+- назначить нужные устройства в политику `xkeen` в Keenetic UI
+
+Полная пошаговая инструкция:
+
+- [docs/runbooks/deploy-from-zero.md](docs/runbooks/deploy-from-zero.md)
 
 ## Источник истины
 
@@ -82,10 +94,8 @@ UI и backend на роутере:
 - `/opt/share/xkeen-manager/api/routing.cgi`
 - `/opt/share/xkeen-manager/api/xkeen-selfheal.sh`
 
-Runtime bypass-списки:
-
-- `/opt/share/xkeen-manager/runtime/bypass-domains.txt`
-- `/opt/share/xkeen-manager/runtime/bypass-cidrs.txt`
+Bypass-группы теперь задаются прямо в UI-state.
+Если группе задан тип трафика `Bypass`, ее домены и CIDR собираются в runtime `xkeen_bypass` и обходят `xray` через `RETURN`.
 
 ## Правила проекта
 

@@ -3,7 +3,10 @@ param(
   [string]$RouterUser = $(if ($env:ROUTER_SSH_USER) { $env:ROUTER_SSH_USER } else { 'root' }),
   [string]$RemoteRoot = "/opt/share/xkeen-manager",
   [string]$RemoteApiDir = "/opt/share/xkeen-manager/api",
-  [string]$RemoteRuntimeDir = "/opt/share/xkeen-manager/runtime"
+  [string]$RemoteRuntimeDir = "/opt/share/xkeen-manager/runtime",
+  [string]$RemoteInitScript = "/opt/etc/init.d/S26antigoblin",
+  [string]$RemoteFsHook = "/opt/etc/ndm/fs.d/50-antigoblin.sh",
+  [string]$RemoteUsbHook = "/opt/etc/ndm/usb.d/50-antigoblin.sh"
 )
 
 $routerPassword = if ($env:ROUTER_SSH_PASSWORD) { $env:ROUTER_SSH_PASSWORD } else { throw "Set ROUTER_SSH_PASSWORD before running this script." }
@@ -15,6 +18,8 @@ Import-Module Posh-SSH -ErrorAction Stop
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $localApi = Join-Path $repoRoot 'ui\xkeen-manager\backend\routing.cgi'
 $localSelfHeal = Join-Path $repoRoot 'ui\xkeen-manager\backend\xkeen-selfheal.sh'
+$localInitScript = Join-Path $repoRoot 'scripts\xkeen\antigoblin.initd.sh'
+$localRemountHook = Join-Path $repoRoot 'scripts\xkeen\antigoblin-remount-hook.sh'
 $localBypassDomains = Join-Path $repoRoot 'configs\xkeen\bypass-domains.sample.txt'
 $localBypassCidrs = Join-Path $repoRoot 'configs\xkeen\bypass-cidrs.sample.txt'
 
@@ -54,6 +59,12 @@ if (-not (Test-Path $localApi)) {
 if (-not (Test-Path $localSelfHeal)) {
   throw "Missing self-heal file: $localSelfHeal"
 }
+if (-not (Test-Path $localInitScript)) {
+  throw "Missing init script: $localInitScript"
+}
+if (-not (Test-Path $localRemountHook)) {
+  throw "Missing remount hook: $localRemountHook"
+}
 if (-not (Test-Path $localBypassDomains)) {
   throw "Missing bypass domains sample: $localBypassDomains"
 }
@@ -81,6 +92,10 @@ try {
 
   Send-RemoteFileBase64 -Session $session -LocalPath $localApi -RemotePath "$RemoteApiDir/routing.cgi"
   Send-RemoteFileBase64 -Session $session -LocalPath $localSelfHeal -RemotePath "$RemoteApiDir/xkeen-selfheal.sh"
+  Send-RemoteFileBase64 -Session $session -LocalPath $localInitScript -RemotePath $RemoteInitScript
+  Send-RemoteFileBase64 -Session $session -LocalPath $localRemountHook -RemotePath $RemoteFsHook
+  Send-RemoteFileBase64 -Session $session -LocalPath $localRemountHook -RemotePath $RemoteUsbHook
+
   $ensureRuntime = @(
     @{ Local = $localBypassDomains; Remote = "$RemoteRuntimeDir/bypass-domains.txt" },
     @{ Local = $localBypassCidrs; Remote = "$RemoteRuntimeDir/bypass-cidrs.txt" }
@@ -108,6 +123,10 @@ rm -f /tmp/xkeen-cron.new
   $cronResult = Invoke-SSHCommand -SSHSession $session -Command $cronCmd -TimeOut 120000
   if ($cronResult.Output) { $cronResult.Output }
   if ($cronResult.Error) { Write-Output '--- STDERR ---'; $cronResult.Error }
+
+  $initResult = Invoke-SSHCommand -SSHSession $session -Command "chmod 755 '$RemoteInitScript' '$RemoteFsHook' '$RemoteUsbHook' && '$RemoteInitScript' restart >/dev/null 2>&1 || true" -TimeOut 120000
+  if ($initResult.Output) { $initResult.Output }
+  if ($initResult.Error) { Write-Output '--- STDERR ---'; $initResult.Error }
 }
 finally {
   Remove-SSHSession -SSHSession $session | Out-Null

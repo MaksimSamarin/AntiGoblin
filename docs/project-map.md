@@ -33,8 +33,11 @@ Router backend и поддержка runtime:
 Deploy и операционные скрипты:
 
 - `deploy_xkeen_manager_stack_to_router.ps1`
+- `bootstrap_antigoblin_router.ps1`
 - `deploy_xkeen_manager_ui_to_router.ps1`
 - `deploy_xkeen_manager_backend_to_router.ps1`
+- `antigoblin.initd.sh`
+- `antigoblin-remount-hook.sh`
 - `start_xkeen_manager_ui_router.ps1`
 - `stop_xkeen_manager_ui_router.ps1`
 - `xkeen_backup_state.ps1`
@@ -45,9 +48,10 @@ Deploy и операционные скрипты:
 Только generic sample-конфиги:
 
 - `xkeen-ui-state.sample.json`
+- `01_log.sample.json`
+- `03_inbounds.sample.json`
 - `04_outbounds.sample.json`
-- `bypass-domains.sample.txt`
-- `bypass-cidrs.sample.txt`
+- `05_routing.sample.json`
 
 В этой папке не должно быть live-снапшотов роутера и личных черновиков.
 
@@ -60,6 +64,7 @@ Deploy и операционные скрипты:
 - [PROMPT.md](PROMPT.md)
 - [troubleshooting.md](troubleshooting.md)
 - [runbooks/xkeen-manager-ui.md](runbooks/xkeen-manager-ui.md)
+- [runbooks/deploy-from-zero.md](runbooks/deploy-from-zero.md)
 
 ## Runtime-файлы на роутере
 
@@ -73,10 +78,8 @@ Backend:
 - `/opt/share/xkeen-manager/api/routing.cgi`
 - `/opt/share/xkeen-manager/api/xkeen-selfheal.sh`
 
-Runtime bypass:
-
-- `/opt/share/xkeen-manager/runtime/bypass-domains.txt`
-- `/opt/share/xkeen-manager/runtime/bypass-cidrs.txt`
+Runtime bypass больше не хранится отдельными текстовыми файлами.
+`xkeen_bypass` собирается из активных групп UI с типом `Bypass`.
 
 Конфиги `xray`:
 
