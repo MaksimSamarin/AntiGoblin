@@ -204,7 +204,7 @@ maybe_log_health() {
   NOW_TS="$(date +%s)"
   LAST_TS="$(cat "$HEALTH_STAMP_FILE" 2>/dev/null || echo 0)"
 
-  if [ "$HEALTH_STATUS" != "ok" ] || [ $(( NOW_TS - LAST_TS )) -ge 1800 ]; then
+  if [ "$HEALTH_STATUS" != "ok" ] || [ $(( NOW_TS - LAST_TS )) -ge 300 ]; then
     health_log "status=$HEALTH_STATUS pid=${XRAY_PID:-0} probe=$HEALTH_PROBE_OK fd=${XRAY_FD_COUNT:-0}/${XRAY_FD_LIMIT:-0} mem_kb=${MEM_AVAILABLE_KB:-0}/${MEM_TOTAL_KB:-0} conntrack=${CONNTRACK_COUNT:-0}/${CONNTRACK_MAX:-0}"
     printf '%s\n' "$NOW_TS" > "$HEALTH_STAMP_FILE"
   fi

@@ -277,6 +277,7 @@ from 192.168.2.91:... accepted tcp:IP:PORT [redirect -> ...]
 
 - `self-heal` должен вести отдельный health-log:
   - `/opt/var/log/xkeen-health.log`
+- в нормальном режиме он должен писать health-snapshot примерно раз в 5 минут
 - `self-heal` должен проверять:
   - наличие `xray` pid
   - факт прослушивания `61219`
