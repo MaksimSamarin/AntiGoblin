@@ -3,16 +3,28 @@
 PATH="/opt/bin:/opt/sbin:/sbin:/usr/sbin:/bin:/usr/bin:$PATH"
 
 LOG_PATH="/opt/var/log/xkeen-selfheal.log"
+HEALTH_LOG_PATH="/opt/var/log/xkeen-health.log"
 XRAY_BIN="/opt/sbin/xray"
 XRAY_ASSET_DIR="/opt/etc/xray/dat"
 XRAY_CONF_DIR="/opt/etc/xray/configs"
 STATE_PATH="/opt/share/xkeen-manager/xkeen-ui-state.json"
 LOCK_DIR="/tmp/xkeen-selfheal.lock"
 LOCK_PID_FILE="$LOCK_DIR/pid"
+HEALTH_STAMP_FILE="/tmp/xkeen-health-last.ts"
+XRAY_RESTART_STAMP_FILE="/tmp/xkeen-xray-restart-last.ts"
 RUNTIME_DIR="/opt/share/xkeen-manager/runtime"
 BYPASS_DOMAINS_PATH="$RUNTIME_DIR/bypass-domains.txt"
 BYPASS_CIDRS_PATH="$RUNTIME_DIR/bypass-cidrs.txt"
 XKEEN_MARK=""
+XRAY_PID=""
+XRAY_FD_COUNT=0
+XRAY_FD_LIMIT=0
+MEM_AVAILABLE_KB=0
+MEM_TOTAL_KB=0
+CONNTRACK_COUNT=0
+CONNTRACK_MAX=0
+HEALTH_PROBE_OK=0
+HEALTH_STATUS="ok"
 find_cron_init() {
   for candidate in /opt/etc/init.d/S10cron /opt/etc/init.d/S05crond; do
     [ -x "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
@@ -33,6 +45,10 @@ fi
 
 log() {
   printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG_PATH"
+}
+
+health_log() {
+  printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$HEALTH_LOG_PATH"
 }
 
 has_rule() {
@@ -116,6 +132,94 @@ xray_ready() {
   netstat -lnpt 2>/dev/null | grep -q ':61219 '
 }
 
+get_xray_pid() {
+  pidof xray 2>/dev/null | /opt/bin/awk '{ print $1; exit }'
+}
+
+capture_health_metrics() {
+  XRAY_PID="$(get_xray_pid)"
+  XRAY_FD_COUNT=0
+  XRAY_FD_LIMIT=0
+  MEM_AVAILABLE_KB=0
+  MEM_TOTAL_KB=0
+  CONNTRACK_COUNT=0
+  CONNTRACK_MAX=0
+  HEALTH_PROBE_OK=0
+  HEALTH_STATUS="ok"
+
+  if [ -n "$XRAY_PID" ] && [ -d "/proc/$XRAY_PID/fd" ]; then
+    XRAY_FD_COUNT="$(ls "/proc/$XRAY_PID/fd" 2>/dev/null | wc -l | tr -d ' ')"
+    XRAY_FD_LIMIT="$(grep 'Max open files' "/proc/$XRAY_PID/limits" 2>/dev/null | /opt/bin/awk '{ print $4; exit }')"
+    case "$XRAY_FD_LIMIT" in
+      ''|unlimited) XRAY_FD_LIMIT=0 ;;
+    esac
+  fi
+
+  MEM_AVAILABLE_KB="$(grep '^MemAvailable:' /proc/meminfo 2>/dev/null | /opt/bin/awk '{ print $2; exit }')"
+  MEM_TOTAL_KB="$(grep '^MemTotal:' /proc/meminfo 2>/dev/null | /opt/bin/awk '{ print $2; exit }')"
+  CONNTRACK_COUNT="$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)"
+  CONNTRACK_MAX="$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)"
+
+  if [ -n "$XRAY_PID" ] && xray_ready; then
+    HEALTH_PROBE_OK=1
+  else
+    HEALTH_PROBE_OK=0
+  fi
+
+  if [ "${XRAY_FD_LIMIT:-0}" -gt 0 ]; then
+    FD_PCT=$(( XRAY_FD_COUNT * 100 / XRAY_FD_LIMIT ))
+    if [ "$FD_PCT" -ge 95 ]; then
+      HEALTH_STATUS="fd_critical"
+      return 0
+    fi
+    if [ "$FD_PCT" -ge 85 ]; then
+      HEALTH_STATUS="fd_warn"
+    fi
+  fi
+
+  if [ "${CONNTRACK_MAX:-0}" -gt 0 ]; then
+    CT_PCT=$(( CONNTRACK_COUNT * 100 / CONNTRACK_MAX ))
+    if [ "$CT_PCT" -ge 95 ]; then
+      HEALTH_STATUS="conntrack_critical"
+      return 0
+    fi
+    if [ "$CT_PCT" -ge 85 ] && [ "$HEALTH_STATUS" = "ok" ]; then
+      HEALTH_STATUS="conntrack_warn"
+    fi
+  fi
+
+  if [ "${MEM_TOTAL_KB:-0}" -gt 0 ]; then
+    MEM_AVAIL_PCT=$(( MEM_AVAILABLE_KB * 100 / MEM_TOTAL_KB ))
+    if [ "$MEM_AVAIL_PCT" -le 5 ]; then
+      HEALTH_STATUS="mem_critical"
+      return 0
+    fi
+    if [ "$MEM_AVAIL_PCT" -le 10 ] && [ "$HEALTH_STATUS" = "ok" ]; then
+      HEALTH_STATUS="mem_warn"
+    fi
+  fi
+}
+
+maybe_log_health() {
+  NOW_TS="$(date +%s)"
+  LAST_TS="$(cat "$HEALTH_STAMP_FILE" 2>/dev/null || echo 0)"
+
+  if [ "$HEALTH_STATUS" != "ok" ] || [ $(( NOW_TS - LAST_TS )) -ge 1800 ]; then
+    health_log "status=$HEALTH_STATUS pid=${XRAY_PID:-0} probe=$HEALTH_PROBE_OK fd=${XRAY_FD_COUNT:-0}/${XRAY_FD_LIMIT:-0} mem_kb=${MEM_AVAILABLE_KB:-0}/${MEM_TOTAL_KB:-0} conntrack=${CONNTRACK_COUNT:-0}/${CONNTRACK_MAX:-0}"
+    printf '%s\n' "$NOW_TS" > "$HEALTH_STAMP_FILE"
+  fi
+}
+
+restart_xray_allowed() {
+  NOW_TS="$(date +%s)"
+  LAST_TS="$(cat "$XRAY_RESTART_STAMP_FILE" 2>/dev/null || echo 0)"
+  [ $(( NOW_TS - LAST_TS )) -ge 300 ]
+}
+
+mark_xray_restarted() {
+  date +%s > "$XRAY_RESTART_STAMP_FILE"
+}
+
 build_bypass_ipset() {
   ipset create xkeen_bypass hash:net family inet -exist
   ipset flush xkeen_bypass 2>/dev/null || true
@@ -187,6 +291,9 @@ check_runtime() {
   has_rule iptables -t nat -C xkeen -j RETURN || needs_repair=1
   has_rule ipset list xkeen_bypass || needs_repair=1
   xray_ready || needs_repair=1
+  capture_health_metrics
+  maybe_log_health
+  [ "$HEALTH_PROBE_OK" -eq 1 ] || needs_repair=1
 }
 
 repair_hooks() {
@@ -225,11 +332,13 @@ repair_hooks() {
 }
 
 restart_xray() {
+  health_log "action=xray_restart reason=$HEALTH_STATUS pid=${XRAY_PID:-0} fd=${XRAY_FD_COUNT:-0}/${XRAY_FD_LIMIT:-0} mem_kb=${MEM_AVAILABLE_KB:-0}/${MEM_TOTAL_KB:-0} conntrack=${CONNTRACK_COUNT:-0}/${CONNTRACK_MAX:-0}"
   killall xray 2>/dev/null || true
   rm -f /opt/var/run/xray-ui.pid /opt/var/run/xray.pid 2>/dev/null || true
   sleep 2
   XRAY_LOCATION_ASSET="$XRAY_ASSET_DIR" XRAY_LOCATION_CONFDIR="$XRAY_CONF_DIR" \
     /opt/sbin/start-stop-daemon -S -b -m -p /opt/var/run/xray-ui.pid -x "$XRAY_BIN" -- run >>"$LOG_PATH" 2>&1
+  mark_xray_restarted
   sleep 3
 }
 
@@ -243,12 +352,25 @@ repair_runtime() {
 
   repair_hooks
 
+  capture_health_metrics
+  maybe_log_health
+
   if ! xray_ready; then
     log "xray restart needed"
     restart_xray
+  elif [ "$HEALTH_STATUS" = "fd_critical" ]; then
+    if restart_xray_allowed; then
+      log "xray deep health restart needed: $HEALTH_STATUS"
+      restart_xray
+    else
+      health_log "action=xray_restart_skipped reason=$HEALTH_STATUS cooldown=active"
+    fi
   fi
 
-  if xray_ready; then
+  capture_health_metrics
+  maybe_log_health
+
+  if xray_ready && [ "$HEALTH_PROBE_OK" -eq 1 ]; then
     log "repair done"
     return 0
   fi

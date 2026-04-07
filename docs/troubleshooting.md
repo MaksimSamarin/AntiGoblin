@@ -246,6 +246,7 @@ from 192.168.2.91:... accepted tcp:IP:PORT [redirect -> ...]
 - `/opt/var/log/xray-access.log`;
 - `/opt/var/log/xray-error.log`;
 - `/opt/var/log/xkeen-selfheal.log`.
+- `/opt/var/log/xkeen-health.log`.
 
 ### Рабочее решение
 
@@ -253,6 +254,47 @@ from 192.168.2.91:... accepted tcp:IP:PORT [redirect -> ...]
 - при необходимости обнулить старые debug-хвосты;
 - проверить конфиг через `xray run -test -confdir /opt/etc/xray/configs`;
 - перезапустить `xray`.
+
+## 11. Через 1-2 дня все “встает”, а reboot помогает
+
+Симптом:
+
+- часть сайтов или сервисов перестает работать;
+- `self-heal` формально жив;
+- reboot роутера сразу возвращает рабочее состояние.
+
+Причина:
+
+- старой проверки “порт `61219` слушается” недостаточно;
+- `xray` может деградировать, но не падать полностью;
+- возможны:
+  - `probe_fail` при открытом порту;
+  - критический рост `fd` у `xray`;
+  - высокий `conntrack`;
+  - низкий запас памяти.
+
+Рабочее решение:
+
+- `self-heal` должен вести отдельный health-log:
+  - `/opt/var/log/xkeen-health.log`
+- `self-heal` должен проверять:
+  - наличие `xray` pid
+  - факт прослушивания `61219`
+  - количество `fd` у процесса `xray`
+  - `nf_conntrack_count / nf_conntrack_max`
+  - `MemAvailable / MemTotal`
+- если `fd_critical`, допускается controlled restart `xray` с cooldown.
+
+Что проверять:
+
+- `/opt/var/log/xkeen-health.log`
+- `/opt/var/log/xkeen-selfheal.log`
+- `/proc/sys/net/netfilter/nf_conntrack_count`
+- `/proc/sys/net/netfilter/nf_conntrack_max`
+
+Что не надо повторять:
+
+- нельзя считать `netstat :61219` достаточной health-check проверкой `xray`.
 
 ## 8. После переноса устройств между политиками Keenetic все ломается
 

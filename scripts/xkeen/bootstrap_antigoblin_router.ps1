@@ -101,6 +101,7 @@ mkdir -p /opt/var/log/xray
 touch /opt/var/log/xray/access.log
 touch /opt/var/log/xray/error.log
 touch /opt/var/log/xkeen-selfheal.log
+touch /opt/var/log/xkeen-health.log
 
 if ! ndmc -c 'show ip policy' 2>/dev/null | grep -q 'description = xkeen:'; then
   WAN_IFACE="$(ndmc -c 'show interface' | /opt/bin/awk '

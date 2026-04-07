@@ -164,6 +164,12 @@ RETURN
 - проверку, что `PREROUTING -> xkeen` на месте;
 - пересборку цепочки `xkeen`;
 - пересборку `xkeen_bypass`;
+- отдельную health-проверку `xray` через:
+  - наличие `xray` pid
+  - проверку, что `61219` слушается
+  - контроль `fd`
+  - контроль `conntrack`
+  - контроль доступной памяти
 - очистку retired runtime-хвостов, например:
   - `xkeen_udp`
   - `xkeen_quic`
@@ -176,6 +182,16 @@ RETURN
 Он запускает `xkeen-selfheal.sh` каждые 15 секунд.
 
 Cron может оставаться как вспомогательный слой, но на него нельзя опираться как на единственный механизм авто-восстановления.
+
+Для health-диагностики используется отдельный лог:
+
+- `/opt/var/log/xkeen-health.log`
+
+Туда попадают:
+
+- периодические health snapshots;
+- причины controlled restart `xray`;
+- состояния `fd_warn`, `fd_critical`, `conntrack_warn`, `conntrack_critical`, `mem_warn`, `mem_critical`.
 
 Если пользователь удалил `xkeen` в Keenetic UI, self-heal должен:
 
