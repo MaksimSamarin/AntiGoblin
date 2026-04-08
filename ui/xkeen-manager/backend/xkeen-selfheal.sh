@@ -19,6 +19,8 @@ XKEEN_MARK=""
 XRAY_PID=""
 XRAY_FD_COUNT=0
 XRAY_FD_LIMIT=0
+XRAY_FD_WARN_THRESHOLD=150
+XRAY_FD_CRITICAL_THRESHOLD=200
 MEM_AVAILABLE_KB=0
 MEM_TOTAL_KB=0
 CONNTRACK_COUNT=0
@@ -166,15 +168,12 @@ capture_health_metrics() {
     HEALTH_PROBE_OK=0
   fi
 
-  if [ "${XRAY_FD_LIMIT:-0}" -gt 0 ]; then
-    FD_PCT=$(( XRAY_FD_COUNT * 100 / XRAY_FD_LIMIT ))
-    if [ "$FD_PCT" -ge 95 ]; then
-      HEALTH_STATUS="fd_critical"
-      return 0
-    fi
-    if [ "$FD_PCT" -ge 85 ]; then
-      HEALTH_STATUS="fd_warn"
-    fi
+  if [ "${XRAY_FD_COUNT:-0}" -ge "$XRAY_FD_CRITICAL_THRESHOLD" ]; then
+    HEALTH_STATUS="fd_critical"
+    return 0
+  fi
+  if [ "${XRAY_FD_COUNT:-0}" -ge "$XRAY_FD_WARN_THRESHOLD" ]; then
+    HEALTH_STATUS="fd_warn"
   fi
 
   if [ "${CONNTRACK_MAX:-0}" -gt 0 ]; then

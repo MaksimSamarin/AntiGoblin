@@ -284,7 +284,7 @@ from 192.168.2.91:... accepted tcp:IP:PORT [redirect -> ...]
   - количество `fd` у процесса `xray`
   - `nf_conntrack_count / nf_conntrack_max`
   - `MemAvailable / MemTotal`
-- если `fd_critical`, допускается controlled restart `xray` с cooldown.
+- если `fd > 200`, допускается controlled restart `xray` с cooldown.
 
 Что проверять:
 
