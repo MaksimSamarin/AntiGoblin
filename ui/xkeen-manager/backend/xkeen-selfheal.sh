@@ -19,14 +19,16 @@ XKEEN_MARK=""
 XRAY_PID=""
 XRAY_FD_COUNT=0
 XRAY_FD_LIMIT=0
-XRAY_FD_WARN_THRESHOLD=150
-XRAY_FD_CRITICAL_THRESHOLD=200
+XRAY_FD_WARN_THRESHOLD=400
+XRAY_FD_CRITICAL_THRESHOLD=600
+XRAY_FD_CRITICAL_STREAK_REQUIRED=3
 MEM_AVAILABLE_KB=0
 MEM_TOTAL_KB=0
 CONNTRACK_COUNT=0
 CONNTRACK_MAX=0
 HEALTH_PROBE_OK=0
 HEALTH_STATUS="ok"
+XRAY_FD_CRITICAL_STREAK_FILE="/tmp/xkeen-xray-fd-critical-streak"
 find_cron_init() {
   for candidate in /opt/etc/init.d/S10cron /opt/etc/init.d/S05crond; do
     [ -x "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
@@ -209,6 +211,26 @@ maybe_log_health() {
   fi
 }
 
+update_fd_critical_streak() {
+  STREAK=0
+  if [ -f "$XRAY_FD_CRITICAL_STREAK_FILE" ]; then
+    STREAK="$(cat "$XRAY_FD_CRITICAL_STREAK_FILE" 2>/dev/null || echo 0)"
+  fi
+  case "$STREAK" in
+    ''|*[!0-9]*) STREAK=0 ;;
+  esac
+
+  if [ "$HEALTH_STATUS" = "fd_critical" ]; then
+    STREAK=$((STREAK + 1))
+    printf '%s\n' "$STREAK" > "$XRAY_FD_CRITICAL_STREAK_FILE"
+  else
+    rm -f "$XRAY_FD_CRITICAL_STREAK_FILE" 2>/dev/null || true
+    STREAK=0
+  fi
+
+  XRAY_FD_CRITICAL_STREAK="$STREAK"
+}
+
 restart_xray_allowed() {
   NOW_TS="$(date +%s)"
   LAST_TS="$(cat "$XRAY_RESTART_STAMP_FILE" 2>/dev/null || echo 0)"
@@ -292,12 +314,16 @@ check_runtime() {
   xray_ready || needs_repair=1
   capture_health_metrics
   maybe_log_health
+  update_fd_critical_streak
   [ "$HEALTH_PROBE_OK" -eq 1 ] || needs_repair=1
   case "$HEALTH_STATUS" in
-    fd_critical|mem_critical|conntrack_critical)
+    mem_critical|conntrack_critical)
       needs_repair=1
       ;;
   esac
+  if [ "$HEALTH_STATUS" = "fd_critical" ] && [ "${XRAY_FD_CRITICAL_STREAK:-0}" -ge "$XRAY_FD_CRITICAL_STREAK_REQUIRED" ]; then
+    needs_repair=1
+  fi
 }
 
 repair_hooks() {
