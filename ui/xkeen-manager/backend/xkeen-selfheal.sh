@@ -293,6 +293,11 @@ check_runtime() {
   capture_health_metrics
   maybe_log_health
   [ "$HEALTH_PROBE_OK" -eq 1 ] || needs_repair=1
+  case "$HEALTH_STATUS" in
+    fd_critical|mem_critical|conntrack_critical)
+      needs_repair=1
+      ;;
+  esac
 }
 
 repair_hooks() {
