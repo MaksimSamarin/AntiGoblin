@@ -284,7 +284,12 @@ from 192.168.2.91:... accepted tcp:IP:PORT [redirect -> ...]
   - количество `fd` у процесса `xray`
   - `nf_conntrack_count / nf_conntrack_max`
   - `MemAvailable / MemTotal`
-- если `fd > 200`, допускается controlled restart `xray` с cooldown.
+- если `fd > 600` держится 3 цикла подряд, допускается controlled restart `xray` с cooldown.
+- если у `xray` копится слишком много `FIN_WAIT1/FIN_WAIT2` к VPN-серверу, это тоже считается деградацией runtime.
+- для этого в health-log дополнительно пишутся метрики outbound-сокетов к `vless-reality` серверу:
+  - сколько `ESTABLISHED`
+  - сколько `FIN_WAIT1/FIN_WAIT2`
+  - сколько всего сокетов на VPN-апстрим
 
 Что проверять:
 

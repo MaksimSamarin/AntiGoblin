@@ -22,6 +22,15 @@ XRAY_FD_LIMIT=0
 XRAY_FD_WARN_THRESHOLD=400
 XRAY_FD_CRITICAL_THRESHOLD=600
 XRAY_FD_CRITICAL_STREAK_REQUIRED=3
+XRAY_REMOTE_HOST=""
+XRAY_REMOTE_PORT=0
+XRAY_REMOTE_IP=""
+XRAY_REMOTE_TOTAL_COUNT=0
+XRAY_REMOTE_ESTABLISHED_COUNT=0
+XRAY_REMOTE_FIN_WAIT_COUNT=0
+XRAY_REMOTE_FIN_WAIT_WARN_THRESHOLD=20
+XRAY_REMOTE_FIN_WAIT_CRITICAL_THRESHOLD=50
+XRAY_REMOTE_FIN_WAIT_STREAK_REQUIRED=3
 MEM_AVAILABLE_KB=0
 MEM_TOTAL_KB=0
 CONNTRACK_COUNT=0
@@ -29,6 +38,7 @@ CONNTRACK_MAX=0
 HEALTH_PROBE_OK=0
 HEALTH_STATUS="ok"
 XRAY_FD_CRITICAL_STREAK_FILE="/tmp/xkeen-xray-fd-critical-streak"
+XRAY_REMOTE_FIN_WAIT_STREAK_FILE="/tmp/xkeen-xray-remote-fin-wait-streak"
 find_cron_init() {
   for candidate in /opt/etc/init.d/S10cron /opt/etc/init.d/S05crond; do
     [ -x "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
@@ -140,16 +150,60 @@ get_xray_pid() {
   pidof xray 2>/dev/null | /opt/bin/awk '{ print $1; exit }'
 }
 
+get_xray_remote_endpoint() {
+  XRAY_REMOTE_HOST=""
+  XRAY_REMOTE_PORT=0
+  XRAY_REMOTE_IP=""
+
+  if command -v jq >/dev/null 2>&1 && [ -f "$XRAY_CONF_DIR/04_outbounds.json" ]; then
+    XRAY_REMOTE_HOST="$(jq -r '.outbounds[]? | select(.tag == "vless-reality") | .settings.vnext[0].address // empty' "$XRAY_CONF_DIR/04_outbounds.json" 2>/dev/null | head -n 1)"
+    XRAY_REMOTE_PORT="$(jq -r '.outbounds[]? | select(.tag == "vless-reality") | .settings.vnext[0].port // 0' "$XRAY_CONF_DIR/04_outbounds.json" 2>/dev/null | head -n 1)"
+  fi
+
+  case "$XRAY_REMOTE_PORT" in
+    ''|*[!0-9]*) XRAY_REMOTE_PORT=0 ;;
+  esac
+
+  if [ -n "$XRAY_REMOTE_HOST" ]; then
+    XRAY_REMOTE_IP="$(nslookup "$XRAY_REMOTE_HOST" 2>/dev/null | /opt/bin/awk '
+      /^Name:/ { seen_name=1; next }
+      seen_name && /^Address [0-9]+: / { print $3; exit }
+      seen_name && /^Address: / { print $2; exit }
+    ' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
+  fi
+}
+
+capture_xray_remote_socket_metrics() {
+  XRAY_REMOTE_TOTAL_COUNT=0
+  XRAY_REMOTE_ESTABLISHED_COUNT=0
+  XRAY_REMOTE_FIN_WAIT_COUNT=0
+
+  [ -n "$XRAY_PID" ] || return 0
+  [ "${XRAY_REMOTE_PORT:-0}" -gt 0 ] || return 0
+
+  SOCKET_LINES="$(netstat -anp 2>/dev/null | grep "${XRAY_PID}/xray" | grep ":${XRAY_REMOTE_PORT} " || true)"
+  [ -n "$SOCKET_LINES" ] || return 0
+
+  XRAY_REMOTE_TOTAL_COUNT="$(printf '%s\n' "$SOCKET_LINES" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+  XRAY_REMOTE_ESTABLISHED_COUNT="$(printf '%s\n' "$SOCKET_LINES" | grep -c 'ESTABLISHED' || true)"
+  XRAY_REMOTE_FIN_WAIT_COUNT="$(printf '%s\n' "$SOCKET_LINES" | grep -E -c 'FIN_WAIT1|FIN_WAIT2' || true)"
+}
+
 capture_health_metrics() {
   XRAY_PID="$(get_xray_pid)"
   XRAY_FD_COUNT=0
   XRAY_FD_LIMIT=0
+  XRAY_REMOTE_TOTAL_COUNT=0
+  XRAY_REMOTE_ESTABLISHED_COUNT=0
+  XRAY_REMOTE_FIN_WAIT_COUNT=0
   MEM_AVAILABLE_KB=0
   MEM_TOTAL_KB=0
   CONNTRACK_COUNT=0
   CONNTRACK_MAX=0
   HEALTH_PROBE_OK=0
   HEALTH_STATUS="ok"
+
+  get_xray_remote_endpoint
 
   if [ -n "$XRAY_PID" ] && [ -d "/proc/$XRAY_PID/fd" ]; then
     XRAY_FD_COUNT="$(ls "/proc/$XRAY_PID/fd" 2>/dev/null | wc -l | tr -d ' ')"
@@ -170,12 +224,22 @@ capture_health_metrics() {
     HEALTH_PROBE_OK=0
   fi
 
+  capture_xray_remote_socket_metrics
+
   if [ "${XRAY_FD_COUNT:-0}" -ge "$XRAY_FD_CRITICAL_THRESHOLD" ]; then
     HEALTH_STATUS="fd_critical"
     return 0
   fi
   if [ "${XRAY_FD_COUNT:-0}" -ge "$XRAY_FD_WARN_THRESHOLD" ]; then
     HEALTH_STATUS="fd_warn"
+  fi
+
+  if [ "${XRAY_REMOTE_FIN_WAIT_COUNT:-0}" -ge "$XRAY_REMOTE_FIN_WAIT_CRITICAL_THRESHOLD" ]; then
+    HEALTH_STATUS="vpn_fin_critical"
+    return 0
+  fi
+  if [ "${XRAY_REMOTE_FIN_WAIT_COUNT:-0}" -ge "$XRAY_REMOTE_FIN_WAIT_WARN_THRESHOLD" ] && [ "$HEALTH_STATUS" = "ok" ]; then
+    HEALTH_STATUS="vpn_fin_warn"
   fi
 
   if [ "${CONNTRACK_MAX:-0}" -gt 0 ]; then
@@ -206,7 +270,7 @@ maybe_log_health() {
   LAST_TS="$(cat "$HEALTH_STAMP_FILE" 2>/dev/null || echo 0)"
 
   if [ "$HEALTH_STATUS" != "ok" ] || [ $(( NOW_TS - LAST_TS )) -ge 300 ]; then
-    health_log "status=$HEALTH_STATUS pid=${XRAY_PID:-0} probe=$HEALTH_PROBE_OK fd=${XRAY_FD_COUNT:-0}/${XRAY_FD_LIMIT:-0} mem_kb=${MEM_AVAILABLE_KB:-0}/${MEM_TOTAL_KB:-0} conntrack=${CONNTRACK_COUNT:-0}/${CONNTRACK_MAX:-0}"
+    health_log "status=$HEALTH_STATUS pid=${XRAY_PID:-0} probe=$HEALTH_PROBE_OK fd=${XRAY_FD_COUNT:-0}/${XRAY_FD_LIMIT:-0} mem_kb=${MEM_AVAILABLE_KB:-0}/${MEM_TOTAL_KB:-0} conntrack=${CONNTRACK_COUNT:-0}/${CONNTRACK_MAX:-0} vpn_remote=${XRAY_REMOTE_HOST:-unknown}:${XRAY_REMOTE_PORT:-0} vpn_sock=${XRAY_REMOTE_ESTABLISHED_COUNT:-0}/${XRAY_REMOTE_FIN_WAIT_COUNT:-0}/${XRAY_REMOTE_TOTAL_COUNT:-0}"
     printf '%s\n' "$NOW_TS" > "$HEALTH_STAMP_FILE"
   fi
 }
@@ -229,6 +293,26 @@ update_fd_critical_streak() {
   fi
 
   XRAY_FD_CRITICAL_STREAK="$STREAK"
+}
+
+update_remote_fin_wait_streak() {
+  STREAK=0
+  if [ -f "$XRAY_REMOTE_FIN_WAIT_STREAK_FILE" ]; then
+    STREAK="$(cat "$XRAY_REMOTE_FIN_WAIT_STREAK_FILE" 2>/dev/null || echo 0)"
+  fi
+  case "$STREAK" in
+    ''|*[!0-9]*) STREAK=0 ;;
+  esac
+
+  if [ "$HEALTH_STATUS" = "vpn_fin_critical" ]; then
+    STREAK=$((STREAK + 1))
+    printf '%s\n' "$STREAK" > "$XRAY_REMOTE_FIN_WAIT_STREAK_FILE"
+  else
+    rm -f "$XRAY_REMOTE_FIN_WAIT_STREAK_FILE" 2>/dev/null || true
+    STREAK=0
+  fi
+
+  XRAY_REMOTE_FIN_WAIT_STREAK="$STREAK"
 }
 
 restart_xray_allowed() {
@@ -315,6 +399,7 @@ check_runtime() {
   capture_health_metrics
   maybe_log_health
   update_fd_critical_streak
+  update_remote_fin_wait_streak
   [ "$HEALTH_PROBE_OK" -eq 1 ] || needs_repair=1
   case "$HEALTH_STATUS" in
     mem_critical|conntrack_critical)
@@ -322,6 +407,9 @@ check_runtime() {
       ;;
   esac
   if [ "$HEALTH_STATUS" = "fd_critical" ] && [ "${XRAY_FD_CRITICAL_STREAK:-0}" -ge "$XRAY_FD_CRITICAL_STREAK_REQUIRED" ]; then
+    needs_repair=1
+  fi
+  if [ "$HEALTH_STATUS" = "vpn_fin_critical" ] && [ "${XRAY_REMOTE_FIN_WAIT_STREAK:-0}" -ge "$XRAY_REMOTE_FIN_WAIT_STREAK_REQUIRED" ]; then
     needs_repair=1
   fi
 }
@@ -388,7 +476,7 @@ repair_runtime() {
   if ! xray_ready; then
     log "xray restart needed"
     restart_xray
-  elif [ "$HEALTH_STATUS" = "fd_critical" ]; then
+  elif [ "$HEALTH_STATUS" = "fd_critical" ] || [ "$HEALTH_STATUS" = "vpn_fin_critical" ]; then
     if restart_xray_allowed; then
       log "xray deep health restart needed: $HEALTH_STATUS"
       restart_xray
