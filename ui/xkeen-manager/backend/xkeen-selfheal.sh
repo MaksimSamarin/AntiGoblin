@@ -17,6 +17,8 @@ HEALTH_STAMP_FILE="/tmp/xkeen-health-last.ts"
 XRAY_RESTART_STAMP_FILE="/tmp/xkeen-xray-restart-last.ts"
 RUNTIME_REFRESH_STAMP_FILE="/tmp/xkeen-runtime-refresh-last.ts"
 RUNTIME_REFRESH_INTERVAL_SEC=300
+LOG_ROTATE_INTERVAL_SEC=86400
+LOG_ROTATE_STAMP_FILE="/tmp/xkeen-log-rotate-last.ts"
 RUNTIME_DIR="/opt/share/xkeen-manager/runtime"
 BYPASS_DOMAINS_PATH="$RUNTIME_DIR/bypass-domains.txt"
 BYPASS_CIDRS_PATH="$RUNTIME_DIR/bypass-cidrs.txt"
@@ -334,6 +336,41 @@ mark_runtime_refreshed() {
   date +%s > "$RUNTIME_REFRESH_STAMP_FILE"
 }
 
+rotate_log_if_large() {
+  FILE="$1"
+  MAX_BYTES="$2"
+  [ -f "$FILE" ] || return 0
+  SIZE="$(wc -c < "$FILE" 2>/dev/null)"
+  case "$SIZE" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  [ "$SIZE" -gt "$MAX_BYTES" ] || return 0
+  KEEP_BYTES=$((MAX_BYTES / 2))
+  TMP="${FILE}.rotate.tmp"
+  if tail -c "$KEEP_BYTES" "$FILE" > "$TMP" 2>/dev/null && mv "$TMP" "$FILE" 2>/dev/null; then
+    health_log "action=log_rotate file=$FILE old_size=$SIZE new_size=$KEEP_BYTES"
+  else
+    rm -f "$TMP" 2>/dev/null || true
+  fi
+}
+
+maybe_rotate_logs() {
+  NOW_TS="$(date +%s)"
+  LAST_TS="$(cat "$LOG_ROTATE_STAMP_FILE" 2>/dev/null || echo 0)"
+  case "$LAST_TS" in
+    ''|*[!0-9]*) LAST_TS=0 ;;
+  esac
+  [ $((NOW_TS - LAST_TS)) -ge "$LOG_ROTATE_INTERVAL_SEC" ] || return 0
+
+  rotate_log_if_large "/opt/var/log/xray-manual.log"     20971520
+  rotate_log_if_large "/opt/var/log/sing-box-xkeen.log"   5242880
+  rotate_log_if_large "/opt/var/log/xkeen-selfheal.log"   5242880
+  rotate_log_if_large "/opt/var/log/xkeen-health.log"    10485760
+  rotate_log_if_large "/opt/var/log/xkeen-sysctl.log"     1048576
+
+  printf '%s\n' "$NOW_TS" > "$LOG_ROTATE_STAMP_FILE"
+}
+
 flush_vpn_conntrack() {
   get_xray_remote_endpoint
   [ -n "$XRAY_REMOTE_IP" ] || return 0
@@ -553,6 +590,8 @@ acquire_lock() {
 acquire_lock
 
 trap 'rm -f "$LOCK_PID_FILE" 2>/dev/null || true; rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+
+maybe_rotate_logs
 
 check_runtime
 
