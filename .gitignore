@@ -1,5 +1,6 @@
 .claude/
 snapshots/
+tmp/
 *.tar.gz
 archive/*.zip
 configs/xkeen/*.router-live.json

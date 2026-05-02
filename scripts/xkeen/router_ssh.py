@@ -115,7 +115,8 @@ def main() -> int:
     parser.add_argument("--host", required=True)
     parser.add_argument("--user", required=True)
     parser.add_argument("--password")
-    parser.add_argument("--ssh-port", type=int, default=22)
+    default_port = int(os.environ.get("ROUTER_SSH_PORT") or 22)
+    parser.add_argument("--ssh-port", type=int, default=default_port)
     parser.add_argument("--timeout", type=int, default=15)
 
     subparsers = parser.add_subparsers(dest="action", required=True)

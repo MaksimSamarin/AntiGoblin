@@ -1,251 +1,126 @@
 # Архитектура
 
-## Общее устройство
+## Что это
 
-`AntiGoblin` — это управляющий слой над `Keenetic + Entware + XKeen/xray`.
+`AntiGoblin` — управляющий слой над `Keenetic + Entware + xray + sing-box`. Это router-hosted панель управления: и UI, и backend, и self-heal живут на самом роутере в `/opt/share/xkeen-manager/`.
 
-Стек делится на три уровня:
+## Три уровня стека
 
-1. `KeeneticOS`  
-   Выбирает устройства через штатную политику доступа в интернет `xkeen`.
-2. `iptables`  
-   Ловит `TCP` трафик этой политики, применяет `RETURN` для bypass-направлений и отправляет остальной `TCP` в `xray`.
-3. `xray`  
-   Применяет routing-правила и отправляет поток либо в `vless-reality`, либо в `direct`.
+```text
+┌────────────────────────────────────────────────────────────┐
+│ KeeneticOS                                                  │
+│ - политика "xkeen" -> mark на устройства                    │
+│ - web-сессия и авторизация                                  │
+│ - базовый сетевой стек                                      │
+└──────────────────────────┬─────────────────────────────────┘
+                           │ mark = mark(xkeen policy)
+┌──────────────────────────▼─────────────────────────────────┐
+│ iptables                                                    │
+│ - PREROUTING -> chain xkeen на mark политики                │
+│ - локалка/discovery/multicast -> RETURN                     │
+│ - адреса из ipset xkeen_bypass -> RETURN                    │
+│ - остальной TCP -> REDIRECT 61219 (xray)                    │
+│ - UDP к адресам из ipset xkeen_udp_route -> TPROXY 61221    │
+└─────┬───────────────────────────────────┬──────────────────┘
+      │ TCP                               │ UDP
+┌─────▼──────────────────────┐  ┌─────────▼─────────────┐
+│ xray (61219, 62640)         │  │ sing-box (61221)      │
+│ - dokodemo-door TCP 61219   │  │ - tproxy UDP 61221    │
+│ - shadowsocks relay 62640   │  │ - SS outbound to      │
+│ - vless-reality outbound    │  │   127.0.0.1:62640     │
+│ - direct outbound           │  │   (xray relay)        │
+│                             │  └───────────┬───────────┘
+│  routing.json решает         │              │
+│   group → vless / direct    │◄─────────────┘
+└──────────────┬──────────────┘
+               │
+        VLESS Reality сервер
+```
 
-## Keenetic и Entware
+## Что делает Keenetic, что делает Entware
 
-### Что делает KeeneticOS
+**KeeneticOS** отвечает за политики доступа в интернет, привязку устройств к политике `xkeen`, веб-сессию роутера, базовый сетевой стек.
 
-Keenetic сама отвечает за:
+**Entware (`/opt`)** отвечает за всё остальное: `xray`, `sing-box`, `uhttpd_kn` (UI-сервер), backend на shell, init-скрипты, self-heal, runtime-файлы. Если флешка с Entware упала или `/opt` пропал — VPN-стек выглядит полностью мёртвым, даже если KeeneticOS жив.
 
-- политики доступа в интернет;
-- назначение устройств в политику `xkeen`;
-- веб-сессию и авторизацию в веб-интерфейсе;
-- базовый сетевой стек роутера.
+## Как идёт трафик
 
-### Что делает Entware
+### Mark и выбор устройств
 
-Весь проект живет в `/opt`, то есть в среде `Entware`.
+Устройства, которым в Keenetic UI назначена политика с описанием `xkeen`, получают её mark. Mark **не хардкодится**: на разных роутерах он может быть разным (`0xffffaaa`, `0xffffaab`, ...). AntiGoblin при каждой сборке runtime ищет mark динамически по описанию политики `xkeen`.
 
-Там находятся:
+Инвариант безопасности: `AntiGoblin` цепляется только к mark политики `xkeen`. Любые другие политики Keenetic (например, личная `no_vpn`) проектом не трогаются.
 
-- `xray`;
-- `uhttpd`;
-- файлы UI;
-- backend-скрипты;
-- self-heal;
-- runtime-файлы и сгенерированные конфиги.
+### TCP
 
-Если ломается `/opt`, носитель или сама среда `Entware`, то VPN-стек может выглядеть полностью упавшим, даже если KeeneticOS жива.
+```text
+RETURN  локальные RFC1918 сети
+RETURN  multicast (224.0.0.0/4) и broadcast
+RETURN  адреса из ipset xkeen_bypass
+REDIRECT всё остальное TCP -> 61219 (xray)
+RETURN  fallback
+```
 
-## Что лежит на роутере
+`xray` на :61219 — `dokodemo-door` inbound. Дальше `05_routing.json` отправляет поток в outbound `vless-reality` или `direct`.
 
-UI и state:
+### UDP
 
-- `/opt/share/xkeen-manager/`
-- `/opt/share/xkeen-manager/xkeen-ui-state.json`
+```text
+PREROUTING  UDP, dst ∈ xkeen_udp_route -> TPROXY :61221 (sing-box)
+            всё остальное UDP -> direct (никаких хуков нет)
+```
 
-Backend:
+`sing-box` на :61221 принимает TPROXY-UDP и проксирует его в локальный xray Shadowsocks-relay (`127.0.0.1:62640`). Уже оттуда xray по тегу inbound отправляет UDP в outbound `vless-reality`.
 
-- `/opt/share/xkeen-manager/api/routing.cgi`
-- `/opt/share/xkeen-manager/api/xkeen-selfheal.sh`
-- `/opt/share/xkeen-manager/api/xkeen-runtime.sh`
+Эта схема воспроизводит локальный путь `v2rayN` (TUN → SS-relay → xray VLESS) и стабильно работает для realtime-UDP, в т.ч. Discord voice. Прямой путь `xray TPROXY → vless-reality` retired как нерабочий: для realtime-UDP он давал стабильный 5000 мс ping.
 
-Конфиги `xray`:
+### Что задаёт UI-группа
 
-- `/opt/etc/xray/configs/01_log.json`
-- `/opt/etc/xray/configs/03_inbounds.json`
-- `/opt/etc/xray/configs/04_outbounds.json`
-- `/opt/etc/xray/configs/05_routing.json`
+У каждой группы один параметр — `outbound`:
 
-Runtime bypass:
+| Outbound       | TCP                       | UDP                       |
+|----------------|---------------------------|---------------------------|
+| `vless-reality`| через `xray` → VPN        | через `sing-box` → VPN    |
+| `direct`       | через `xray` → без VPN    | direct (не перехватывается) |
+| `bypass`       | `RETURN` до `xray`        | `RETURN` до `xray`        |
 
-- runtime-файлы:
-  - `/opt/share/xkeen-manager/runtime/bypass-domains.txt`
-  - `/opt/share/xkeen-manager/runtime/bypass-cidrs.txt`
-- плюс UI-группы с `outboundTag: "bypass"`
+Отдельного флага «UDP через VPN» у группы нет: UDP идёт в VPN автоматически за outbound группы.
+
+`bypass` и `direct` — **не одно и то же**. `bypass` — это `RETURN` ещё в `iptables`, поток вообще не доходит до `xray`. `direct` — поток вошёл в `xray`, но был выпущен наружу без VPN. Для локалки, discovery и части IoT cloud-сценариев нужен именно `bypass`, а не `direct`.
 
 ## Источник истины
 
-Единственный источник истины для UI:
+`/opt/share/xkeen-manager/xkeen-ui-state.json` — единственный источник истины для UI и runtime.
 
-- `/opt/share/xkeen-manager/xkeen-ui-state.json`
+Из него backend генерирует:
 
-Из этого файла backend собирает:
+- `/opt/etc/xray/configs/04_outbounds.json`
+- `/opt/etc/xray/configs/05_routing.json`
 
-- `04_outbounds.json`
-- `05_routing.json`
-
-Старые routing-снапшоты и разовые дампы роутера не считаются источником истины.
-
-## Как идет трафик
-
-### Выбор устройств
-
-Устройства, назначенные в политику Keenetic `xkeen`, получают mark, который определяется динамически по описанию политики `xkeen`.
-
-Mark нельзя хардкодить:
-
-- на одном роутере `xkeen` может иметь `0xffffaaa`;
-- на другом `0xffffaab`;
-- `AntiGoblin` обязан искать mark именно у политики с `description xkeen`.
-
-### Уровень `iptables`
-
-Трафик с этим mark попадает в цепочку `xkeen`.
-
-Инвариант безопасности:
-
-- в `xray` может попадать только трафик устройств из политики `xkeen`;
-- другие политики Keenetic, например `no_vpn`, не должны зацепляться нашим runtime;
-- hook-и в `iptables` строятся только по mark, найденному у политики с `description xkeen`;
-- UI-группы AntiGoblin не являются политиками Keenetic и не должны менять назначение устройств;
-- если это произошло, это критическая ошибка архитектуры.
-
-Текущая живая модель:
-
-```text
-RETURN локальные RFC1918 сети
-RETURN multicast
-RETURN broadcast
-RETURN destinations from xkeen_bypass
-REDIRECT весь остальной TCP -> 61219
-RETURN
-```
-
-Смысл:
-
-- локалка и discovery не трогаются;
-- адреса из `xkeen_bypass` обходят `xray`;
-- остальной `TCP` идет в `xray`;
-- `UDP` по умолчанию не перехватывается и остается direct.
-- UI-группа может включить `UDP через VPN`; тогда self-heal собирает `ipset xkeen_udp_route` только из доменов/CIDR этой группы и отправляет совпавший UDP через `TPROXY -> 61220`.
-- В `05_routing.json` UDP с inbound `tproxy` сразу уходит в `vless-reality`: сам факт попадания в `tproxy` уже означает, что пакет прошел фильтр `xkeen_udp_route`.
-- UDP-проксинг не применяется ко всей политике `xkeen`: без явной галки у группы UDP не трогается.
-
-## Что задает UI-группа
-
-Сейчас у группы есть `Outbound`, который задает одну из трех моделей:
-
-- `vless-reality`
-  поток идет в `xray`, а затем в VPN;
-- `direct`
-  поток идет в `xray`, а затем выходит без VPN;
-- `bypass`
-  поток должен попасть в `xkeen_bypass` и уйти через `RETURN` до `xray`.
-
-### Важное различие
-
-`RETURN` и `direct` — не одно и то же.
-
-- `RETURN`
-  полностью обходит `xray`;
-- `direct`
-  означает, что трафик уже вошел в `xray`, а потом был выпущен наружу без VPN.
-
-Для локалки, discovery и части мобильных/IoT cloud-сценариев нужен именно `RETURN`, а не `direct`.
-
-## Как используется `xray`
-
-`xray` работает как:
-
-- прозрачный `TCP` ingress на `61219`;
-- прозрачный точечный `UDP` ingress на `61220` для групп с `UDP через VPN`;
-- routing engine;
-- outbound `vless-reality`;
-- outbound `direct`.
-
-Для UDP через VLESS Reality используется XUDP в outbound `vless-reality`: TCP-трафик не мультиплексируется, но UDP получает отдельную упаковку через `xudpConcurrency`.
-
-После попадания потока в `xray` уже `05_routing.json` решает:
-
-- отправить его в `vless-reality`;
-- или отправить его в `direct`.
+И собирает runtime-наборы `xkeen_bypass` и `xkeen_udp_route`. И apply из UI, и self-heal используют один и тот же код в `/opt/share/xkeen-manager/api/xkeen-runtime.sh` — расхождения между ними невозможны.
 
 ## Self-heal
 
-`xkeen-selfheal.sh` отвечает за:
+`xkeen-selfheal.sh` запускается каждые 15 секунд через watchdog `S25antigoblin-selfheal` и:
 
-- проверку, существует ли политика `xkeen`;
-- автоматическое создание `xkeen`, если ее удалили из Keenetic UI;
-- проверку, что `xray` жив;
-- проверку, что `PREROUTING -> xkeen` на месте;
-- пересборку цепочки `xkeen`;
-- пересборку `xkeen_bypass`;
-- периодическое обновление DNS-зависимых runtime-наборов примерно раз в 5 минут без рестарта `xray`;
-- отдельную health-проверку `xray` через:
-  - наличие `xray` pid
-  - проверку, что `61219` слушается
-  - контроль `fd`
-  - контроль `conntrack`
-  - контроль доступной памяти
-- очистку retired runtime-хвостов, например:
-  - `xkeen_udp`
-  - `xkeen_quic`
+- проверяет, что политика `xkeen` существует — если её удалили в Keenetic UI, создаёт заново как `Policy42+`;
+- проверяет, что `xray` жив, слушает `61219`, имеет приемлемый `fd`/`conntrack`/память;
+- проверяет, что `PREROUTING -> xkeen` на месте, и при необходимости пересобирает цепочку;
+- проверяет, что `sing-box` слушает `61221`, если в UI есть хотя бы одна группа с outbound `vless-reality`;
+- раз в ~5 минут пересобирает `xkeen_bypass` и `xkeen_udp_route` (DNS-имена могут резолвиться в новые IP) через `ipset swap` — без рестарта `xray`;
+- пишет health-snapshot в `/opt/var/log/xkeen-health.log`;
+- пишет действия в `/opt/var/log/xkeen-selfheal.log`.
 
-Основной автоматический запуск self-heal теперь делает watchdog-демон:
+Дополнительно стоит:
 
-- `/opt/etc/init.d/S25antigoblin-selfheal`
-- `/opt/share/xkeen-manager/api/xkeen-selfheal-loop.sh`
+- cron-хук `cron.1min/50-antigoblin-selfheal` как страховочный слой;
+- `ndm/fs.d/50-antigoblin.sh` и `ndm/usb.d/50-antigoblin.sh` — поднимают всё после возврата `/opt` или USB-событий;
+- `S20antigoblin-sysctl` — точечно занижает TCP/conntrack-таймауты, чтобы fd на роутере не накапливались.
 
-Он запускает `xkeen-selfheal.sh` каждые 15 секунд.
+## Что больше не часть live-архитектуры
 
-Cron может оставаться как вспомогательный слой, но на него нельзя опираться как на единственный механизм авто-восстановления.
-
-Для health-диагностики используется отдельный лог:
-
-- `/opt/var/log/xkeen-health.log`
-
-Туда попадают:
-
-- периодические health snapshots каждые 5 минут;
-- причины controlled restart `xray`;
-- состояния `fd_warn`, `fd_critical`, `vpn_fin_warn`, `vpn_fin_critical`, `vpn_orphan_fin_warn`, `conntrack_warn`, `conntrack_critical`, `mem_warn`, `mem_critical`.
-- отдельные метрики outbound-сокетов `xray` к VPN-серверу:
-  - `ESTABLISHED`
-  - `FIN_WAIT1/FIN_WAIT2`
-  - общее число сокетов на VPN-апстрим
-- `vpn_orphan_fin`: количество `FIN_WAIT1/FIN_WAIT2` к текущему VPN host/port, которые уже не принадлежат живому процессу `xray`.
-- `vpn_orphan_fin` является диагностической метрикой и не должен сам по себе запускать restart `xray`, потому что такие хвосты часто появляются после restart или массового переключения policy.
-- при controlled restart `xray` self-heal пытается точечно удалить conntrack-записи к текущему VPN host/port, если установлен Entware-пакет `conntrack`.
-
-Если пользователь удалил `xkeen` в Keenetic UI, self-heal должен:
-
-- создать новую политику `xkeen` как `Policy42+`;
-- назначить ей `description xkeen`;
-- назначить ей `permit global <WAN>`;
-- выполнить `system configuration save`;
-- заново определить ее mark;
-- восстановить hook только на mark этой политики;
-- не трогать чужие политики, например `no_vpn`.
-
-Важно:
-
-- для появления `xkeen` в Keenetic UI достаточно корректно создать policy и сохранить конфиг;
-- привязка любого устройства к `xkeen` не является обязательной частью восстановления policy.
-
-Отдельно `AntiGoblin` поднимается через Entware init-скрипт:
-
-- `/opt/etc/init.d/S26antigoblin`
-
-Для событий возврата файловой системы и USB также используются hook-скрипты:
-
-- `/opt/etc/ndm/fs.d/50-antigoblin.sh`
-- `/opt/etc/ndm/usb.d/50-antigoblin.sh`
-
-Они пытаются:
-
-- поднять `xray`, если не слушается `61219`;
-- поднять UI, если не слушается `8899`;
-- прогнать `xkeen-selfheal.sh --force`.
-
-## Что больше не является частью live-архитектуры
-
-Эти вещи больше не входят в активный дизайн:
-
-- `xkeen_udp`;
-- `xkeen_quic`;
-- live routing snapshots внутри продуктовой части репозитория.
-
-`routing.cgi` и `xkeen-selfheal.sh` не должны иметь разные реализации runtime-сборки. Общая логика живет в `/opt/share/xkeen-manager/api/xkeen-runtime.sh`, чтобы apply из UI и авто-восстановление собирали одинаковые `iptables`/`ipset` правила.
+- `xkeen_udp` (общий UDP-перехват всей политики) — ломал игры и IoT.
+- `xkeen_quic` (отдельный блокатор UDP/443) — перешел в общий `xkeen_udp_route` за outbound группы.
+- Прямой xray TPROXY UDP на 61220 → vless-reality — заменен на `sing-box → SS-relay → xray VLESS`.
+- Seed-файлы `bypass-domains.txt` / `bypass-cidrs.txt` — единственным источником истины является `xkeen-ui-state.json`.
+- Live-снапшоты роутера в продуктовой части репозитория.
