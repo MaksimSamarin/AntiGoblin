@@ -487,15 +487,25 @@ button.danger-solid {
   font-variant-numeric: tabular-nums;
 }
 
-.service-actions { margin: 6px 0 18px; }
+.service-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  margin: 6px 0 18px;
+}
+.service-actions button {
+  width: 100%;
+  margin: 0;
+}
 
 .logs-controls {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(80px, 100px) auto;
   gap: 12px;
   align-items: end;
   margin: 14px 0 10px;
 }
+.logs-controls .logs-action-btn { margin: 0; }
 .logs-select-label { display: grid; gap: 4px; }
 .logs-select-label > span {
   font-size: 11px;
