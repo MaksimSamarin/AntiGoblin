@@ -126,6 +126,8 @@ const LOCALES = {
     loadLogsBtn: "Загрузить",
     logsLoadFailed: "Не удалось загрузить лог",
     logsEmpty: "(лог пуст)",
+    logsCopyBtn: "Скопировать",
+    logsCopiedDone: "Скопировано",
     ipsetUdpLabel: "UDP route ipset",
     ipsetBypassLabel: "Bypass ipset"
   },
@@ -243,6 +245,8 @@ const LOCALES = {
     loadLogsBtn: "Load",
     logsLoadFailed: "Failed to load log",
     logsEmpty: "(log file is empty)",
+    logsCopyBtn: "Copy",
+    logsCopiedDone: "Copied",
     ipsetUdpLabel: "UDP route ipset",
     ipsetBypassLabel: "Bypass ipset"
   }
@@ -362,7 +366,8 @@ const els = {
   logsLinesLabel: document.getElementById("logsLinesLabel"),
   logsLinesSelect: document.getElementById("logsLinesSelect"),
   loadLogsBtn: document.getElementById("loadLogsBtn"),
-  logsPreview: document.getElementById("logsPreview")
+  logsPreview: document.getElementById("logsPreview"),
+  logsCopyBtn: document.getElementById("logsCopyBtn")
 };
 
 window.addEventListener("error", (event) => {
@@ -391,9 +396,9 @@ function setupPanelCollapse() {
     btn.setAttribute("aria-expanded", "true");
     titleSide.insertBefore(btn, titleSide.firstChild);
     const saved = localStorage.getItem(`panel-collapsed-${id}`);
+    btn.setAttribute("aria-label", "Свернуть/развернуть");
     const apply = (collapsed) => {
       panel.classList.toggle("collapsed", collapsed);
-      btn.textContent = collapsed ? "▸" : "▾";
       btn.setAttribute("aria-expanded", String(!collapsed));
     };
     apply(saved === "1");
@@ -650,6 +655,36 @@ function bindTopLevel() {
       }
     });
   }
+  if (els.logsCopyBtn) {
+    els.logsCopyBtn.addEventListener("click", async () => {
+      const text = els.logsPreview ? (els.logsPreview.textContent || "") : "";
+      if (!text.trim()) return;
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.setAttribute("readonly", "");
+          ta.style.position = "absolute";
+          ta.style.left = "-9999px";
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+        }
+        const previous = els.logsCopyBtn.textContent;
+        els.logsCopyBtn.classList.add("copied");
+        els.logsCopyBtn.textContent = T.logsCopiedDone || "Скопировано";
+        setTimeout(() => {
+          els.logsCopyBtn.classList.remove("copied");
+          els.logsCopyBtn.textContent = previous;
+        }, 1500);
+      } catch (_e) {
+        /* noop */
+      }
+    });
+  }
   if (els.loadLogsBtn) {
     els.loadLogsBtn.addEventListener("click", async () => {
       const svc = els.logsSelect ? els.logsSelect.value : "selfheal";
@@ -831,13 +866,21 @@ async function renderHealth() {
   ];
   els.healthBadges.innerHTML = badges.map((item) => {
     if (!item.svc) {
-      return `<div class="health-badge health-bad"><span class="health-name">${escapeHtml(item.name)}</span><span class="health-status">?</span></div>`;
+      return `<div class="health-badge health-bad"><span class="health-dot" aria-hidden="true"></span><span class="health-text"><span class="health-name">${escapeHtml(item.name)}</span><span class="health-status">?</span></span></div>`;
     }
     const okClass = item.svc.running ? "health-ok" : "health-bad";
     const status = item.svc.running ? T.healthRunning : T.healthStopped;
-    const pid = item.svc.pid ? ` <span class="health-pid">pid ${escapeHtml(String(item.svc.pid))}</span>` : "";
+    const pid = item.svc.pid ? `<span class="health-pid">pid ${escapeHtml(String(item.svc.pid))}</span>` : "";
     const extras = item.extras.filter(Boolean).map((x) => `<span class="health-extra">${escapeHtml(x)}</span>`).join("");
-    return `<div class="health-badge ${okClass}"><span class="health-name">${escapeHtml(item.name)}</span><span class="health-status">${escapeHtml(status)}</span>${pid}${extras}</div>`;
+    return `<div class="health-badge ${okClass}">
+      <span class="health-dot" aria-hidden="true"></span>
+      <span class="health-text">
+        <span class="health-name">${escapeHtml(item.name)}</span>
+        <span class="health-status">${escapeHtml(status)}</span>
+      </span>
+      ${pid}
+      ${extras ? `<span class="health-extra">${extras}</span>` : ""}
+    </div>`;
   }).join("");
 
   const checkRows = [
@@ -1651,4 +1694,7 @@ function applyTranslations() {
   if (els.logsSelectLabel) els.logsSelectLabel.textContent = T.logsSelectLabel;
   if (els.logsLinesLabel) els.logsLinesLabel.textContent = T.logsLinesLabel;
   if (els.loadLogsBtn) els.loadLogsBtn.textContent = T.loadLogsBtn;
+  if (els.logsCopyBtn && !els.logsCopyBtn.classList.contains("copied")) {
+    els.logsCopyBtn.textContent = T.logsCopyBtn;
+  }
 }
