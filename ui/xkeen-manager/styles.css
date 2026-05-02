@@ -261,6 +261,48 @@ button.danger-solid {
 .group-name { font-size: 18px; font-weight: 700; }
 .toggle { display: flex; align-items: center; gap: 10px; margin: 0; }
 .toggle input { width: 18px; height: 18px; }
+.health-panel { position: static; }
+.health-badges { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0 8px; }
+.health-badge {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px; border-radius: 999px;
+  border: 1px solid var(--line); background: rgba(255,255,255,0.03);
+  font-size: 13px;
+}
+.health-badge.health-ok { border-color: #2e8b57; background: rgba(46,139,87,0.18); color: #c8efd6; }
+.health-badge.health-bad { border-color: #b94a4a; background: rgba(185,74,74,0.18); color: #f3c8c8; }
+.health-name { font-weight: 700; }
+.health-status { opacity: 0.85; }
+.health-pid, .health-extra { color: var(--muted); font-size: 12px; }
+.health-loading, .health-error { color: var(--muted); padding: 8px 0; }
+.health-error { color: #f3c8c8; }
+
+.health-checks { display: grid; gap: 6px; margin: 8px 0 12px; }
+.check-row {
+  display: grid;
+  grid-template-columns: 18px 1fr auto auto;
+  align-items: center; gap: 10px;
+  padding: 8px 12px; border-radius: 12px;
+  border: 1px solid var(--line); background: rgba(255,255,255,0.02);
+  font-size: 13px;
+}
+.check-row.check-ok .check-mark { color: #6dd9a0; font-weight: 700; }
+.check-row.check-bad .check-mark { color: #f08484; font-weight: 700; }
+.check-status { font-size: 12px; opacity: 0.85; }
+.check-extra { color: var(--muted); font-size: 12px; }
+
+.service-actions { margin: 4px 0 16px; }
+
+.logs-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin: 12px 0 8px; }
+.logs-select-label { display: grid; gap: 4px; }
+.logs-select-label > span { font-size: 12px; color: var(--muted); }
+.log-preview {
+  margin: 0; padding: 12px; border-radius: 14px;
+  border: 1px solid var(--line); background: #0a121b;
+  color: #d8edf4; max-height: 360px; overflow: auto;
+  font-size: 12px; line-height: 1.4;
+}
+
 .output-panel { position: static; }
 .stat-pill { border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; color: var(--muted); background: rgba(255,255,255,0.03); }
 pre { margin: 16px 0 0; padding: 16px; border-radius: 18px; border: 1px solid var(--line); background: #0a121b; color: #d8edf4; overflow: auto; max-height: 70vh; font-size: 12px; line-height: 1.45; }

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AntiGoblin</title>
-  <link rel="stylesheet" href="./styles.css?v=39">
+  <link rel="stylesheet" href="./styles.css?v=40">
 </head>
 <body>
     <div id="authOverlay" class="auth-overlay" hidden>
@@ -181,6 +181,48 @@
           </div>
         </section>
 
+        <section class="panel health-panel">
+          <div class="panel-header">
+            <div>
+              <p id="healthKicker" class="panel-kicker">&#1057;&#1090;&#1072;&#1090;&#1091;&#1089;</p>
+              <h2 id="healthTitle">&#1047;&#1076;&#1086;&#1088;&#1086;&#1074;&#1100;&#1077; &#1080; &#1083;&#1086;&#1075;&#1080;</h2>
+            </div>
+            <div class="hero-actions compact-actions">
+              <button id="refreshHealthBtn" type="button">&#1054;&#1073;&#1085;&#1086;&#1074;&#1080;&#1090;&#1100;</button>
+            </div>
+          </div>
+          <div id="healthBadges" class="health-badges"></div>
+          <div id="healthChecks" class="health-checks"></div>
+          <div class="hero-actions compact-actions service-actions">
+            <button id="restartXrayBtn" type="button">&#1055;&#1077;&#1088;&#1077;&#1079;&#1072;&#1087;&#1091;&#1089;&#1090;&#1080;&#1090;&#1100; xray</button>
+            <button id="restartSingboxBtn" type="button">&#1055;&#1077;&#1088;&#1077;&#1079;&#1072;&#1087;&#1091;&#1089;&#1090;&#1080;&#1090;&#1100; sing-box</button>
+            <button id="restartSelfhealBtn" type="button">&#1055;&#1077;&#1088;&#1077;&#1079;&#1072;&#1087;&#1091;&#1089;&#1090;&#1080;&#1090;&#1100; self-heal</button>
+          </div>
+
+          <div class="logs-controls">
+            <label class="logs-select-label">
+              <span id="logsSelectLabel">&#1051;&#1086;&#1075;</span>
+              <select id="logsSelect">
+                <option value="xray">xray (manual)</option>
+                <option value="singbox">sing-box</option>
+                <option value="selfheal">self-heal</option>
+                <option value="health">health</option>
+              </select>
+            </label>
+            <label class="logs-select-label">
+              <span id="logsLinesLabel">&#1057;&#1090;&#1088;&#1086;&#1082;</span>
+              <select id="logsLinesSelect">
+                <option value="50">50</option>
+                <option value="100" selected>100</option>
+                <option value="300">300</option>
+                <option value="1000">1000</option>
+              </select>
+            </label>
+            <button id="loadLogsBtn" type="button">&#1047;&#1072;&#1075;&#1088;&#1091;&#1079;&#1080;&#1090;&#1100;</button>
+          </div>
+          <pre id="logsPreview" class="log-preview"></pre>
+        </section>
+
         <section class="panel output-panel">
           <div class="panel-header">
             <div>
@@ -206,6 +248,6 @@
     </main>
   </div>
 
-  <script charset="utf-8" src="./app.js?v=39"></script>
+  <script charset="utf-8" src="./app.js?v=40"></script>
 </body>
 </html>

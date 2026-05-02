@@ -7,6 +7,9 @@ const REPAIR_URL = "./api/routing.cgi?kind=repair-runtime";
 const LOGIN_URL = "./api/routing.cgi?kind=login";
 const LOGOUT_URL = "./api/routing.cgi?kind=logout";
 const LIVE_ROUTING_URL = "./api/routing.cgi";
+const HEALTH_URL = "./api/routing.cgi?kind=health";
+const LOGS_URL = "./api/routing.cgi?kind=logs";
+const RESTART_SVC_URL = "./api/routing.cgi?kind=restart-svc";
 
 const LOCALES = {
   ru: {
@@ -100,7 +103,31 @@ const LOCALES = {
     saveApplyFailed: "Save/apply failed",
     stateFetchFailed: "state fetch failed",
     outboundsFetchFailed: "outbounds fetch failed",
-    routerSessionRequired: "router ui authorization required"
+    routerSessionRequired: "router ui authorization required",
+    healthKicker: "Состояние",
+    healthTitle: "Здоровье и логи",
+    healthRefreshBtn: "Обновить",
+    healthRunning: "работает",
+    healthStopped: "остановлен",
+    healthCheckTproxy: "Правило TPROXY в конце mangle PREROUTING",
+    healthCheckIpRule: "ip rule с маской 0x111/0x111",
+    healthCheckUdpIpset: "ipset xkeen_udp_route существует",
+    healthCheckBypassIpset: "ipset xkeen_bypass существует",
+    healthCheckPass: "ок",
+    healthCheckFail: "сбой",
+    healthFetchFailed: "Не удалось загрузить статус",
+    restartXrayBtn: "Перезапустить xray",
+    restartSingboxBtn: "Перезапустить sing-box",
+    restartSelfhealBtn: "Перезапустить self-heal",
+    restartSvcDone: "Перезапуск выполнен",
+    restartSvcFailed: "Ошибка перезапуска",
+    logsSelectLabel: "Лог",
+    logsLinesLabel: "Строк",
+    loadLogsBtn: "Загрузить",
+    logsLoadFailed: "Не удалось загрузить лог",
+    logsEmpty: "(лог пуст)",
+    ipsetUdpLabel: "UDP route ipset",
+    ipsetBypassLabel: "Bypass ipset"
   },
   en: {
     documentTitle: "AntiGoblin",
@@ -193,7 +220,31 @@ const LOCALES = {
     saveApplyFailed: "Save/apply failed",
     stateFetchFailed: "state fetch failed",
     outboundsFetchFailed: "outbounds fetch failed",
-    routerSessionRequired: "router ui authorization required"
+    routerSessionRequired: "router ui authorization required",
+    healthKicker: "Status",
+    healthTitle: "Health and logs",
+    healthRefreshBtn: "Refresh",
+    healthRunning: "running",
+    healthStopped: "stopped",
+    healthCheckTproxy: "TPROXY rule at end of mangle PREROUTING",
+    healthCheckIpRule: "ip rule with mask 0x111/0x111",
+    healthCheckUdpIpset: "xkeen_udp_route ipset present",
+    healthCheckBypassIpset: "xkeen_bypass ipset present",
+    healthCheckPass: "ok",
+    healthCheckFail: "fail",
+    healthFetchFailed: "Failed to load health status",
+    restartXrayBtn: "Restart xray",
+    restartSingboxBtn: "Restart sing-box",
+    restartSelfhealBtn: "Restart self-heal",
+    restartSvcDone: "Restart done",
+    restartSvcFailed: "Restart failed",
+    logsSelectLabel: "Log",
+    logsLinesLabel: "Lines",
+    loadLogsBtn: "Load",
+    logsLoadFailed: "Failed to load log",
+    logsEmpty: "(log file is empty)",
+    ipsetUdpLabel: "UDP route ipset",
+    ipsetBypassLabel: "Bypass ipset"
   }
 };
 
@@ -297,7 +348,21 @@ const els = {
   importStateBtn: document.getElementById("importStateBtn"),
   importStateInput: document.getElementById("importStateInput"),
   saveStateBtn: document.getElementById("saveStateBtn"),
-  saveApplyBtn: document.getElementById("saveApplyBtn")
+  saveApplyBtn: document.getElementById("saveApplyBtn"),
+  healthKicker: document.getElementById("healthKicker"),
+  healthTitle: document.getElementById("healthTitle"),
+  refreshHealthBtn: document.getElementById("refreshHealthBtn"),
+  healthBadges: document.getElementById("healthBadges"),
+  healthChecks: document.getElementById("healthChecks"),
+  restartXrayBtn: document.getElementById("restartXrayBtn"),
+  restartSingboxBtn: document.getElementById("restartSingboxBtn"),
+  restartSelfhealBtn: document.getElementById("restartSelfhealBtn"),
+  logsSelectLabel: document.getElementById("logsSelectLabel"),
+  logsSelect: document.getElementById("logsSelect"),
+  logsLinesLabel: document.getElementById("logsLinesLabel"),
+  logsLinesSelect: document.getElementById("logsLinesSelect"),
+  loadLogsBtn: document.getElementById("loadLogsBtn"),
+  logsPreview: document.getElementById("logsPreview")
 };
 
 window.addEventListener("error", (event) => {
@@ -318,6 +383,7 @@ async function bootstrap() {
     pushDebug(`loaded live state: profiles=${state.profiles.length}, activeGroups=${getActiveProfile()?.groups?.length ?? 0}`);
     hideAuthOverlay();
     persistAndRender();
+    renderHealth().catch(() => {});
   } catch (error) {
     pushDebug(`bootstrap failed: ${error.message}`);
     if (isAuthError(error)) {
@@ -526,6 +592,53 @@ function bindTopLevel() {
     downloadJson(`${slugify(profile?.name || "xkeen")}-state.json`, state);
   });
 
+  if (els.refreshHealthBtn) {
+    els.refreshHealthBtn.addEventListener("click", () => { renderHealth().catch(() => {}); });
+  }
+  for (const [btn, svc] of [
+    [els.restartXrayBtn, "xray"],
+    [els.restartSingboxBtn, "singbox"],
+    [els.restartSelfhealBtn, "selfheal"]
+  ]) {
+    if (!btn) continue;
+    btn.addEventListener("click", async () => {
+      const previous = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = `${previous}...`;
+      try {
+        await restartService(svc);
+        btn.textContent = T.restartSvcDone;
+        await renderHealth().catch(() => {});
+      } catch (error) {
+        btn.textContent = T.restartSvcFailed;
+        alert(`${T.restartSvcFailed}: ${error.message}`);
+      } finally {
+        setTimeout(() => {
+          btn.textContent = previous;
+          btn.disabled = false;
+        }, 1500);
+      }
+    });
+  }
+  if (els.loadLogsBtn) {
+    els.loadLogsBtn.addEventListener("click", async () => {
+      const svc = els.logsSelect ? els.logsSelect.value : "selfheal";
+      const lines = els.logsLinesSelect ? els.logsLinesSelect.value : "100";
+      els.loadLogsBtn.disabled = true;
+      const previous = els.loadLogsBtn.textContent;
+      els.loadLogsBtn.textContent = `${previous}...`;
+      try {
+        const text = await fetchLogs(svc, lines);
+        els.logsPreview.textContent = text && text.trim() ? text : T.logsEmpty;
+      } catch (error) {
+        els.logsPreview.textContent = `${T.logsLoadFailed}: ${error.message}`;
+      } finally {
+        els.loadLogsBtn.textContent = previous;
+        els.loadLogsBtn.disabled = false;
+      }
+    });
+  }
+
   els.repairRuntimeBtn.addEventListener("click", async () => {
     const previous = els.repairRuntimeBtn.textContent;
     els.repairRuntimeBtn.disabled = true;
@@ -659,6 +772,86 @@ async function repairRemoteRuntime() {
   if (!response.ok || payload.ok === false) {
     throw new Error(response.status === 401 ? AUTH_REQUIRED_MESSAGE : (payload.error || `HTTP ${response.status}`));
   }
+}
+
+async function renderHealth() {
+  if (!els.healthBadges || !els.healthChecks) return;
+  els.healthBadges.innerHTML = '<div class="health-loading">…</div>';
+  els.healthChecks.innerHTML = "";
+  let payload;
+  try {
+    payload = await fetchHealth();
+  } catch (error) {
+    els.healthBadges.innerHTML = `<div class="health-error">${escapeHtml(T.healthFetchFailed)}: ${escapeHtml(error.message)}</div>`;
+    return;
+  }
+  const services = payload.services || {};
+  const checks = payload.checks || {};
+  const sizes = payload.ipsetSize || {};
+
+  const badges = [
+    { name: "xray", svc: services.xray, extras: [
+      services.xray && services.xray.listenTcp ? "tcp 61219" : null,
+      services.xray && services.xray.listenRelayUdp ? "udp 62640" : null
+    ] },
+    { name: "sing-box", svc: services.singbox, extras: [
+      services.singbox && services.singbox.listenUdp ? "udp 61221" : null
+    ] },
+    { name: "self-heal", svc: services.selfheal, extras: [] }
+  ];
+  els.healthBadges.innerHTML = badges.map((item) => {
+    if (!item.svc) {
+      return `<div class="health-badge health-bad"><span class="health-name">${escapeHtml(item.name)}</span><span class="health-status">?</span></div>`;
+    }
+    const okClass = item.svc.running ? "health-ok" : "health-bad";
+    const status = item.svc.running ? T.healthRunning : T.healthStopped;
+    const pid = item.svc.pid ? ` <span class="health-pid">pid ${escapeHtml(String(item.svc.pid))}</span>` : "";
+    const extras = item.extras.filter(Boolean).map((x) => `<span class="health-extra">${escapeHtml(x)}</span>`).join("");
+    return `<div class="health-badge ${okClass}"><span class="health-name">${escapeHtml(item.name)}</span><span class="health-status">${escapeHtml(status)}</span>${pid}${extras}</div>`;
+  }).join("");
+
+  const checkRows = [
+    { label: T.healthCheckTproxy, ok: checks.tproxyRuleAtEnd },
+    { label: T.healthCheckIpRule, ok: checks.ipRuleMasked },
+    { label: T.healthCheckUdpIpset, ok: checks.udpIpsetExists, extra: sizes.udpRoute != null ? `${sizes.udpRoute} ${T.cidrShort}` : null },
+    { label: T.healthCheckBypassIpset, ok: checks.bypassIpsetExists, extra: sizes.bypass != null ? `${sizes.bypass} ${T.cidrShort}` : null }
+  ];
+  els.healthChecks.innerHTML = checkRows.map((row) => {
+    const okClass = row.ok ? "check-ok" : "check-bad";
+    const okText = row.ok ? T.healthCheckPass : T.healthCheckFail;
+    const extra = row.extra ? ` <span class="check-extra">${escapeHtml(row.extra)}</span>` : "";
+    return `<div class="check-row ${okClass}"><span class="check-mark">${row.ok ? "✓" : "✗"}</span><span class="check-label">${escapeHtml(row.label)}</span><span class="check-status">${escapeHtml(okText)}</span>${extra}</div>`;
+  }).join("");
+}
+
+async function fetchHealth() {
+  const response = await fetch(HEALTH_URL, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(response.status === 401 ? AUTH_REQUIRED_MESSAGE : `HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+async function fetchLogs(svc, lines) {
+  const url = `${LOGS_URL}&svc=${encodeURIComponent(svc)}&n=${encodeURIComponent(lines)}`;
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(response.status === 401 ? AUTH_REQUIRED_MESSAGE : `HTTP ${response.status}`);
+  }
+  return response.text();
+}
+
+async function restartService(svc) {
+  const response = await fetch(RESTART_SVC_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify({ svc })
+  });
+  const payload = await response.json();
+  if (!response.ok || payload.ok === false) {
+    throw new Error(response.status === 401 ? AUTH_REQUIRED_MESSAGE : (payload.error || `HTTP ${response.status}`));
+  }
+  return payload;
 }
 
 async function probeProxy(config) {
@@ -1418,4 +1611,14 @@ function applyTranslations() {
   if (els.logoutBtn) els.logoutBtn.title = T.logoutTitle || "";
 
   if (els.profileName) els.profileName.placeholder = T.profileName;
+
+  if (els.healthKicker) els.healthKicker.textContent = T.healthKicker;
+  if (els.healthTitle) els.healthTitle.textContent = T.healthTitle;
+  if (els.refreshHealthBtn) els.refreshHealthBtn.textContent = T.healthRefreshBtn;
+  if (els.restartXrayBtn) els.restartXrayBtn.textContent = T.restartXrayBtn;
+  if (els.restartSingboxBtn) els.restartSingboxBtn.textContent = T.restartSingboxBtn;
+  if (els.restartSelfhealBtn) els.restartSelfhealBtn.textContent = T.restartSelfhealBtn;
+  if (els.logsSelectLabel) els.logsSelectLabel.textContent = T.logsSelectLabel;
+  if (els.logsLinesLabel) els.logsLinesLabel.textContent = T.logsLinesLabel;
+  if (els.loadLogsBtn) els.loadLogsBtn.textContent = T.loadLogsBtn;
 }

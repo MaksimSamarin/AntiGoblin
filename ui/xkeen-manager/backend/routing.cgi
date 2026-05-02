@@ -110,10 +110,183 @@ get_kind() {
     kind=probe|*'&kind=probe'|kind=probe'&'*)
       printf 'probe'
       ;;
+    kind=health|*'&kind=health'|kind=health'&'*)
+      printf 'health'
+      ;;
+    kind=logs|*'&kind=logs'|kind=logs'&'*)
+      printf 'logs'
+      ;;
+    kind=restart-svc|*'&kind=restart-svc'|kind=restart-svc'&'*)
+      printf 'restart-svc'
+      ;;
     *)
       printf 'routing'
       ;;
   esac
+}
+
+parse_qs_param() {
+  PARAM_NAME="$1"
+  printf '%s' "${QUERY_STRING:-}" | /opt/bin/awk -v want="$PARAM_NAME" '
+    {
+      count=split($0, parts, "&")
+      for (i=1; i<=count; i++) {
+        eqpos=index(parts[i], "=")
+        if (eqpos == 0) continue
+        key=substr(parts[i], 1, eqpos-1)
+        val=substr(parts[i], eqpos+1)
+        if (key == want) { print val; exit }
+      }
+    }
+  '
+}
+
+emit_health() {
+  XRAY_PID="$(pidof xray 2>/dev/null | /opt/bin/awk '{ print $1 }')"
+  SB_PID="$(pidof sing-box 2>/dev/null | /opt/bin/awk '{ print $1 }')"
+  SELFHEAL_PID="$(cat /opt/var/run/antigoblin-selfheal-loop.pid 2>/dev/null | /opt/bin/awk 'NR==1 && $0 ~ /^[0-9]+$/ { print }')"
+  if [ -n "$SELFHEAL_PID" ] && ! kill -0 "$SELFHEAL_PID" 2>/dev/null; then
+    SELFHEAL_PID=""
+  fi
+
+  XRAY_TCP_OK=0
+  netstat -lnpt 2>/dev/null | grep -q ':61219 ' && XRAY_TCP_OK=1
+  XRAY_RELAY_OK=0
+  netstat -lnpu 2>/dev/null | grep -q '127.0.0.1:62640 ' && XRAY_RELAY_OK=1
+  SB_LISTEN_OK=0
+  netstat -lnpu 2>/dev/null | grep -q ':61221 ' && SB_LISTEN_OK=1
+
+  TPROXY_AT_END=0
+  iptables -t mangle -S PREROUTING 2>/dev/null | tail -1 | grep -q 'xkeen_udp_route' && TPROXY_AT_END=1
+  IP_RULE_MASKED=0
+  ip rule show 2>/dev/null | grep -qE 'fwmark 0x111/0x111 (lookup|table) 111' && IP_RULE_MASKED=1
+  UDP_IPSET_OK=0
+  ipset list xkeen_udp_route -terse >/dev/null 2>&1 && UDP_IPSET_OK=1
+  BYPASS_IPSET_OK=0
+  ipset list xkeen_bypass -terse >/dev/null 2>&1 && BYPASS_IPSET_OK=1
+
+  UDP_IPSET_SIZE=0
+  if [ "$UDP_IPSET_OK" = "1" ]; then
+    UDP_IPSET_SIZE="$(ipset list xkeen_udp_route 2>/dev/null | /opt/bin/awk '/^Members:/ { m=1; next } m && NF { c++ } END { print c+0 }')"
+  fi
+  BYPASS_IPSET_SIZE=0
+  if [ "$BYPASS_IPSET_OK" = "1" ]; then
+    BYPASS_IPSET_SIZE="$(ipset list xkeen_bypass 2>/dev/null | /opt/bin/awk '/^Members:/ { m=1; next } m && NF { c++ } END { print c+0 }')"
+  fi
+
+  XRAY_RUN=$([ -n "$XRAY_PID" ] && printf 'true' || printf 'false')
+  SB_RUN=$([ -n "$SB_PID" ] && printf 'true' || printf 'false')
+  SH_RUN=$([ -n "$SELFHEAL_PID" ] && printf 'true' || printf 'false')
+
+  PAYLOAD="$(/opt/bin/jq -n \
+    --argjson xray_run "$XRAY_RUN" \
+    --arg xray_pid "${XRAY_PID:-}" \
+    --argjson xray_tcp "$XRAY_TCP_OK" \
+    --argjson xray_relay "$XRAY_RELAY_OK" \
+    --argjson sb_run "$SB_RUN" \
+    --arg sb_pid "${SB_PID:-}" \
+    --argjson sb_listen "$SB_LISTEN_OK" \
+    --argjson sh_run "$SH_RUN" \
+    --arg sh_pid "${SELFHEAL_PID:-}" \
+    --argjson tproxy_end "$TPROXY_AT_END" \
+    --argjson ip_rule_masked "$IP_RULE_MASKED" \
+    --argjson udp_ipset_ok "$UDP_IPSET_OK" \
+    --argjson bypass_ipset_ok "$BYPASS_IPSET_OK" \
+    --argjson udp_ipset_size "$UDP_IPSET_SIZE" \
+    --argjson bypass_ipset_size "$BYPASS_IPSET_SIZE" \
+    '{
+      ok: true,
+      services: {
+        xray:    { running: $xray_run, pid: $xray_pid, listenTcp: ($xray_tcp == 1), listenRelayUdp: ($xray_relay == 1) },
+        singbox: { running: $sb_run, pid: $sb_pid, listenUdp: ($sb_listen == 1) },
+        selfheal:{ running: $sh_run, pid: $sh_pid }
+      },
+      checks: {
+        tproxyRuleAtEnd: ($tproxy_end == 1),
+        ipRuleMasked:    ($ip_rule_masked == 1),
+        udpIpsetExists:  ($udp_ipset_ok == 1),
+        bypassIpsetExists: ($bypass_ipset_ok == 1)
+      },
+      ipsetSize: { udpRoute: $udp_ipset_size, bypass: $bypass_ipset_size }
+    }')"
+
+  printf 'Status: 200 OK\r\n'
+  printf 'Content-Type: application/json; charset=utf-8\r\n'
+  printf 'Cache-Control: no-store\r\n'
+  printf '\r\n'
+  printf '%s\n' "$PAYLOAD"
+  exit 0
+}
+
+emit_logs() {
+  SVC="$(parse_qs_param svc)"
+  N="$(parse_qs_param n)"
+  case "$N" in
+    ''|*[!0-9]*) N=100 ;;
+  esac
+  if [ "$N" -gt 1000 ]; then N=1000; fi
+
+  case "$SVC" in
+    xray)     LOG_FILE="$LOG_PATH" ;;
+    singbox)  LOG_FILE="/opt/var/log/sing-box-xkeen.log" ;;
+    selfheal) LOG_FILE="/opt/var/log/xkeen-selfheal.log" ;;
+    health)   LOG_FILE="/opt/var/log/xkeen-health.log" ;;
+    *)
+      json_err "unknown svc"
+      exit 0
+      ;;
+  esac
+
+  printf 'Status: 200 OK\r\n'
+  printf 'Content-Type: text/plain; charset=utf-8\r\n'
+  printf 'Cache-Control: no-store\r\n'
+  printf '\r\n'
+  if [ -f "$LOG_FILE" ]; then
+    tail -n "$N" "$LOG_FILE" 2>/dev/null
+  else
+    printf '(log file %s does not exist)\n' "$LOG_FILE"
+  fi
+  exit 0
+}
+
+restart_service() {
+  SVC="$(json_field 'svc')"
+  case "$SVC" in
+    xray)
+      if restart_xray; then
+        json_ok "{\"ok\":true,\"service\":\"xray\"}"
+      else
+        json_err "xray restart failed"
+      fi
+      ;;
+    singbox)
+      if [ -x /opt/etc/init.d/S24antigoblin-singbox ]; then
+        /opt/etc/init.d/S24antigoblin-singbox restart >/dev/null 2>&1
+        sleep 1
+        if pidof sing-box >/dev/null 2>&1; then
+          json_ok "{\"ok\":true,\"service\":\"singbox\"}"
+        else
+          json_err "singbox not running after restart"
+        fi
+      else
+        json_err "singbox init script missing"
+      fi
+      ;;
+    selfheal)
+      if [ -x /opt/etc/init.d/S25antigoblin-selfheal ]; then
+        /opt/etc/init.d/S25antigoblin-selfheal restart >/dev/null 2>&1
+        sleep 1
+        json_ok "{\"ok\":true,\"service\":\"selfheal\"}"
+      else
+        json_err "selfheal init script missing"
+      fi
+      ;;
+    *)
+      json_err "unknown service"
+      ;;
+  esac
+  rm -f "$TMP_BODY"
+  exit 0
 }
 
 emit_file() {
@@ -263,6 +436,12 @@ case "$REQUEST_METHOD" in
     if [ "$KIND" = "outbounds" ]; then
       emit_file "$OUTBOUNDS_PATH"
     fi
+    if [ "$KIND" = "health" ]; then
+      emit_health
+    fi
+    if [ "$KIND" = "logs" ]; then
+      emit_logs
+    fi
     emit_file "$ROUTING_PATH"
     ;;
   POST)
@@ -349,6 +528,10 @@ case "$REQUEST_METHOD" in
       fi
       rm -f "$TMP_BODY"
       exit 0
+    fi
+
+    if [ "$KIND" = "restart-svc" ]; then
+      restart_service
     fi
 
     if ! grep -q '"routing"' "$TMP_BODY" || ! grep -q '"rules"' "$TMP_BODY"; then
