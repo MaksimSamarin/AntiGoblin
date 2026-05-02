@@ -367,6 +367,7 @@ const els = {
   logsLinesSelect: document.getElementById("logsLinesSelect"),
   loadLogsBtn: document.getElementById("loadLogsBtn"),
   logsPreview: document.getElementById("logsPreview"),
+  logsPreviewWrap: document.getElementById("logsPreviewWrap"),
   logsCopyBtn: document.getElementById("logsCopyBtn")
 };
 
@@ -694,8 +695,10 @@ function bindTopLevel() {
       try {
         const text = await fetchLogs(svc, lines);
         els.logsPreview.textContent = text && text.trim() ? text : T.logsEmpty;
+        if (els.logsPreviewWrap) els.logsPreviewWrap.hidden = false;
       } catch (error) {
         els.logsPreview.textContent = `${T.logsLoadFailed}: ${error.message}`;
+        if (els.logsPreviewWrap) els.logsPreviewWrap.hidden = false;
       } finally {
         els.loadLogsBtn.textContent = previous;
         els.loadLogsBtn.disabled = false;
