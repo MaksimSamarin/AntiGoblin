@@ -117,9 +117,9 @@ const LOCALES = {
     healthCheckPass: "ок",
     healthCheckFail: "сбой",
     healthFetchFailed: "Не удалось загрузить статус",
-    restartXrayBtn: "Перезапустить xray",
-    restartSingboxBtn: "Перезапустить sing-box",
-    restartSelfhealBtn: "Перезапустить self-heal",
+    restartXrayBtn: "↻ xray",
+    restartSingboxBtn: "↻ sing-box",
+    restartSelfhealBtn: "↻ self-heal",
     restartSvcDone: "Перезапуск выполнен",
     restartSvcFailed: "Ошибка перезапуска",
     logsSelectLabel: "Лог",
@@ -261,9 +261,9 @@ const LOCALES = {
     healthCheckPass: "ok",
     healthCheckFail: "fail",
     healthFetchFailed: "Failed to load health status",
-    restartXrayBtn: "Restart xray",
-    restartSingboxBtn: "Restart sing-box",
-    restartSelfhealBtn: "Restart self-heal",
+    restartXrayBtn: "↻ xray",
+    restartSingboxBtn: "↻ sing-box",
+    restartSelfhealBtn: "↻ self-heal",
     restartSvcDone: "Restart done",
     restartSvcFailed: "Restart failed",
     logsSelectLabel: "Log",
@@ -692,6 +692,7 @@ function bindTopLevel() {
     [els.restartSelfhealBtn, "selfheal", "self-heal"]
   ]) {
     if (!btn) continue;
+    btn.title = formatMessage(T.toastSvcRestarting || "Restart {svc}", { svc: label });
     btn.addEventListener("click", async () => {
       btn.disabled = true;
       const toast = showToast(formatMessage(T.toastSvcRestarting || "Перезапуск {svc}...", { svc: label }), { kind: "progress" });
