@@ -374,7 +374,37 @@ window.addEventListener("unhandledrejection", (event) => {
 });
 
 bindTopLevel();
+setupPanelCollapse();
 bootstrap();
+
+function setupPanelCollapse() {
+  const panels = document.querySelectorAll(".panel");
+  panels.forEach((panel, idx) => {
+    const header = panel.querySelector(".panel-header");
+    if (!header) return;
+    if (header.querySelector(".panel-collapse-toggle")) return;
+    const id = panel.dataset.panelId || `panel-${idx}`;
+    const titleSide = header.firstElementChild || header;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "panel-collapse-toggle";
+    btn.setAttribute("aria-expanded", "true");
+    titleSide.insertBefore(btn, titleSide.firstChild);
+    const saved = localStorage.getItem(`panel-collapsed-${id}`);
+    const apply = (collapsed) => {
+      panel.classList.toggle("collapsed", collapsed);
+      btn.textContent = collapsed ? "▸" : "▾";
+      btn.setAttribute("aria-expanded", String(!collapsed));
+    };
+    apply(saved === "1");
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const next = !panel.classList.contains("collapsed");
+      apply(next);
+      localStorage.setItem(`panel-collapsed-${id}`, next ? "1" : "0");
+    });
+  });
+}
 
 async function bootstrap() {
   try {

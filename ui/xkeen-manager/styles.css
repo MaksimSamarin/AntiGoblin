@@ -261,6 +261,21 @@ button.danger-solid {
 .group-name { font-size: 18px; font-weight: 700; }
 .toggle { display: flex; align-items: center; gap: 10px; margin: 0; }
 .toggle input { width: 18px; height: 18px; }
+.panel-collapse-toggle {
+  background: transparent;
+  border: 0;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0 8px 0 0;
+  margin: 0 0 4px 0;
+  font-weight: 700;
+}
+.panel-collapse-toggle:hover { color: var(--text); }
+.panel.collapsed > :not(.panel-header) { display: none !important; }
+.panel.collapsed .panel-header { margin-bottom: 0; }
+
 .health-panel { position: static; }
 .health-badges { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0 8px; }
 .health-badge {

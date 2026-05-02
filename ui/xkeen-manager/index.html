@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AntiGoblin</title>
-  <link rel="stylesheet" href="./styles.css?v=40">
+  <link rel="stylesheet" href="./styles.css?v=41">
 </head>
 <body>
     <div id="authOverlay" class="auth-overlay" hidden>
@@ -71,7 +71,7 @@
 
     <main class="layout">
       <div class="stack-col">
-        <section class="panel">
+        <section class="panel" data-panel-id="profile">
           <div class="panel-header">
             <div>
               <p id="profileKicker" class="panel-kicker">&#1041;&#1072;&#1079;&#1086;&#1074;&#1099;&#1077; &#1085;&#1072;&#1089;&#1090;&#1088;&#1086;&#1081;&#1082;&#1080;</p>
@@ -181,7 +181,7 @@
           </div>
         </section>
 
-        <section class="panel health-panel">
+        <section class="panel health-panel" data-panel-id="health">
           <div class="panel-header">
             <div>
               <p id="healthKicker" class="panel-kicker">&#1057;&#1090;&#1072;&#1090;&#1091;&#1089;</p>
@@ -223,7 +223,7 @@
           <pre id="logsPreview" class="log-preview"></pre>
         </section>
 
-        <section class="panel output-panel">
+        <section class="panel output-panel" data-panel-id="preview">
           <div class="panel-header">
             <div>
               <p id="previewKicker" class="panel-kicker">&#1055;&#1088;&#1077;&#1076;&#1087;&#1088;&#1086;&#1089;&#1084;&#1086;&#1090;&#1088;</p>
@@ -235,7 +235,7 @@
         </section>
       </div>
 
-      <section class="panel groups-panel">
+      <section class="panel groups-panel" data-panel-id="groups">
         <div class="panel-header">
           <div>
             <p id="groupsKicker" class="panel-kicker">&#1043;&#1088;&#1091;&#1087;&#1087;&#1099;</p>
@@ -248,6 +248,6 @@
     </main>
   </div>
 
-  <script charset="utf-8" src="./app.js?v=40"></script>
+  <script charset="utf-8" src="./app.js?v=41"></script>
 </body>
 </html>
