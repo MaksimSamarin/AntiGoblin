@@ -1732,6 +1732,9 @@ function dedupeCidrsList(list) {
 function showFieldFlash(el, text) {
   const host = el.parentElement;
   if (!host) return;
+  if (getComputedStyle(host).position === "static") {
+    host.style.position = "relative";
+  }
   let note = host.querySelector(".field-flash");
   if (!note) {
     note = document.createElement("div");
