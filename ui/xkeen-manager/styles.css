@@ -504,19 +504,27 @@ button.danger-solid {
 
 .logs-controls {
   display: grid;
-  grid-template-columns: minmax(140px, 1.4fr) minmax(80px, 90px) minmax(120px, auto);
+  grid-template-columns: minmax(140px, 1.4fr) minmax(80px, 90px) minmax(120px, 1fr);
   gap: 12px;
   align-items: end;
   margin: 14px 0 10px;
 }
 .logs-select-label { display: grid; gap: 4px; }
-.logs-action-cell { align-self: end; }
-.logs-action-cell .logs-action-btn {
-  width: 100%;
-  margin: 0;
-  padding-top: 12px;
-  padding-bottom: 12px;
-  border-radius: 14px;
+.logs-controls select {
+  height: 48px !important;
+  padding: 0 14px !important;
+  box-sizing: border-box !important;
+}
+.logs-controls .logs-action-cell .logs-action-btn {
+  width: 100% !important;
+  height: 48px !important;
+  margin: 0 !important;
+  padding: 0 16px !important;
+  border-radius: 14px !important;
+  box-sizing: border-box !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .logs-select-label > span {
   font-size: 11px;
