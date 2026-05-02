@@ -128,6 +128,8 @@ const LOCALES = {
     logsEmpty: "(лог пуст)",
     logsCopyBtn: "Скопировать",
     logsCopiedDone: "Скопировано",
+    dedupDomainsRemoved: "Убрано лишних доменов: {n} (покрыты родительским)",
+    dedupCidrsRemoved: "Убрано лишних IP/CIDR: {n} (покрыты более широкой сетью)",
     ipsetUdpLabel: "UDP route ipset",
     ipsetBypassLabel: "Bypass ipset"
   },
@@ -247,6 +249,8 @@ const LOCALES = {
     logsEmpty: "(log file is empty)",
     logsCopyBtn: "Copy",
     logsCopiedDone: "Copied",
+    dedupDomainsRemoved: "Removed redundant domains: {n} (covered by a parent domain)",
+    dedupCidrsRemoved: "Removed redundant IP/CIDR: {n} (covered by a broader network)",
     ipsetUdpLabel: "UDP route ipset",
     ipsetBypassLabel: "Bypass ipset"
   }
@@ -1106,6 +1110,26 @@ function renderGroups() {
     outboundEl.addEventListener("change", () => updateGroup(group.id, { outboundTag: outboundEl.value }));
     domainsEl.addEventListener("input", () => updateGroup(group.id, { domains: splitLinesOrCsv(domainsEl.value) }));
     cidrsEl.addEventListener("input", () => updateGroup(group.id, { cidrs: splitLinesOrCsv(cidrsEl.value) }));
+    domainsEl.addEventListener("blur", () => {
+      const before = splitLinesOrCsv(domainsEl.value);
+      const after = dedupeDomainsList(before);
+      const removed = before.length - after.length;
+      if (removed > 0) {
+        domainsEl.value = after.join("\n");
+        updateGroup(group.id, { domains: after });
+        showFieldFlash(domainsEl, formatMessage(T.dedupDomainsRemoved, { n: removed }));
+      }
+    });
+    cidrsEl.addEventListener("blur", () => {
+      const before = splitLinesOrCsv(cidrsEl.value);
+      const after = dedupeCidrsList(before);
+      const removed = before.length - after.length;
+      if (removed > 0) {
+        cidrsEl.value = after.join("\n");
+        updateGroup(group.id, { cidrs: after });
+        showFieldFlash(cidrsEl, formatMessage(T.dedupCidrsRemoved, { n: removed }));
+      }
+    });
     removeBtn.addEventListener("click", () => {
       profile.groups = profile.groups.filter((item) => item.id !== group.id);
       persistAndRender();
@@ -1619,6 +1643,105 @@ function escapeHtml(value) {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+// Dedupe domains: drop subdomains already covered by a parent domain
+// in the same list. Match xray's default "domain" rule semantics — a
+// rule for foo.com matches foo.com itself plus any *.foo.com.
+function dedupeDomainsList(list) {
+  const cleaned = [...new Set((list || [])
+    .map((d) => String(d || "").trim().toLowerCase())
+    .filter(Boolean))];
+  if (cleaned.length <= 1) return cleaned;
+
+  const reversed = cleaned.map((d) => ({
+    original: d,
+    key: d.split(".").reverse().join(".")
+  }));
+  reversed.sort((a, b) => (a.key < b.key ? -1 : (a.key > b.key ? 1 : 0)));
+
+  const kept = [];
+  for (const item of reversed) {
+    const covered = kept.some((parent) =>
+      item.key === parent.key || item.key.startsWith(parent.key + ".")
+    );
+    if (!covered) kept.push(item);
+  }
+  return kept.map((item) => item.original);
+}
+
+// Parse "1.2.3.4" or "1.2.3.0/24" into {network, mask}. Returns null
+// for anything that isn't a valid IPv4 address or CIDR.
+function parseCidrEntry(str) {
+  const trimmed = String(str || "").trim();
+  if (!trimmed) return null;
+  let ip;
+  let mask;
+  const slashIdx = trimmed.indexOf("/");
+  if (slashIdx >= 0) {
+    ip = trimmed.slice(0, slashIdx);
+    mask = parseInt(trimmed.slice(slashIdx + 1), 10);
+    if (!Number.isFinite(mask) || mask < 0 || mask > 32) return null;
+  } else {
+    ip = trimmed;
+    mask = 32;
+  }
+  const octets = ip.split(".");
+  if (octets.length !== 4) return null;
+  let intIp = 0;
+  for (const o of octets) {
+    if (!/^\d+$/.test(o)) return null;
+    const n = Number(o);
+    if (n < 0 || n > 255) return null;
+    intIp = (intIp * 256) + n;
+  }
+  const maskBits = mask === 0 ? 0 : (0xFFFFFFFF << (32 - mask)) >>> 0;
+  const network = (intIp & maskBits) >>> 0;
+  return { original: trimmed, network, mask };
+}
+
+// Dedupe CIDR/IP list: drop entries fully contained in a wider entry.
+// Invalid entries pass through untouched (so users see their typos).
+function dedupeCidrsList(list) {
+  const seen = new Set();
+  const valid = [];
+  const invalid = [];
+  for (const entry of (list || [])) {
+    const trimmed = String(entry || "").trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const parsed = parseCidrEntry(trimmed);
+    if (parsed) valid.push(parsed);
+    else invalid.push(trimmed);
+  }
+  valid.sort((a, b) => a.mask - b.mask);
+  const kept = [];
+  for (const item of valid) {
+    const covered = kept.some((parent) => {
+      if (parent.mask > item.mask) return false;
+      const parentBits = parent.mask === 0 ? 0 : (0xFFFFFFFF << (32 - parent.mask)) >>> 0;
+      return ((item.network & parentBits) >>> 0) === parent.network;
+    });
+    if (!covered) kept.push(item);
+  }
+  return [...kept.map((k) => k.original), ...invalid];
+}
+
+function showFieldFlash(el, text) {
+  const host = el.parentElement;
+  if (!host) return;
+  let note = host.querySelector(".field-flash");
+  if (!note) {
+    note = document.createElement("div");
+    note.className = "field-flash";
+    host.appendChild(note);
+  }
+  note.textContent = text;
+  note.classList.remove("field-flash-show");
+  void note.offsetWidth;
+  note.classList.add("field-flash-show");
 }
 
 function pushDebug(message) {
