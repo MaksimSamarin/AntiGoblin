@@ -505,16 +505,34 @@ button.danger-solid {
 .logs-controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  align-items: flex-end;
+  gap: 10px;
+  align-items: center;
   margin: 14px 0 10px;
 }
-.logs-select-label { display: grid; gap: 4px; flex: 1 1 140px; min-width: 140px; }
-.logs-select-label:nth-of-type(2) { flex: 0 1 90px; min-width: 80px; }
+.logs-select-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.logs-select-label:nth-of-type(2) { flex: 0 1 140px; }
+.logs-select-label > span {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
 .logs-controls select {
   height: 48px !important;
   padding: 0 14px !important;
   box-sizing: border-box !important;
+  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .logs-controls > .logs-action-btn {
   flex: 0 0 auto;
@@ -537,12 +555,6 @@ button.danger-solid {
   border-color: var(--accent) !important;
   color: var(--accent) !important;
   background: rgba(79, 195, 161, 0.12) !important;
-}
-.logs-select-label > span {
-  font-size: 11px;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 
 .log-preview-wrap {
