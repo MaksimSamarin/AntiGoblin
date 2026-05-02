@@ -489,33 +489,34 @@ button.danger-solid {
 
 .service-actions {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 8px;
   margin: 6px 0 18px;
 }
 .service-actions button {
   width: 100%;
   margin: 0;
+  padding-left: 12px;
+  padding-right: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .logs-controls {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(80px, 100px) auto;
+  grid-template-columns: minmax(140px, 1.4fr) minmax(80px, 90px) minmax(120px, auto);
   gap: 12px;
-  align-items: end;
+  align-items: stretch;
   margin: 14px 0 10px;
 }
-.logs-controls .logs-action-btn { margin: 0; }
 .logs-select-label { display: grid; gap: 4px; }
+.logs-action-cell .logs-action-btn { width: 100%; margin: 0; }
 .logs-select-label > span {
   font-size: 11px;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-}
-.logs-controls > .logs-action-btn {
-  align-self: end;
-  margin-bottom: 0;
 }
 
 .log-preview-wrap {
