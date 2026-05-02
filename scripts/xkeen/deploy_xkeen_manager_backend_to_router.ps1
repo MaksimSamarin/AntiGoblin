@@ -37,8 +37,6 @@ $localSysctlInit = Join-Path $repoRoot 'scripts\xkeen\antigoblin-sysctl.initd.sh
 $localInitScript = Join-Path $repoRoot 'scripts\xkeen\antigoblin.initd.sh'
 $localCronScript = Join-Path $repoRoot 'scripts\xkeen\antigoblin-selfheal.cron.sh'
 $localRemountHook = Join-Path $repoRoot 'scripts\xkeen\antigoblin-remount-hook.sh'
-$localBypassDomains = Join-Path $repoRoot 'configs\xkeen\bypass-domains.sample.txt'
-$localBypassCidrs = Join-Path $repoRoot 'configs\xkeen\bypass-cidrs.sample.txt'
 
 function Invoke-RouterCommand {
   param(
@@ -111,12 +109,6 @@ if (-not (Test-Path $localCronScript)) {
 if (-not (Test-Path $localRemountHook)) {
   throw "Missing remount hook: $localRemountHook"
 }
-if (-not (Test-Path $localBypassDomains)) {
-  throw "Missing bypass domains sample: $localBypassDomains"
-}
-if (-not (Test-Path $localBypassCidrs)) {
-  throw "Missing bypass CIDRs sample: $localBypassCidrs"
-}
 
 Invoke-RouterCommand -Command "mkdir -p $RemoteRoot"
 Invoke-RouterCommand -Command "mkdir -p $RemoteApiDir"
@@ -143,22 +135,6 @@ Send-RemoteFile -LocalPath $localCronScript -RemotePath $RemoteCronScript
 Send-RemoteFile -LocalPath $localRemountHook -RemotePath $RemoteFsHook
 Send-RemoteFile -LocalPath $localRemountHook -RemotePath $RemoteUsbHook
 
-$ensureRuntime = @(
-  @{ Local = $localBypassDomains; Remote = "$RemoteRuntimeDir/bypass-domains.txt" },
-  @{ Local = $localBypassCidrs; Remote = "$RemoteRuntimeDir/bypass-cidrs.txt" }
-)
-foreach ($item in $ensureRuntime) {
-  $remoteExists = (& $python $sshHelper --host $RouterHost --user $RouterUser run --command "test -f '$($item.Remote)' && echo EXISTS || echo MISSING")
-  if ($LASTEXITCODE -ne 0) {
-    throw "Failed to verify runtime file: $($item.Remote)"
-  }
-  if ($remoteExists -match 'EXISTS') {
-    Write-Output "Keeping existing runtime file: $($item.Remote)"
-    continue
-  }
-  Send-RemoteFile -LocalPath $item.Local -RemotePath $item.Remote
-  Write-Output "Seeded runtime file: $($item.Remote)"
-}
 
 $cronCmd = @'
 rm -f /opt/var/spool/cron/crontabs/root 2>/dev/null || true

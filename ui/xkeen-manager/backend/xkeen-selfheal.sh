@@ -20,8 +20,6 @@ RUNTIME_REFRESH_INTERVAL_SEC=300
 LOG_ROTATE_INTERVAL_SEC=86400
 LOG_ROTATE_STAMP_FILE="/tmp/xkeen-log-rotate-last.ts"
 RUNTIME_DIR="/opt/share/xkeen-manager/runtime"
-BYPASS_DOMAINS_PATH="$RUNTIME_DIR/bypass-domains.txt"
-BYPASS_CIDRS_PATH="$RUNTIME_DIR/bypass-cidrs.txt"
 UDP_ROUTE_SET="xkeen_udp_route"
 XKEEN_MARK=""
 XRAY_PID=""
@@ -368,7 +366,31 @@ maybe_rotate_logs() {
   rotate_log_if_large "/opt/var/log/xkeen-health.log"    10485760
   rotate_log_if_large "/opt/var/log/xkeen-sysctl.log"     1048576
 
+  trim_backups "/opt/etc/xray/configs"            "*.bak-ui-*" 5
+  trim_backups "/opt/share/xkeen-manager"         "xkeen-ui-state.json.bak-ui-*" 5
+
   printf '%s\n' "$NOW_TS" > "$LOG_ROTATE_STAMP_FILE"
+}
+
+# Keep only the N most recent backup files matching <pattern> in <dir>.
+# Older ones get removed. Used to stop *.bak-ui-* from accumulating
+# unbounded after every UI save.
+trim_backups() {
+  DIR="$1"
+  PATTERN="$2"
+  KEEP="$3"
+  [ -d "$DIR" ] || return 0
+  case "$KEEP" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  # shellcheck disable=SC2012
+  REMOVED=0
+  ls -t "$DIR"/$PATTERN 2>/dev/null | tail -n +"$((KEEP + 1))" | while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    rm -f "$f" 2>/dev/null && REMOVED=$((REMOVED + 1))
+  done
+  COUNT="$(ls "$DIR"/$PATTERN 2>/dev/null | wc -l | tr -d ' ')"
+  health_log "action=trim_backups dir=$DIR pattern=$PATTERN keep=$KEEP remaining=$COUNT"
 }
 
 flush_vpn_conntrack() {

@@ -1,4 +1,0 @@
-# One IPv4 CIDR or host IP per line.
-# These destinations bypass xray before REDIRECT and go directly through the router.
-5.28.195.2/32
-47.241.213.210/32

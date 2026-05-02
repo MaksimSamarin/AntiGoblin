@@ -1,9 +1,0 @@
-# One domain per line.
-# These destinations bypass xray before REDIRECT and go directly through the router.
-api.io.mi.com
-api.home.mi.com
-home.mi.com
-ot.io.mi.com
-app.chat.global.xiaomi.net
-resolver.msg.global.xiaomi.net
-data.mistat.xiaomi.com

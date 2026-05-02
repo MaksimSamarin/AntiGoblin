@@ -14,8 +14,6 @@ XRAY_BIN="/opt/sbin/xray"
 SELFHEAL_PATH="/opt/share/xkeen-manager/api/xkeen-selfheal.sh"
 TMP_RESTART_SCRIPT="/tmp/xkeen-apply-restart.sh"
 RUNTIME_DIR="/opt/share/xkeen-manager/runtime"
-BYPASS_DOMAINS_PATH="$RUNTIME_DIR/bypass-domains.txt"
-BYPASS_CIDRS_PATH="$RUNTIME_DIR/bypass-cidrs.txt"
 XKEEN_MARK=""
 
 XKEEN_RUNTIME_LOG="$LOG_PATH"

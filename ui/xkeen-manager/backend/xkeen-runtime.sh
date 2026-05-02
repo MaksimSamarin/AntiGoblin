@@ -8,8 +8,6 @@ PATH="/opt/bin:/opt/sbin:/sbin:/usr/sbin:/bin:/usr/bin:$PATH"
 
 : "${STATE_PATH:=/opt/share/xkeen-manager/xkeen-ui-state.json}"
 : "${RUNTIME_DIR:=/opt/share/xkeen-manager/runtime}"
-: "${BYPASS_DOMAINS_PATH:=$RUNTIME_DIR/bypass-domains.txt}"
-: "${BYPASS_CIDRS_PATH:=$RUNTIME_DIR/bypass-cidrs.txt}"
 : "${XKEEN_BYPASS_SET:=xkeen_bypass}"
 : "${XKEEN_UDP_ROUTE_SET:=xkeen_udp_route}"
 : "${XKEEN_UDP_MARK:=0x111}"
@@ -155,15 +153,10 @@ xkeen_swap_set() {
 
 xkeen_build_bypass_ipset() {
   mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
-  [ -f "$BYPASS_DOMAINS_PATH" ] || : > "$BYPASS_DOMAINS_PATH"
-  [ -f "$BYPASS_CIDRS_PATH" ] || : > "$BYPASS_CIDRS_PATH"
 
   TMP_SET="${XKEEN_BYPASS_SET}_next"
   ipset destroy "$TMP_SET" 2>/dev/null || true
   ipset create "$TMP_SET" hash:net family inet -exist
-
-  sed 's/#.*$//' "$BYPASS_DOMAINS_PATH" | sed '/^[[:space:]]*$/d' | xkeen_add_domains_to_set "$TMP_SET"
-  sed 's/#.*$//' "$BYPASS_CIDRS_PATH" | sed '/^[[:space:]]*$/d' | xkeen_add_cidrs_to_set "$TMP_SET"
 
   if xkeen_has_cmd jq && [ -f "$STATE_PATH" ]; then
     jq -r '
