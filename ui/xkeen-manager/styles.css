@@ -420,7 +420,7 @@ button.danger-solid {
 }
 .check-row {
   display: grid;
-  grid-template-columns: 22px 1fr auto auto;
+  grid-template-columns: 22px 1fr 80px 56px;
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
@@ -430,6 +430,8 @@ button.danger-solid {
   font-size: 13px;
   transition: background 160ms ease, border-color 160ms ease;
 }
+.check-row .check-extra { text-align: right; }
+.check-row .check-status { text-align: center; justify-self: end; }
 .check-row:hover {
   background: rgba(255, 255, 255, 0.04);
   border-color: rgba(79, 195, 161, 0.35);

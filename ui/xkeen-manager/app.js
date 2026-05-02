@@ -898,8 +898,8 @@ async function renderHealth() {
   els.healthChecks.innerHTML = checkRows.map((row) => {
     const okClass = row.ok ? "check-ok" : "check-bad";
     const okText = row.ok ? T.healthCheckPass : T.healthCheckFail;
-    const extra = row.extra ? ` <span class="check-extra">${escapeHtml(row.extra)}</span>` : "";
-    return `<div class="check-row ${okClass}"><span class="check-mark">${row.ok ? "✓" : "✗"}</span><span class="check-label">${escapeHtml(row.label)}</span><span class="check-status">${escapeHtml(okText)}</span>${extra}</div>`;
+    const extra = row.extra ? escapeHtml(row.extra) : "";
+    return `<div class="check-row ${okClass}"><span class="check-mark">${row.ok ? "✓" : "✗"}</span><span class="check-label">${escapeHtml(row.label)}</span><span class="check-extra">${extra}</span><span class="check-status">${escapeHtml(okText)}</span></div>`;
   }).join("");
 }
 
