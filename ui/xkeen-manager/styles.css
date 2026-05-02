@@ -673,8 +673,8 @@ button.danger-solid {
 }
 .stack-dl {
   display: grid;
-  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
-  column-gap: 14px;
+  grid-template-columns: minmax(80px, 38%) 1fr;
+  column-gap: 12px;
   row-gap: 8px;
   margin: 0;
   font-size: 13px;
@@ -694,9 +694,21 @@ button.danger-solid {
   font-size: 12px;
   color: var(--text);
   font-variant-numeric: tabular-nums;
-  word-break: break-all;
+  overflow-wrap: anywhere;
+  word-break: normal;
   min-width: 0;
   line-height: 1.4;
+  hyphens: none;
+}
+.stack-dl dd small {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--muted);
+  font-family: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .stack-value {
   cursor: pointer;

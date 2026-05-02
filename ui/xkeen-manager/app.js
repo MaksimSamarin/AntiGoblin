@@ -1093,8 +1093,8 @@ async function renderStackInfo() {
     {
       title: T.stackResourcesSection || "Ресурсы",
       rows: [
-        [T.stackMem || "память (исп/всего)", memTxt],
-        [(T.stackDisk || "флешка (исп/всего)") + (r.diskMount ? ` ${r.diskMount}` : ""), diskTxt],
+        [T.stackMem || "память", memTxt],
+        [T.stackDisk || "диск", diskTxt, r.diskMount || null],
         [T.stackConntrack || "conntrack", ctTxt],
         [T.stackXrayFd || "xray FD", fdTxt]
       ]
@@ -1105,10 +1105,13 @@ async function renderStackInfo() {
     <div class="stack-section">
       <div class="stack-section-title">${escapeHtml(section.title)}</div>
       <dl class="stack-dl">
-        ${section.rows.map(([k, v]) => `
-          <dt>${escapeHtml(k)}</dt>
-          <dd><span class="stack-value" title="${escapeHtml(T.stackCopyHint || "Кликни — скопировать")}">${escapeHtml(String(v))}</span></dd>
-        `).join("")}
+        ${section.rows.map((row) => {
+          const k = row[0];
+          const v = row[1];
+          const note = row[2];
+          const noteHtml = note ? `<small>${escapeHtml(String(note))}</small>` : "";
+          return `<dt>${escapeHtml(k)}</dt><dd><span class="stack-value" title="${escapeHtml(T.stackCopyHint || "Кликни — скопировать")}">${escapeHtml(String(v))}</span>${noteHtml}</dd>`;
+        }).join("")}
       </dl>
     </div>
   `).join("");
