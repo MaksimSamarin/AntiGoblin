@@ -18,6 +18,13 @@ BYPASS_DOMAINS_PATH="$RUNTIME_DIR/bypass-domains.txt"
 BYPASS_CIDRS_PATH="$RUNTIME_DIR/bypass-cidrs.txt"
 XKEEN_MARK=""
 
+XKEEN_RUNTIME_LOG="$LOG_PATH"
+if [ -f "/opt/share/xkeen-manager/api/xkeen-runtime.sh" ]; then
+  . "/opt/share/xkeen-manager/api/xkeen-runtime.sh"
+elif [ -f "$(dirname "$0")/xkeen-runtime.sh" ]; then
+  . "$(dirname "$0")/xkeen-runtime.sh"
+fi
+
 json_ok() {
   printf 'Status: 200 OK\r\n'
   printf 'Content-Type: application/json; charset=utf-8\r\n'
@@ -64,84 +71,6 @@ restart_xray() {
   netstat -lnptu 2>/dev/null | grep -q '61219'
 }
 
-get_xkeen_mark() {
-  ndmc -c 'show ip policy' 2>/dev/null | /opt/bin/awk '
-    /description = xkeen:/ {
-      want_mark=1
-      next
-    }
-    want_mark && /mark:/ {
-      print $2
-      exit
-    }
-  '
-}
-
-ensure_xkeen_mark() {
-  XKEEN_MARK="$(get_xkeen_mark)"
-  [ -n "$XKEEN_MARK" ]
-}
-
-build_bypass_ipset_inline() {
-  ipset create xkeen_bypass hash:net family inet -exist
-  ipset flush xkeen_bypass 2>/dev/null || true
-
-  [ -f "$BYPASS_DOMAINS_PATH" ] || : > "$BYPASS_DOMAINS_PATH"
-  [ -f "$BYPASS_CIDRS_PATH" ] || : > "$BYPASS_CIDRS_PATH"
-
-  sed 's/#.*$//' "$BYPASS_DOMAINS_PATH" | sed '/^[[:space:]]*$/d' | while IFS= read -r domain; do
-    [ -n "$domain" ] || continue
-    nslookup "$domain" 2>/dev/null | /opt/bin/awk '
-      /^Name:/ { seen_name=1; next }
-      seen_name && /^Address [0-9]+: / { print $3; next }
-      seen_name && /^Address: / { print $2; next }
-    ' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -Ev '^(127\.|192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)' | while IFS= read -r ip; do
-      [ -n "$ip" ] || continue
-      ipset add xkeen_bypass "$ip"/32 -exist 2>/dev/null || true
-    done
-  done
-
-  sed 's/#.*$//' "$BYPASS_CIDRS_PATH" | sed '/^[[:space:]]*$/d' | while IFS= read -r cidr; do
-    [ -n "$cidr" ] || continue
-    ipset add xkeen_bypass "$cidr" -exist 2>/dev/null || true
-  done
-
-  if command -v jq >/dev/null 2>&1 && [ -f "$STATE_PATH" ]; then
-    jq -r '.profiles[]? | .groups[]? | select((.enabled != false) and (.outboundTag == "bypass")) | .domains[]?' "$STATE_PATH" 2>/dev/null | \
-      sed '/^[[:space:]]*$/d' | while IFS= read -r domain; do
-        [ -n "$domain" ] || continue
-        nslookup "$domain" 2>/dev/null | /opt/bin/awk '
-          /^Name:/ { seen_name=1; next }
-          seen_name && /^Address [0-9]+: / { print $3; next }
-          seen_name && /^Address: / { print $2; next }
-        ' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -Ev '^(127\.|192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)' | while IFS= read -r ip; do
-          [ -n "$ip" ] || continue
-          ipset add xkeen_bypass "$ip"/32 -exist 2>/dev/null || true
-        done
-      done
-
-    jq -r '.profiles[]? | .groups[]? | select((.enabled != false) and (.outboundTag == "bypass")) | .cidrs[]?' "$STATE_PATH" 2>/dev/null | \
-      sed '/^[[:space:]]*$/d' | while IFS= read -r cidr; do
-        [ -n "$cidr" ] || continue
-        ipset add xkeen_bypass "$cidr" -exist 2>/dev/null || true
-      done
-  fi
-}
-
-append_local_returns_inline() {
-  iptables -t nat -A xkeen -d 224.0.0.0/4 -j RETURN 2>/dev/null || true
-  iptables -t nat -A xkeen -d 255.255.255.255/32 -j RETURN 2>/dev/null || true
-
-  ip route show | /opt/bin/awk '
-    $1 ~ /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/ && $2 == "dev" {
-      print $1
-    }
-  ' | sort -u | while IFS= read -r subnet; do
-    [ -n "$subnet" ] || continue
-    iptables -t nat -A xkeen -d "$subnet" -j RETURN 2>/dev/null || true
-  done
-}
-
 validate_confdir() {
   /opt/sbin/xray run -test -confdir /opt/etc/xray/configs >/dev/null 2>&1
 }
@@ -152,41 +81,13 @@ repair_runtime() {
     return $?
   fi
 
-  ensure_xkeen_mark || return 1
-  mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
-  build_bypass_ipset_inline
-  iptables -t nat -N xkeen 2>/dev/null || true
-  iptables -t nat -F xkeen 2>/dev/null || true
-  append_local_returns_inline
-  iptables -t nat -A xkeen -p tcp -m set --match-set xkeen_bypass dst -j RETURN 2>/dev/null || true
-  iptables -t nat -A xkeen -p tcp -j REDIRECT --to-ports 61219 2>/dev/null || true
-  iptables -t nat -A xkeen -j RETURN 2>/dev/null || true
-  iptables -t nat -D PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || true
-  iptables -t nat -D PREROUTING -m connmark --mark 0xffffaab -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || true
-  iptables -t nat -D PREROUTING -m connmark --mark 0xffffaaa -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || true
-  iptables -t nat -C PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || \
-    iptables -t nat -I PREROUTING 1 -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -j xkeen
+  if type xkeen_repair_hooks >/dev/null 2>&1; then
+    xkeen_repair_hooks || return 1
+    restart_xray || return 1
+    return 0
+  fi
 
-  while ip rule show | grep -q 'fwmark 0x111 lookup 111'; do
-    ip rule del fwmark 0x111 lookup 111 2>/dev/null || break
-  done
-
-  iptables -t mangle -D PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -p udp -j xkeen_udp 2>/dev/null || true
-  iptables -t mangle -D PREROUTING -m connmark --mark 0xffffaab -m conntrack ! --ctstate INVALID -p udp -j xkeen_udp 2>/dev/null || true
-  iptables -t mangle -D PREROUTING -m connmark --mark 0xffffaaa -m conntrack ! --ctstate INVALID -p udp -j xkeen_udp 2>/dev/null || true
-  iptables -t mangle -F xkeen_udp 2>/dev/null || true
-  iptables -t mangle -X xkeen_udp 2>/dev/null || true
-
-  iptables -t mangle -D PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -p udp -j xkeen_quic 2>/dev/null || true
-  iptables -t mangle -D PREROUTING -m connmark --mark 0xffffaaa -m conntrack ! --ctstate INVALID -p udp -j xkeen_quic 2>/dev/null || true
-  iptables -t mangle -F xkeen_quic 2>/dev/null || true
-  iptables -t mangle -X xkeen_quic 2>/dev/null || true
-  ipset destroy xkeen_redirect 2>/dev/null || true
-  ipset destroy xkeen_vpn 2>/dev/null || true
-  ipset destroy xkeen_quic_bypass 2>/dev/null || true
-
-  restart_xray || return 1
-  return 0
+  return 1
 }
 
 get_kind() {

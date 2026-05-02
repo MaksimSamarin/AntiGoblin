@@ -99,6 +99,7 @@ Backend:
 
 - `/opt/share/xkeen-manager/api/routing.cgi`
 - `/opt/share/xkeen-manager/api/xkeen-selfheal.sh`
+- `/opt/share/xkeen-manager/api/xkeen-runtime.sh`
 
 Конфиги `xray`:
 
@@ -124,11 +125,16 @@ Runtime bypass собирается из двух источников:
 - остальной `TCP` идет в `REDIRECT 61219`;
 - `xray` решает `vless-reality` или `direct`;
 - `UDP` идет напрямую.
+- UI-группа может точечно включить `UDP через VPN`; тогда через `TPROXY 61220` идет только UDP к IP из этой группы.
+- UDP, уже попавший в inbound `tproxy`, должен маршрутизироваться в `vless-reality`, потому что отбор по группе уже сделан в `iptables/ipset`.
+- Для UDP через VLESS Reality outbound должен использовать XUDP: `mux.enabled=true`, `concurrency=-1`, `xudpConcurrency=16`.
 
 Критический инвариант:
 
 - в `xray` может попадать только трафик устройств из `xkeen`;
 - если `AntiGoblin` зацепил другую политику Keenetic, это аварийный баг;
+- UI-группы AntiGoblin не являются политиками Keenetic и не должны менять назначение устройств;
+- runtime должен искать mark динамически по `description xkeen`, без hardcoded mark;
 - после bootstrap и после каждого self-heal это нужно уметь проверять.
 
 ### Важное правило
@@ -162,6 +168,7 @@ Runtime bypass собирается из двух источников:
 - жив ли `xray`;
 - слушается ли `61219`;
 - есть ли `PREROUTING -> xkeen`;
+- не зацеплен ли `PREROUTING` за mark чужой Keenetic-политики;
 - не пересобрал ли Keenetic `iptables`;
 - попадает ли трафик в `xray`;
 - не нужен ли `RETURN` вместо `direct`.
@@ -174,6 +181,7 @@ Runtime bypass собирается из двух источников:
 - держи в `configs/xkeen/` только sample-файлы;
 - не хардкодь личные хосты, подсети и креды;
 - опирайся на runtime-файлы и generic defaults.
+- держи apply из UI и self-heal на общей реализации `/opt/share/xkeen-manager/api/xkeen-runtime.sh`.
 
 ### Держать документацию честной
 

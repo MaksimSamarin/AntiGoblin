@@ -5,16 +5,22 @@ PATH="/opt/bin:/opt/sbin:/sbin:/usr/sbin:/bin:/usr/bin:$PATH"
 LOG_PATH="/opt/var/log/xkeen-selfheal.log"
 HEALTH_LOG_PATH="/opt/var/log/xkeen-health.log"
 XRAY_BIN="/opt/sbin/xray"
+SING_BOX_BIN="/opt/sbin/sing-box"
+SING_BOX_INIT="/opt/etc/init.d/S24antigoblin-singbox"
 XRAY_ASSET_DIR="/opt/etc/xray/dat"
 XRAY_CONF_DIR="/opt/etc/xray/configs"
+SING_BOX_CONF="/opt/etc/sing-box/xkeen.json"
 STATE_PATH="/opt/share/xkeen-manager/xkeen-ui-state.json"
 LOCK_DIR="/tmp/xkeen-selfheal.lock"
 LOCK_PID_FILE="$LOCK_DIR/pid"
 HEALTH_STAMP_FILE="/tmp/xkeen-health-last.ts"
 XRAY_RESTART_STAMP_FILE="/tmp/xkeen-xray-restart-last.ts"
+RUNTIME_REFRESH_STAMP_FILE="/tmp/xkeen-runtime-refresh-last.ts"
+RUNTIME_REFRESH_INTERVAL_SEC=300
 RUNTIME_DIR="/opt/share/xkeen-manager/runtime"
 BYPASS_DOMAINS_PATH="$RUNTIME_DIR/bypass-domains.txt"
 BYPASS_CIDRS_PATH="$RUNTIME_DIR/bypass-cidrs.txt"
+UDP_ROUTE_SET="xkeen_udp_route"
 XKEEN_MARK=""
 XRAY_PID=""
 XRAY_FD_COUNT=0
@@ -28,6 +34,7 @@ XRAY_REMOTE_IP=""
 XRAY_REMOTE_TOTAL_COUNT=0
 XRAY_REMOTE_ESTABLISHED_COUNT=0
 XRAY_REMOTE_FIN_WAIT_COUNT=0
+XRAY_REMOTE_ORPHAN_FIN_WAIT_COUNT=0
 XRAY_REMOTE_FIN_WAIT_WARN_THRESHOLD=20
 XRAY_REMOTE_FIN_WAIT_CRITICAL_THRESHOLD=50
 XRAY_REMOTE_FIN_WAIT_STREAK_REQUIRED=3
@@ -39,6 +46,14 @@ HEALTH_PROBE_OK=0
 HEALTH_STATUS="ok"
 XRAY_FD_CRITICAL_STREAK_FILE="/tmp/xkeen-xray-fd-critical-streak"
 XRAY_REMOTE_FIN_WAIT_STREAK_FILE="/tmp/xkeen-xray-remote-fin-wait-streak"
+
+XKEEN_RUNTIME_LOG="$LOG_PATH"
+if [ -f "/opt/share/xkeen-manager/api/xkeen-runtime.sh" ]; then
+  . "/opt/share/xkeen-manager/api/xkeen-runtime.sh"
+elif [ -f "$(dirname "$0")/xkeen-runtime.sh" ]; then
+  . "$(dirname "$0")/xkeen-runtime.sh"
+fi
+
 find_cron_init() {
   for candidate in /opt/etc/init.d/S10cron /opt/etc/init.d/S05crond; do
     [ -x "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
@@ -52,6 +67,7 @@ cron_running() {
 
 needs_repair=0
 force_mode=0
+runtime_refresh_due=0
 
 if [ "$1" = "--force" ]; then
   force_mode=1
@@ -70,80 +86,50 @@ has_rule() {
 }
 
 get_xkeen_mark() {
-  ndmc -c 'show ip policy' 2>/dev/null | /opt/bin/awk '
-    /description = xkeen:/ {
-      want_mark=1
-      next
-    }
-    want_mark && /mark:/ {
-      print $2
-      exit
-    }
-  '
+  type xkeen_get_mark >/dev/null 2>&1 && xkeen_get_mark
 }
 
 get_default_wan_iface() {
-  ndmc -c 'show interface' 2>/dev/null | /opt/bin/awk '
-    /^Interface, name = / {
-      iface=$4
-      gsub(/"/, "", iface)
-      next
-    }
-    /defaultgw:[[:space:]]+yes/ {
-      print iface
-      exit
-    }
-  '
+  type xkeen_default_wan_iface >/dev/null 2>&1 && xkeen_default_wan_iface
 }
 
 next_xkeen_policy_name() {
-  ndmc -c 'show running-config' 2>/dev/null | /opt/bin/awk '
-    /^ip policy Policy[0-9]+$/ {
-      name=$3
-      sub(/^Policy/, "", name)
-      if (name >= 42) {
-        print name
-      }
-    }
-  ' | sort -n | /opt/bin/awk '
-    BEGIN { n = 42 }
-    {
-      if ($1 == n) {
-        n++
-      }
-    }
-    END { print "Policy" n }
-  '
+  type xkeen_next_policy_name >/dev/null 2>&1 && xkeen_next_policy_name
 }
 
 ensure_xkeen_policy() {
-  if ndmc -c 'show ip policy' 2>/dev/null | grep -q 'description = xkeen:'; then
-    return 0
-  fi
-
-  WAN_IFACE="$(get_default_wan_iface)"
-  [ -n "$WAN_IFACE" ] || return 1
-
-  POLICY_NAME="$(next_xkeen_policy_name)"
-  [ -n "$POLICY_NAME" ] || POLICY_NAME="Policy42"
-
-  log "xkeen policy missing, creating $POLICY_NAME on $WAN_IFACE"
-  ndmc -c "ip policy $POLICY_NAME" >/dev/null 2>&1 || return 1
-  ndmc -c "ip policy $POLICY_NAME description xkeen" >/dev/null 2>&1 || return 1
-  ndmc -c "ip policy $POLICY_NAME permit global $WAN_IFACE" >/dev/null 2>&1 || return 1
-  ndmc -c "system configuration save" >/dev/null 2>&1 || true
-  sleep 1
-  ndmc -c 'show ip policy' 2>/dev/null | grep -q 'description = xkeen:'
+  type xkeen_ensure_policy >/dev/null 2>&1 && xkeen_ensure_policy
 }
 
 ensure_xkeen_mark() {
-  ensure_xkeen_policy || return 1
-  XKEEN_MARK="$(get_xkeen_mark)"
-  [ -n "$XKEEN_MARK" ]
+  type xkeen_ensure_mark >/dev/null 2>&1 || return 1
+  xkeen_ensure_mark
 }
 
 xray_ready() {
   netstat -lnpt 2>/dev/null | grep -q ':61219 '
+}
+
+xray_relay_ready() {
+  netstat -lnpt 2>/dev/null | grep -q ':62640 '
+}
+
+singbox_ready() {
+  [ -x "$SING_BOX_BIN" ] || return 1
+  [ -f "$SING_BOX_CONF" ] || return 1
+  if type xkeen_tproxy_ready >/dev/null 2>&1; then
+    xkeen_tproxy_ready
+    return $?
+  fi
+  netstat -lnpu 2>/dev/null | grep -q ':61221 '
+}
+
+tproxy_ready() {
+  singbox_ready
+}
+
+ensure_tproxy_module() {
+  type xkeen_ensure_tproxy_module >/dev/null 2>&1 && xkeen_ensure_tproxy_module
 }
 
 get_xray_pid() {
@@ -177,9 +163,14 @@ capture_xray_remote_socket_metrics() {
   XRAY_REMOTE_TOTAL_COUNT=0
   XRAY_REMOTE_ESTABLISHED_COUNT=0
   XRAY_REMOTE_FIN_WAIT_COUNT=0
+  XRAY_REMOTE_ORPHAN_FIN_WAIT_COUNT=0
 
   [ -n "$XRAY_PID" ] || return 0
   [ "${XRAY_REMOTE_PORT:-0}" -gt 0 ] || return 0
+
+  if [ -n "$XRAY_REMOTE_IP" ]; then
+    XRAY_REMOTE_ORPHAN_FIN_WAIT_COUNT="$(netstat -anp 2>/dev/null | grep "${XRAY_REMOTE_IP}:${XRAY_REMOTE_PORT}" | grep -E 'FIN_WAIT1|FIN_WAIT2' | grep -c '[[:space:]]-[[:space:]]*$' || true)"
+  fi
 
   SOCKET_LINES="$(netstat -anp 2>/dev/null | grep "${XRAY_PID}/xray" | grep ":${XRAY_REMOTE_PORT} " || true)"
   [ -n "$SOCKET_LINES" ] || return 0
@@ -196,6 +187,7 @@ capture_health_metrics() {
   XRAY_REMOTE_TOTAL_COUNT=0
   XRAY_REMOTE_ESTABLISHED_COUNT=0
   XRAY_REMOTE_FIN_WAIT_COUNT=0
+  XRAY_REMOTE_ORPHAN_FIN_WAIT_COUNT=0
   MEM_AVAILABLE_KB=0
   MEM_TOTAL_KB=0
   CONNTRACK_COUNT=0
@@ -242,6 +234,10 @@ capture_health_metrics() {
     HEALTH_STATUS="vpn_fin_warn"
   fi
 
+  if [ "${XRAY_REMOTE_ORPHAN_FIN_WAIT_COUNT:-0}" -ge "$XRAY_REMOTE_FIN_WAIT_WARN_THRESHOLD" ] && [ "$HEALTH_STATUS" = "ok" ]; then
+    HEALTH_STATUS="vpn_orphan_fin_warn"
+  fi
+
   if [ "${CONNTRACK_MAX:-0}" -gt 0 ]; then
     CT_PCT=$(( CONNTRACK_COUNT * 100 / CONNTRACK_MAX ))
     if [ "$CT_PCT" -ge 95 ]; then
@@ -270,7 +266,7 @@ maybe_log_health() {
   LAST_TS="$(cat "$HEALTH_STAMP_FILE" 2>/dev/null || echo 0)"
 
   if [ "$HEALTH_STATUS" != "ok" ] || [ $(( NOW_TS - LAST_TS )) -ge 300 ]; then
-    health_log "status=$HEALTH_STATUS pid=${XRAY_PID:-0} probe=$HEALTH_PROBE_OK fd=${XRAY_FD_COUNT:-0}/${XRAY_FD_LIMIT:-0} mem_kb=${MEM_AVAILABLE_KB:-0}/${MEM_TOTAL_KB:-0} conntrack=${CONNTRACK_COUNT:-0}/${CONNTRACK_MAX:-0} vpn_remote=${XRAY_REMOTE_HOST:-unknown}:${XRAY_REMOTE_PORT:-0} vpn_sock=${XRAY_REMOTE_ESTABLISHED_COUNT:-0}/${XRAY_REMOTE_FIN_WAIT_COUNT:-0}/${XRAY_REMOTE_TOTAL_COUNT:-0}"
+    health_log "status=$HEALTH_STATUS pid=${XRAY_PID:-0} probe=$HEALTH_PROBE_OK fd=${XRAY_FD_COUNT:-0}/${XRAY_FD_LIMIT:-0} mem_kb=${MEM_AVAILABLE_KB:-0}/${MEM_TOTAL_KB:-0} conntrack=${CONNTRACK_COUNT:-0}/${CONNTRACK_MAX:-0} vpn_remote=${XRAY_REMOTE_HOST:-unknown}:${XRAY_REMOTE_PORT:-0} vpn_ip=${XRAY_REMOTE_IP:-unknown} vpn_sock=${XRAY_REMOTE_ESTABLISHED_COUNT:-0}/${XRAY_REMOTE_FIN_WAIT_COUNT:-0}/${XRAY_REMOTE_TOTAL_COUNT:-0} vpn_orphan_fin=${XRAY_REMOTE_ORPHAN_FIN_WAIT_COUNT:-0}"
     printf '%s\n' "$NOW_TS" > "$HEALTH_STAMP_FILE"
   fi
 }
@@ -325,64 +321,44 @@ mark_xray_restarted() {
   date +%s > "$XRAY_RESTART_STAMP_FILE"
 }
 
-build_bypass_ipset() {
-  ipset create xkeen_bypass hash:net family inet -exist
-  ipset flush xkeen_bypass 2>/dev/null || true
-
-  [ -f "$BYPASS_DOMAINS_PATH" ] || : > "$BYPASS_DOMAINS_PATH"
-  [ -f "$BYPASS_CIDRS_PATH" ] || : > "$BYPASS_CIDRS_PATH"
-
-  sed 's/#.*$//' "$BYPASS_DOMAINS_PATH" | sed '/^[[:space:]]*$/d' | while IFS= read -r domain; do
-    [ -n "$domain" ] || continue
-    nslookup "$domain" 2>/dev/null | /opt/bin/awk '
-      /^Name:/ { seen_name=1; next }
-      seen_name && /^Address [0-9]+: / { print $3; next }
-      seen_name && /^Address: / { print $2; next }
-    ' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -Ev '^(127\.|192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)' | while IFS= read -r ip; do
-      [ -n "$ip" ] || continue
-      ipset add xkeen_bypass "$ip"/32 -exist 2>/dev/null || true
-    done
-  done
-
-  sed 's/#.*$//' "$BYPASS_CIDRS_PATH" | sed '/^[[:space:]]*$/d' | while IFS= read -r cidr; do
-    [ -n "$cidr" ] || continue
-    ipset add xkeen_bypass "$cidr" -exist 2>/dev/null || true
-  done
-
-  if command -v jq >/dev/null 2>&1 && [ -f "$STATE_PATH" ]; then
-    jq -r '.profiles[]? | .groups[]? | select((.enabled != false) and (.outboundTag == "bypass")) | .domains[]?' "$STATE_PATH" 2>/dev/null | \
-      sed '/^[[:space:]]*$/d' | while IFS= read -r domain; do
-        [ -n "$domain" ] || continue
-        nslookup "$domain" 2>/dev/null | /opt/bin/awk '
-          /^Name:/ { seen_name=1; next }
-          seen_name && /^Address [0-9]+: / { print $3; next }
-          seen_name && /^Address: / { print $2; next }
-        ' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -Ev '^(127\.|192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)' | while IFS= read -r ip; do
-          [ -n "$ip" ] || continue
-          ipset add xkeen_bypass "$ip"/32 -exist 2>/dev/null || true
-        done
-      done
-
-    jq -r '.profiles[]? | .groups[]? | select((.enabled != false) and (.outboundTag == "bypass")) | .cidrs[]?' "$STATE_PATH" 2>/dev/null | \
-      sed '/^[[:space:]]*$/d' | while IFS= read -r cidr; do
-        [ -n "$cidr" ] || continue
-        ipset add xkeen_bypass "$cidr" -exist 2>/dev/null || true
-      done
+check_runtime_refresh_due() {
+  NOW_TS="$(date +%s)"
+  LAST_TS="$(cat "$RUNTIME_REFRESH_STAMP_FILE" 2>/dev/null || echo 0)"
+  if [ $(( NOW_TS - LAST_TS )) -ge "$RUNTIME_REFRESH_INTERVAL_SEC" ]; then
+    runtime_refresh_due=1
+    needs_repair=1
   fi
 }
 
-append_local_returns() {
-  iptables -t nat -A xkeen -d 224.0.0.0/4 -j RETURN 2>/dev/null || true
-  iptables -t nat -A xkeen -d 255.255.255.255/32 -j RETURN 2>/dev/null || true
+mark_runtime_refreshed() {
+  date +%s > "$RUNTIME_REFRESH_STAMP_FILE"
+}
 
-  ip route show | /opt/bin/awk '
-    $1 ~ /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/ && $2 == "dev" {
-      print $1
-    }
-  ' | sort -u | while IFS= read -r subnet; do
-    [ -n "$subnet" ] || continue
-    iptables -t nat -A xkeen -d "$subnet" -j RETURN 2>/dev/null || true
-  done
+flush_vpn_conntrack() {
+  get_xray_remote_endpoint
+  [ -n "$XRAY_REMOTE_IP" ] || return 0
+  [ "${XRAY_REMOTE_PORT:-0}" -gt 0 ] || return 0
+
+  if ! command -v conntrack >/dev/null 2>&1; then
+    health_log "action=conntrack_flush_skipped reason=missing_conntrack_tools vpn_ip=$XRAY_REMOTE_IP vpn_port=$XRAY_REMOTE_PORT"
+    return 0
+  fi
+
+  conntrack -D -p tcp -d "$XRAY_REMOTE_IP" --dport "$XRAY_REMOTE_PORT" >/dev/null 2>&1 || true
+  conntrack -D -p tcp -s "$XRAY_REMOTE_IP" --sport "$XRAY_REMOTE_PORT" >/dev/null 2>&1 || true
+  health_log "action=conntrack_flush vpn_ip=$XRAY_REMOTE_IP vpn_port=$XRAY_REMOTE_PORT"
+}
+
+udp_route_config_enabled() {
+  type xkeen_udp_config_enabled >/dev/null 2>&1 && xkeen_udp_config_enabled
+}
+
+udp_route_has_entries() {
+  type xkeen_ipset_has_members >/dev/null 2>&1 && xkeen_ipset_has_members "$UDP_ROUTE_SET"
+}
+
+apply_udp_route() {
+  type xkeen_apply_udp_route >/dev/null 2>&1 && xkeen_apply_udp_route
 }
 
 check_runtime() {
@@ -395,11 +371,24 @@ check_runtime() {
   has_rule iptables -t nat -C xkeen -p tcp -j REDIRECT --to-ports 61219 || needs_repair=1
   has_rule iptables -t nat -C xkeen -j RETURN || needs_repair=1
   has_rule ipset list xkeen_bypass || needs_repair=1
+  if has_rule iptables -t filter -S xkeen_udp443_block; then
+    needs_repair=1
+  fi
+  if udp_route_config_enabled && ! has_rule ipset list "$UDP_ROUTE_SET"; then
+    needs_repair=1
+  fi
+  if has_rule ipset list "$UDP_ROUTE_SET" && udp_route_has_entries; then
+    [ -n "$XKEEN_MARK" ] && has_rule iptables -t mangle -C PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -p udp -m set --match-set "$UDP_ROUTE_SET" dst -j xkeen_udp_route || needs_repair=1
+    ip rule show | grep -qE 'fwmark 0x111/0x111 (lookup|table) 111' || needs_repair=1
+    xray_relay_ready || needs_repair=1
+    tproxy_ready || needs_repair=1
+  fi
   xray_ready || needs_repair=1
   capture_health_metrics
   maybe_log_health
   update_fd_critical_streak
   update_remote_fin_wait_streak
+  check_runtime_refresh_due
   [ "$HEALTH_PROBE_OK" -eq 1 ] || needs_repair=1
   case "$HEALTH_STATUS" in
     mem_critical|conntrack_critical)
@@ -415,67 +404,66 @@ check_runtime() {
 }
 
 repair_hooks() {
-  ensure_xkeen_mark || return 1
-  mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
-  build_bypass_ipset
-  iptables -t nat -N xkeen 2>/dev/null || true
-  iptables -t nat -F xkeen 2>/dev/null || true
-  append_local_returns
-  iptables -t nat -A xkeen -p tcp -m set --match-set xkeen_bypass dst -j RETURN 2>/dev/null || true
-  iptables -t nat -A xkeen -p tcp -j REDIRECT --to-ports 61219 2>/dev/null || true
-  iptables -t nat -A xkeen -j RETURN 2>/dev/null || true
-  iptables -t nat -D PREROUTING -m connmark --mark 0xffffaaa -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || true
-  iptables -t nat -D PREROUTING -m connmark --mark 0xffffaab -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || true
-  iptables -t nat -C PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || \
-    iptables -t nat -I PREROUTING 1 -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -j xkeen
+  if type xkeen_repair_hooks >/dev/null 2>&1; then
+    xkeen_repair_hooks
+    XKEEN_MARK="$(xkeen_get_mark 2>/dev/null || printf '%s' "$XKEEN_MARK")"
+    return $?
+  fi
 
-  while ip rule show | grep -q 'fwmark 0x111 lookup 111'; do
-    ip rule del fwmark 0x111 lookup 111 2>/dev/null || break
-  done
-
-  iptables -t mangle -D PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -p udp -j xkeen_udp 2>/dev/null || true
-  iptables -t mangle -D PREROUTING -m connmark --mark 0xffffaab -m conntrack ! --ctstate INVALID -p udp -j xkeen_udp 2>/dev/null || true
-  iptables -t mangle -D PREROUTING -m connmark --mark 0xffffaaa -m conntrack ! --ctstate INVALID -p udp -j xkeen_udp 2>/dev/null || true
-  iptables -t mangle -F xkeen_udp 2>/dev/null || true
-  iptables -t mangle -X xkeen_udp 2>/dev/null || true
-
-  iptables -t mangle -D PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -p udp -j xkeen_quic 2>/dev/null || true
-  iptables -t mangle -D PREROUTING -m connmark --mark 0xffffaaa -m conntrack ! --ctstate INVALID -p udp -j xkeen_quic 2>/dev/null || true
-  iptables -t mangle -F xkeen_quic 2>/dev/null || true
-  iptables -t mangle -X xkeen_quic 2>/dev/null || true
-
-  ipset destroy xkeen_redirect 2>/dev/null || true
-  ipset destroy xkeen_vpn 2>/dev/null || true
-  ipset destroy xkeen_quic_bypass 2>/dev/null || true
+  log "repair failed: xkeen-runtime.sh is not loaded"
+  return 1
 }
 
 restart_xray() {
-  health_log "action=xray_restart reason=$HEALTH_STATUS pid=${XRAY_PID:-0} fd=${XRAY_FD_COUNT:-0}/${XRAY_FD_LIMIT:-0} mem_kb=${MEM_AVAILABLE_KB:-0}/${MEM_TOTAL_KB:-0} conntrack=${CONNTRACK_COUNT:-0}/${CONNTRACK_MAX:-0}"
+  health_log "action=xray_restart reason=$HEALTH_STATUS pid=${XRAY_PID:-0} fd=${XRAY_FD_COUNT:-0}/${XRAY_FD_LIMIT:-0} mem_kb=${MEM_AVAILABLE_KB:-0}/${MEM_TOTAL_KB:-0} conntrack=${CONNTRACK_COUNT:-0}/${CONNTRACK_MAX:-0} vpn_remote=${XRAY_REMOTE_HOST:-unknown}:${XRAY_REMOTE_PORT:-0} vpn_ip=${XRAY_REMOTE_IP:-unknown} vpn_sock=${XRAY_REMOTE_ESTABLISHED_COUNT:-0}/${XRAY_REMOTE_FIN_WAIT_COUNT:-0}/${XRAY_REMOTE_TOTAL_COUNT:-0} vpn_orphan_fin=${XRAY_REMOTE_ORPHAN_FIN_WAIT_COUNT:-0}"
   killall xray 2>/dev/null || true
   rm -f /opt/var/run/xray-ui.pid /opt/var/run/xray.pid 2>/dev/null || true
   sleep 2
+  flush_vpn_conntrack
   XRAY_LOCATION_ASSET="$XRAY_ASSET_DIR" XRAY_LOCATION_CONFDIR="$XRAY_CONF_DIR" \
     /opt/sbin/start-stop-daemon -S -b -m -p /opt/var/run/xray-ui.pid -x "$XRAY_BIN" -- run >>"$LOG_PATH" 2>&1
   mark_xray_restarted
   sleep 3
 }
 
+restart_singbox() {
+  health_log "action=singbox_restart reason=$HEALTH_STATUS"
+  if [ -x "$SING_BOX_INIT" ]; then
+    "$SING_BOX_INIT" restart >>"$LOG_PATH" 2>&1 || true
+  else
+    killall sing-box 2>/dev/null || true
+    rm -f /opt/var/run/sing-box.pid 2>/dev/null || true
+    sleep 1
+    [ -x "$SING_BOX_BIN" ] && [ -f "$SING_BOX_CONF" ] && \
+      /opt/sbin/start-stop-daemon -S -b -m -p /opt/var/run/sing-box.pid -x "$SING_BOX_BIN" -- run -c "$SING_BOX_CONF" >>"$LOG_PATH" 2>&1 || true
+  fi
+  sleep 2
+}
+
 repair_runtime() {
   log "repair start"
+  [ "$runtime_refresh_due" -eq 1 ] && log "runtime refresh scheduled"
 
   if ! cron_running; then
     CRON_INIT="$(find_cron_init 2>/dev/null || true)"
     [ -n "$CRON_INIT" ] && "$CRON_INIT" restart >/dev/null 2>&1 || true
   fi
 
-  repair_hooks
+  if ! repair_hooks; then
+    log "repair failed: runtime hooks"
+    return 1
+  fi
+  mark_runtime_refreshed
 
   capture_health_metrics
   maybe_log_health
 
-  if ! xray_ready; then
+  if ! xray_ready || (has_rule ipset list "$UDP_ROUTE_SET" && udp_route_has_entries && ! xray_relay_ready); then
     log "xray restart needed"
     restart_xray
+  elif has_rule ipset list "$UDP_ROUTE_SET" && udp_route_has_entries && ! tproxy_ready; then
+    log "sing-box tproxy restart needed"
+    restart_singbox
   elif [ "$HEALTH_STATUS" = "fd_critical" ] || [ "$HEALTH_STATUS" = "vpn_fin_critical" ]; then
     if restart_xray_allowed; then
       log "xray deep health restart needed: $HEALTH_STATUS"

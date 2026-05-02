@@ -27,6 +27,8 @@ Router backend и поддержка runtime:
   API для UI, сохранение state, apply, probe, restart
 - `xkeen-selfheal.sh`  
   Восстановление runtime и очистка старых хвостов
+- `xkeen-runtime.sh`
+  Единая сборка `iptables`/`ipset` runtime для UI apply и self-heal
 
 ### `scripts/xkeen/`
 
@@ -77,9 +79,15 @@ Backend:
 
 - `/opt/share/xkeen-manager/api/routing.cgi`
 - `/opt/share/xkeen-manager/api/xkeen-selfheal.sh`
+- `/opt/share/xkeen-manager/api/xkeen-runtime.sh`
 
-Runtime bypass больше не хранится отдельными текстовыми файлами.
-`xkeen_bypass` собирается из активных групп UI с типом `Bypass`.
+Runtime bypass собирается из:
+
+- `/opt/share/xkeen-manager/runtime/bypass-domains.txt`
+- `/opt/share/xkeen-manager/runtime/bypass-cidrs.txt`
+- активных групп UI с типом `Bypass`
+
+Точечный UDP routing собирается в `xkeen_udp_route` только из UI-групп, где включен флаг `UDP через VPN`.
 
 Конфиги `xray`:
 

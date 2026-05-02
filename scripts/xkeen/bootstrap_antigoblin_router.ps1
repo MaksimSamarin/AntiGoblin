@@ -19,9 +19,11 @@ $sshHelper = Join-Path $PSScriptRoot 'router_ssh.py'
 
 $seedFiles = @(
   @{ Local = (Join-Path $repoRoot 'configs\xkeen\01_log.sample.json'); Remote = '/opt/etc/xray/configs/01_log.json'; Mode = '644' },
+  @{ Local = (Join-Path $repoRoot 'configs\xkeen\02_relay.sample.json'); Remote = '/opt/etc/xray/configs/02_relay.json'; Mode = '644' },
   @{ Local = (Join-Path $repoRoot 'configs\xkeen\03_inbounds.sample.json'); Remote = '/opt/etc/xray/configs/03_inbounds.json'; Mode = '644' },
   @{ Local = (Join-Path $repoRoot 'configs\xkeen\04_outbounds.sample.json'); Remote = '/opt/etc/xray/configs/04_outbounds.json'; Mode = '644' },
   @{ Local = (Join-Path $repoRoot 'configs\xkeen\05_routing.sample.json'); Remote = '/opt/etc/xray/configs/05_routing.json'; Mode = '644' },
+  @{ Local = (Join-Path $repoRoot 'configs\xkeen\sing-box-xkeen.sample.json'); Remote = '/opt/etc/sing-box/xkeen.json'; Mode = '644' },
   @{ Local = (Join-Path $repoRoot 'configs\xkeen\xkeen-ui-state.sample.json'); Remote = '/opt/share/xkeen-manager/xkeen-ui-state.json'; Mode = '644' }
 )
 
@@ -76,6 +78,7 @@ fi
 
 mkdir -p /opt/etc/xray/configs
 mkdir -p /opt/etc/xray/dat
+mkdir -p /opt/etc/sing-box
 mkdir -p /opt/share/xkeen-manager
 mkdir -p /opt/share/xkeen-manager/api
 mkdir -p /opt/share/xkeen-manager/runtime
@@ -83,9 +86,31 @@ mkdir -p /opt/var/log
 mkdir -p /opt/var/run
 
 /opt/bin/opkg update >/dev/null 2>&1 || true
-for pkg in jq gawk coreutils-base64 net-tools-netstat cron uhttpd_kn xray iptables ipset; do
+for pkg in jq gawk coreutils-base64 net-tools-netstat cron uhttpd_kn xray iptables ipset conntrack tar gzip wget ca-bundle; do
   /opt/bin/opkg install "$pkg" >/dev/null 2>&1 || true
 done
+
+if ! command -v sing-box >/dev/null 2>&1; then
+  SING_BOX_VERSION="${SING_BOX_VERSION:-1.13.8}"
+  case "$(uname -m)" in
+    aarch64|arm64) SING_BOX_ARCH=arm64-musl ;;
+    armv7l|armv7*) SING_BOX_ARCH=armv7 ;;
+    mipsel*) SING_BOX_ARCH=mipsle ;;
+    mips*) SING_BOX_ARCH=mips ;;
+    *) SING_BOX_ARCH="$(uname -m)" ;;
+  esac
+  SING_BOX_URL="${SING_BOX_URL:-https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-${SING_BOX_ARCH}.tar.gz}"
+  rm -rf /tmp/antigoblin-sing-box /tmp/antigoblin-sing-box.tar.gz
+  mkdir -p /tmp/antigoblin-sing-box
+  if wget --no-check-certificate -O /tmp/antigoblin-sing-box.tar.gz "$SING_BOX_URL" >/dev/null 2>&1; then
+    tar -xzf /tmp/antigoblin-sing-box.tar.gz -C /tmp/antigoblin-sing-box
+    SING_BOX_BIN="$(find /tmp/antigoblin-sing-box -type f -name sing-box | head -n 1)"
+    if [ -n "$SING_BOX_BIN" ]; then
+      cp "$SING_BOX_BIN" /opt/sbin/sing-box
+      chmod 755 /opt/sbin/sing-box
+    fi
+  fi
+fi
 
 CRON_INIT=""
 for candidate in /opt/etc/init.d/S10cron /opt/etc/init.d/S05crond; do

@@ -1,0 +1,38 @@
+{
+  "log": {
+    "level": "warn",
+    "timestamp": true
+  },
+  "inbounds": [
+    {
+      "type": "tproxy",
+      "tag": "xkeen-udp-tproxy",
+      "listen": "0.0.0.0",
+      "listen_port": 61221,
+      "network": "udp"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "shadowsocks",
+      "tag": "proxy",
+      "server": "127.0.0.1",
+      "server_port": 62640,
+      "method": "none",
+      "password": "none"
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "ip_is_private": true,
+        "outbound": "direct"
+      }
+    ],
+    "final": "proxy"
+  }
+}

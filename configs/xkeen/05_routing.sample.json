@@ -5,8 +5,14 @@
       {
         "type": "field",
         "inboundTag": [
-          "redirect",
-          "tproxy"
+          "proxy-relay-ss"
+        ],
+        "outboundTag": "vless-reality"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect"
         ],
         "outboundTag": "direct"
       }

@@ -26,6 +26,9 @@ const LOCALES = {
     profileNameLabel: "\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 \u043d\u0430\u0431\u043e\u0440\u0430",
     domainStrategyLabel: "\u0421\u0442\u0440\u0430\u0442\u0435\u0433\u0438\u044f \u0434\u043e\u043c\u0435\u043d\u043e\u0432",
     fallbackLabel: "\u041c\u0430\u0440\u0448\u0440\u0443\u0442 \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e",
+    trafficTypeLabel: "\u041d\u0430\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435",
+    trafficTypeVpn: "\u0427\u0435\u0440\u0435\u0437 VPN",
+    trafficTypeBypass: "\u041c\u0438\u043c\u043e VPN",
     proxyTitle: "\u041a\u043e\u043d\u0444\u0438\u0433 \u043f\u0440\u043e\u043a\u0441\u0438",
     proxyUrlLabel: "VLESS URL",
     proxyAddressLabel: "\u0421\u0435\u0440\u0432\u0435\u0440",
@@ -63,11 +66,9 @@ const LOCALES = {
     groups: "\u0413\u0440\u0443\u043f\u043f",
     activeGroups: "\u0410\u043a\u0442\u0438\u0432\u043d\u044b\u0445",
     vpnDomains: "VPN-\u0434\u043e\u043c\u0435\u043d\u043e\u0432",
-    directDomains: "Direct-\u0434\u043e\u043c\u0435\u043d\u043e\u0432",
-    bypassDomains: "Bypass-\u0434\u043e\u043c\u0435\u043d\u043e\u0432",
+    bypassDomains: "\u041c\u0438\u043c\u043e VPN",
     cidrShort: "CIDR",
-    directGroupName: "Direct",
-    bypassGroupName: "Bypass",
+    bypassGroupName: "\u041c\u0438\u043c\u043e VPN",
     profileAdded: "\u041d\u043e\u0432\u044b\u0439 \u043f\u0440\u043e\u0444\u0438\u043b\u044c",
     profileCopySuffix: " \u043a\u043e\u043f\u0438\u044f",
     saveApplyDone: "\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043e \u0438 \u043f\u0440\u0438\u043c\u0435\u043d\u0435\u043d\u043e",
@@ -118,6 +119,9 @@ const LOCALES = {
     profileNameLabel: "Profile name",
     domainStrategyLabel: "Domain strategy",
     fallbackLabel: "Default route",
+    trafficTypeLabel: "Direction",
+    trafficTypeVpn: "Through VPN",
+    trafficTypeBypass: "Outside VPN",
     proxyTitle: "Proxy config",
     proxyUrlLabel: "VLESS URL",
     proxyAddressLabel: "Server",
@@ -155,11 +159,9 @@ const LOCALES = {
     groups: "Groups",
     activeGroups: "Active",
     vpnDomains: "VPN domains",
-    directDomains: "Direct domains",
-    bypassDomains: "Bypass domains",
+    bypassDomains: "Outside VPN",
     cidrShort: "CIDR",
-    directGroupName: "Direct",
-    bypassGroupName: "Bypass",
+    bypassGroupName: "Outside VPN",
     profileAdded: "New profile",
     profileCopySuffix: " copy",
     saveApplyDone: "Saved and applied",
@@ -223,11 +225,11 @@ const fallbackState = {
           cidrs: []
         },
         {
-          id: "fallback-direct",
-          name: T.directGroupName,
+          id: "fallback-bypass",
+          name: T.bypassGroupName,
           note: "",
           enabled: true,
-          outboundTag: "direct",
+          outboundTag: "bypass",
           domains: [],
           cidrs: []
         }
@@ -779,11 +781,10 @@ function renderGroups() {
       <div class="group-body">
         <div class="grid two">
           <label>
-            <span>Outbound</span>
+            <span>${escapeHtml(T.trafficTypeLabel)}</span>
             <select class="group-outbound">
-              <option value="vless-reality">vless-reality</option>
-              <option value="direct">direct</option>
-              <option value="bypass">bypass</option>
+              <option value="vless-reality">${escapeHtml(T.trafficTypeVpn)}</option>
+              <option value="bypass">${escapeHtml(T.trafficTypeBypass)}</option>
             </select>
           </label>
           <label>
@@ -855,11 +856,9 @@ function renderPreview() {
   els.preview.textContent = JSON.stringify(routing, null, 2);
 
   const activeGroups = profile.groups.filter((group) => group.enabled);
-  const directGroups = activeGroups.filter((group) => group.outboundTag === "direct");
-  const bypassGroups = activeGroups.filter((group) => group.outboundTag === "bypass");
-  const vpnGroups = activeGroups.filter((group) => group.outboundTag !== "direct" && group.outboundTag !== "bypass");
+  const bypassGroups = activeGroups.filter((group) => group.outboundTag === "bypass" || group.outboundTag === "direct");
+  const vpnGroups = activeGroups.filter((group) => group.outboundTag !== "bypass" && group.outboundTag !== "direct");
 
-  const directDomainCount = uniq(directGroups.flatMap((group) => group.domains)).length;
   const bypassDomainCount = uniq(bypassGroups.flatMap((group) => group.domains)).length;
   const vpnDomainCount = uniq(vpnGroups.flatMap((group) => group.domains)).length;
   const cidrCount = uniq(activeGroups.flatMap((group) => group.cidrs)).length;
@@ -867,39 +866,20 @@ function renderPreview() {
   els.stats.innerHTML = [
     statPill(`${T.groups}: ${profile.groups.length}`),
     statPill(`${T.activeGroups}: ${activeGroups.length}`),
-    statPill(`${T.directDomains}: ${directDomainCount}`),
-    statPill(`${T.bypassDomains}: ${bypassDomainCount}`),
     statPill(`${T.vpnDomains}: ${vpnDomainCount}`),
+    statPill(`${T.bypassDomains}: ${bypassDomainCount}`),
     statPill(`${T.cidrShort}: ${cidrCount}`)
   ].join("");
 }
 
 function buildRoutingDocument(inputState) {
-  const inboundTags = ["redirect", "tproxy"];
+  const inboundTags = ["redirect"];
   const rules = [];
-
-  for (const group of inputState.groups.filter((item) => item.enabled && item.outboundTag === "direct")) {
-    const domains = uniq(group.domains);
-    const cidrs = uniq(group.cidrs);
-
-    if (domains.length) {
-      rules.push({
-        type: "field",
-        inboundTag: inboundTags,
-        domain: domains,
-        outboundTag: "direct"
-      });
-    }
-
-    if (cidrs.length) {
-      rules.push({
-        type: "field",
-        inboundTag: inboundTags,
-        ip: cidrs,
-        outboundTag: "direct"
-      });
-    }
-  }
+  rules.push({
+    type: "field",
+    inboundTag: ["proxy-relay-ss"],
+    outboundTag: "vless-reality"
+  });
 
   for (const group of inputState.groups.filter((item) => item.enabled && item.outboundTag !== "direct" && item.outboundTag !== "bypass")) {
     const domains = uniq(group.domains);
@@ -942,19 +922,20 @@ function importFromRouting(doc) {
   const rules = doc?.routing?.rules || [];
   const inboundTags = uniq(rules.flatMap((rule) => Array.isArray(rule.inboundTag) ? rule.inboundTag : []));
   const grouped = new Map();
-  const fallbackRule = rules.find((rule) => rule.outboundTag && !rule.domain && !rule.ip);
+  const fallbackRule = rules.find((rule) => rule.outboundTag && !rule.domain && !rule.ip && !rule.network);
 
   for (const rule of rules) {
     if (!rule.outboundTag || (!rule.domain && !rule.ip)) continue;
 
-    const key = `${rule.outboundTag}`;
+    const tag = rule.outboundTag === "direct" ? "bypass" : rule.outboundTag;
+    const key = `${tag}`;
     if (!grouped.has(key)) {
       grouped.set(key, {
         id: newId(),
-        name: rule.outboundTag === "vless-reality" ? "VPN" : (rule.outboundTag === "direct" ? T.directGroupName : rule.outboundTag),
+        name: tag === "vless-reality" ? "VPN" : (tag === "bypass" ? T.bypassGroupName : tag),
         note: T.imported,
         enabled: true,
-        outboundTag: rule.outboundTag,
+        outboundTag: tag,
         domains: [],
         cidrs: []
       });
@@ -1176,6 +1157,9 @@ function buildOutboundsDocument(profile) {
             shortId: config.shortId,
             spiderX: "/"
           }
+        },
+        mux: {
+          enabled: false
         }
       },
       {
@@ -1294,7 +1278,7 @@ function normalizeProfile(profile) {
     name: group.name || T.newGroup,
     note: group.note || "",
     enabled: group.enabled !== false,
-    outboundTag: group.outboundTag || "vless-reality",
+    outboundTag: (group.outboundTag === "direct" ? "bypass" : (group.outboundTag || "vless-reality")),
     domains: uniq(Array.isArray(group.domains) ? group.domains : []),
     cidrs: uniq(Array.isArray(group.cidrs) ? group.cidrs : [])
   }));

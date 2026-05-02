@@ -31,11 +31,11 @@
           "cidrs": []
         },
         {
-          "id": "group-direct",
-          "name": "Direct",
-          "note": "Example direct group",
+          "id": "group-bypass",
+          "name": "Bypass",
+          "note": "Example pass-through group",
           "enabled": true,
-          "outboundTag": "direct",
+          "outboundTag": "bypass",
           "domains": [],
           "cidrs": []
         }

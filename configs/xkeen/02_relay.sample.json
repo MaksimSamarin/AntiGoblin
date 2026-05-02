@@ -1,0 +1,15 @@
+{
+  "inbounds": [
+    {
+      "tag": "proxy-relay-ss",
+      "listen": "127.0.0.1",
+      "port": 62640,
+      "protocol": "shadowsocks",
+      "settings": {
+        "network": "tcp,udp",
+        "method": "none",
+        "password": "none"
+      }
+    }
+  ]
+}

@@ -4,3 +4,4 @@ snapshots/
 archive/*.zip
 configs/xkeen/*.router-live.json
 ui/xkeen-manager/router-live-routing.json
+.ssh-linux.env

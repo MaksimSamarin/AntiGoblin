@@ -13,13 +13,14 @@
 После этого роутер использует:
 
 - политику Keenetic `xkeen` для выбора устройств
-- `iptables` для перехвата только тех `TCP`-направлений, которые отмечены как `REDIRECT` в правилах UI
+- `iptables` для перехвата `TCP` устройств из `xkeen`
 - `xray` для маршрутизации в `vless-reality` или `direct`
 
 Текущая живая модель runtime:
 
-- `TCP` устройств из `xkeen` идет через `xray` только для UI-групп с типом `REDIRECT`
-- `UDP` идет напрямую
+- `TCP` устройств из `xkeen` идет через `xray`, кроме направлений `Bypass`
+- `UDP` по умолчанию идет напрямую
+- отдельная UI-группа может включить точечный `UDP через VPN`
 - локалка и discovery обходят `xray` через `RETURN`
 
 ## Структура проекта
@@ -76,6 +77,7 @@ http://192.168.1.1:8899/
 - `AntiGoblin` имеет право трогать только устройства из политики `xkeen`
 - любые другие политики Keenetic, например `no_vpn`, не должны попадать в `xray`
 - bootstrap создает `xkeen` как дополнительную политику вида `Policy42+`, чтобы она была видна в Keenetic UI
+- UI-группы AntiGoblin не являются политиками Keenetic и не меняют назначение устройств
 
 Полная пошаговая инструкция:
 
@@ -99,15 +101,18 @@ UI и backend на роутере:
 - `/opt/share/xkeen-manager/`
 - `/opt/share/xkeen-manager/api/routing.cgi`
 - `/opt/share/xkeen-manager/api/xkeen-selfheal.sh`
+- `/opt/share/xkeen-manager/api/xkeen-runtime.sh`
 
 Bypass собирается из двух источников:
 
-- hardcoded runtime-файлы:
+- runtime-файлы:
   - `/opt/share/xkeen-manager/runtime/bypass-domains.txt`
   - `/opt/share/xkeen-manager/runtime/bypass-cidrs.txt`
 - UI-группы с типом трафика `Bypass`
 
 Все эти направления попадают в runtime `xkeen_bypass` и обходят `xray` через `RETURN`.
+
+Общая сборка runtime живет в `xkeen-runtime.sh`: и apply из UI, и self-heal используют один и тот же код для `iptables`/`ipset`.
 
 ## Правила проекта
 

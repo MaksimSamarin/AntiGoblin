@@ -6,6 +6,7 @@ param(
   [string]$RemoteRuntimeDir = "/opt/share/xkeen-manager/runtime",
   [string]$RemoteSelfhealLoop = "/opt/share/xkeen-manager/api/xkeen-selfheal-loop.sh",
   [string]$RemoteSelfhealInit = "/opt/etc/init.d/S25antigoblin-selfheal",
+  [string]$RemoteSingboxInit = "/opt/etc/init.d/S24antigoblin-singbox",
   [string]$RemoteInitScript = "/opt/etc/init.d/S26antigoblin",
   [string]$RemoteCronScript = "/opt/etc/cron.1min/50-antigoblin-selfheal",
   [string]$RemoteFsHook = "/opt/etc/ndm/fs.d/50-antigoblin.sh",
@@ -25,8 +26,12 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $sshHelper = Join-Path $PSScriptRoot 'router_ssh.py'
 $localApi = Join-Path $repoRoot 'ui\xkeen-manager\backend\routing.cgi'
 $localSelfHeal = Join-Path $repoRoot 'ui\xkeen-manager\backend\xkeen-selfheal.sh'
+$localRuntime = Join-Path $repoRoot 'ui\xkeen-manager\backend\xkeen-runtime.sh'
+$localXrayRelay = Join-Path $repoRoot 'configs\xkeen\02_relay.sample.json'
+$localSingboxConfig = Join-Path $repoRoot 'configs\xkeen\sing-box-xkeen.sample.json'
 $localSelfhealLoop = Join-Path $repoRoot 'scripts\xkeen\antigoblin-selfheal-loop.sh'
 $localSelfhealInit = Join-Path $repoRoot 'scripts\xkeen\antigoblin-selfheal.initd.sh'
+$localSingboxInit = Join-Path $repoRoot 'scripts\xkeen\antigoblin-singbox.initd.sh'
 $localInitScript = Join-Path $repoRoot 'scripts\xkeen\antigoblin.initd.sh'
 $localCronScript = Join-Path $repoRoot 'scripts\xkeen\antigoblin-selfheal.cron.sh'
 $localRemountHook = Join-Path $repoRoot 'scripts\xkeen\antigoblin-remount-hook.sh'
@@ -74,11 +79,23 @@ if (-not (Test-Path $localApi)) {
 if (-not (Test-Path $localSelfHeal)) {
   throw "Missing self-heal file: $localSelfHeal"
 }
+if (-not (Test-Path $localRuntime)) {
+  throw "Missing runtime file: $localRuntime"
+}
+if (-not (Test-Path $localXrayRelay)) {
+  throw "Missing xray relay config: $localXrayRelay"
+}
+if (-not (Test-Path $localSingboxConfig)) {
+  throw "Missing sing-box config: $localSingboxConfig"
+}
 if (-not (Test-Path $localSelfhealLoop)) {
   throw "Missing self-heal loop script: $localSelfhealLoop"
 }
 if (-not (Test-Path $localSelfhealInit)) {
   throw "Missing self-heal init script: $localSelfhealInit"
+}
+if (-not (Test-Path $localSingboxInit)) {
+  throw "Missing sing-box init script: $localSingboxInit"
 }
 if (-not (Test-Path $localInitScript)) {
   throw "Missing init script: $localInitScript"
@@ -101,13 +118,20 @@ Invoke-RouterCommand -Command "mkdir -p $RemoteApiDir"
 Invoke-RouterCommand -Command "mkdir -p $RemoteRuntimeDir"
 Invoke-RouterCommand -Command "mkdir -p /opt/etc/cron.1min"
 Invoke-RouterCommand -Command "mkdir -p /opt/etc/xray/configs"
+Invoke-RouterCommand -Command "mkdir -p /opt/etc/sing-box"
 Invoke-RouterCommand -Command "opkg update >/dev/null 2>&1 || true"
 Invoke-RouterCommand -Command "opkg install uhttpd_kn >/dev/null 2>&1 || true"
+Invoke-RouterCommand -Command "opkg install conntrack >/dev/null 2>&1 || true"
+Invoke-RouterCommand -Command "opkg install tar gzip wget ca-bundle >/dev/null 2>&1 || true"
 
 Send-RemoteFile -LocalPath $localApi -RemotePath "$RemoteApiDir/routing.cgi"
 Send-RemoteFile -LocalPath $localSelfHeal -RemotePath "$RemoteApiDir/xkeen-selfheal.sh"
+Send-RemoteFile -LocalPath $localRuntime -RemotePath "$RemoteApiDir/xkeen-runtime.sh"
+Send-RemoteFile -LocalPath $localXrayRelay -RemotePath "/opt/etc/xray/configs/02_relay.json" -Mode '644'
+Send-RemoteFile -LocalPath $localSingboxConfig -RemotePath "/opt/etc/sing-box/xkeen.json" -Mode '644'
 Send-RemoteFile -LocalPath $localSelfhealLoop -RemotePath $RemoteSelfhealLoop
 Send-RemoteFile -LocalPath $localSelfhealInit -RemotePath $RemoteSelfhealInit
+Send-RemoteFile -LocalPath $localSingboxInit -RemotePath $RemoteSingboxInit
 Send-RemoteFile -LocalPath $localInitScript -RemotePath $RemoteInitScript
 Send-RemoteFile -LocalPath $localCronScript -RemotePath $RemoteCronScript
 Send-RemoteFile -LocalPath $localRemountHook -RemotePath $RemoteFsHook
@@ -142,4 +166,28 @@ done
 [ -n "$CRON_INIT" ] && "$CRON_INIT" restart >/dev/null 2>&1 || true
 '@
 Invoke-RouterCommand -Command $cronCmd
-Invoke-RouterCommand -Command "chmod 755 '$RemoteSelfhealLoop' '$RemoteSelfhealInit' '$RemoteInitScript' '$RemoteCronScript' '$RemoteFsHook' '$RemoteUsbHook' && '$RemoteSelfhealInit' restart >/dev/null 2>&1 || true && '$RemoteInitScript' restart >/dev/null 2>&1 || true"
+$installSingbox = @'
+if ! command -v sing-box >/dev/null 2>&1; then
+  SING_BOX_VERSION="${SING_BOX_VERSION:-1.13.8}"
+  case "$(uname -m)" in
+    aarch64|arm64) SING_BOX_ARCH=arm64-musl ;;
+    armv7l|armv7*) SING_BOX_ARCH=armv7 ;;
+    mipsel*) SING_BOX_ARCH=mipsle ;;
+    mips*) SING_BOX_ARCH=mips ;;
+    *) SING_BOX_ARCH="$(uname -m)" ;;
+  esac
+  SING_BOX_URL="${SING_BOX_URL:-https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-${SING_BOX_ARCH}.tar.gz}"
+  rm -rf /tmp/antigoblin-sing-box /tmp/antigoblin-sing-box.tar.gz
+  mkdir -p /tmp/antigoblin-sing-box
+  if wget --no-check-certificate -O /tmp/antigoblin-sing-box.tar.gz "$SING_BOX_URL" >/dev/null 2>&1; then
+    tar -xzf /tmp/antigoblin-sing-box.tar.gz -C /tmp/antigoblin-sing-box
+    SING_BOX_BIN="$(find /tmp/antigoblin-sing-box -type f -name sing-box | head -n 1)"
+    if [ -n "$SING_BOX_BIN" ]; then
+      cp "$SING_BOX_BIN" /opt/sbin/sing-box
+      chmod 755 /opt/sbin/sing-box
+    fi
+  fi
+fi
+'@
+Invoke-RouterCommand -Command $installSingbox
+Invoke-RouterCommand -Command "chmod 755 '$RemoteSelfhealLoop' '$RemoteSelfhealInit' '$RemoteSingboxInit' '$RemoteInitScript' '$RemoteCronScript' '$RemoteFsHook' '$RemoteUsbHook' && '$RemoteSingboxInit' restart >/dev/null 2>&1 || true && '$RemoteSelfhealInit' restart >/dev/null 2>&1 || true && '$RemoteInitScript' restart >/dev/null 2>&1 || true"

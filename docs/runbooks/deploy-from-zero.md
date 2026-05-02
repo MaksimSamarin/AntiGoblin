@@ -17,6 +17,9 @@
   - `coreutils-base64`
   - `net-tools-netstat`
   - `cron`
+  - `iptables`
+  - `ipset`
+  - `conntrack`
 - создает UI-видимую политику Keenetic `xkeen`, если ее еще нет
 - раскладывает базовые sample-конфиги:
   - `01_log.json`
@@ -73,6 +76,7 @@ http://192.168.1.1:8899/
 - в Keenetic UI видна отдельная политика `xkeen`
 - `xkeen` существует отдельно от пользовательских политик, например `no_vpn`
 - `AntiGoblin` цепляется только к mark политики `xkeen`
+- `/opt/share/xkeen-manager/api/xkeen-runtime.sh` есть на роутере
 
 Важно:
 
