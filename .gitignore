@@ -5,3 +5,9 @@ archive/*.zip
 configs/xkeen/*.router-live.json
 ui/xkeen-manager/router-live-routing.json
 .ssh-linux.env
+
+# local credentials and secrets — never commit
+.env
+.env.local
+*.env
+!.env.example

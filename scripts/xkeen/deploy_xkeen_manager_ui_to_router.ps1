@@ -1,16 +1,17 @@
 param(
-  [string]$RouterHost = "192.168.1.1",
-  [string]$RouterUser = 'root',
+  [string]$RouterHost,
+  [string]$RouterUser,
   [string]$RemoteRoot = "/opt/share/xkeen-manager"
 )
 
 $ErrorActionPreference = 'Stop'
 
-if (-not $PSBoundParameters.ContainsKey('RouterUser') -and $env:ROUTER_SSH_USER) {
-  $RouterUser = $env:ROUTER_SSH_USER
-}
+. (Join-Path $PSScriptRoot '_load-env.ps1')
 
-$null = if ($env:ROUTER_SSH_PASSWORD) { $env:ROUTER_SSH_PASSWORD } else { throw "Set ROUTER_SSH_PASSWORD before running this script." }
+if (-not $RouterHost) { $RouterHost = if ($env:ROUTER_HOST) { $env:ROUTER_HOST } else { '192.168.1.1' } }
+if (-not $RouterUser) { $RouterUser = if ($env:ROUTER_SSH_USER) { $env:ROUTER_SSH_USER } else { 'root' } }
+
+if (-not $env:ROUTER_SSH_PASSWORD) { throw "ROUTER_SSH_PASSWORD is not set. Put it in .env or export it before running." }
 $python = (Get-Command python -ErrorAction Stop).Source
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)

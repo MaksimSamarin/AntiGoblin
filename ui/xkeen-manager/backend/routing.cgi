@@ -262,7 +262,7 @@ emit_logs() {
 }
 
 emit_stack_info() {
-  XRAY_VER="$(/opt/sbin/xray version 2>/dev/null | head -n 1 | /opt/bin/awk '{print $2,$3}')"
+  XRAY_VER="$(/opt/sbin/xray version 2>/dev/null | head -n 1 | /opt/bin/awk '{print $2}')"
   SB_VER="$(/opt/sbin/sing-box version 2>/dev/null | head -n 1 | /opt/bin/awk '{print $3}')"
   KERNEL="$(uname -r 2>/dev/null)"
   HOSTNAME_S="$(uname -n 2>/dev/null)"
@@ -301,7 +301,7 @@ emit_stack_info() {
   # Format B (older): multi-line with separate "name: Policy42" / "description: xkeen:Home"
   POLICY_LINE="$(printf '%s\n' "$POLICY_BLOCK" | grep 'description.*xkeen' | head -n 1)"
   POLICY_NAME="$(printf '%s' "$POLICY_LINE" | sed -n 's/.*name *= *\([^,]*\).*/\1/p' | sed 's/[[:space:]]*$//')"
-  POLICY_DESC="$(printf '%s' "$POLICY_LINE" | sed -n 's/.*description *= *\([^,]*\).*/\1/p' | sed 's/[[:space:]]*$//')"
+  POLICY_DESC="$(printf '%s' "$POLICY_LINE" | sed -n 's/.*description *= *\([^,]*\).*/\1/p' | sed 's/[[:space:]]*$//' | sed 's/:[[:space:]]*$//' | sed 's/^xkeen:[[:space:]]*//' | sed 's/^xkeen$//')"
   if [ -z "$POLICY_NAME" ]; then
     POLICY_NAME="$(printf '%s\n' "$POLICY_BLOCK" | /opt/bin/awk '/^[[:space:]]*name:/{n=$2} /description.*xkeen/{print n; exit}')"
   fi
@@ -315,6 +315,11 @@ emit_stack_info() {
 
   MEM_AVAIL_KB="$(grep '^MemAvailable:' /proc/meminfo 2>/dev/null | /opt/bin/awk '{print $2}')"
   MEM_TOTAL_KB="$(grep '^MemTotal:' /proc/meminfo 2>/dev/null | /opt/bin/awk '{print $2}')"
+  DISK_LINE="$(df -k /opt 2>/dev/null | tail -n 1)"
+  DISK_TOTAL_KB="$(printf '%s' "$DISK_LINE" | /opt/bin/awk '{print $2}')"
+  DISK_USED_KB="$(printf '%s' "$DISK_LINE" | /opt/bin/awk '{print $3}')"
+  DISK_AVAIL_KB="$(printf '%s' "$DISK_LINE" | /opt/bin/awk '{print $4}')"
+  DISK_MOUNT="$(printf '%s' "$DISK_LINE" | /opt/bin/awk '{print $NF}')"
   CT_COUNT="$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)"
   CT_MAX="$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)"
   XRAY_PID_S="$(pidof xray 2>/dev/null | /opt/bin/awk '{print $1}')"
@@ -330,6 +335,9 @@ emit_stack_info() {
   case "$CT_MAX"        in ''|*[!0-9]*) CT_MAX=0 ;; esac
   case "$XRAY_FD_COUNT_S" in ''|*[!0-9]*) XRAY_FD_COUNT_S=0 ;; esac
   case "$XRAY_FD_LIMIT_S" in ''|*[!0-9]*) XRAY_FD_LIMIT_S=0 ;; esac
+  case "$DISK_TOTAL_KB" in ''|*[!0-9]*) DISK_TOTAL_KB=0 ;; esac
+  case "$DISK_USED_KB"  in ''|*[!0-9]*) DISK_USED_KB=0 ;; esac
+  case "$DISK_AVAIL_KB" in ''|*[!0-9]*) DISK_AVAIL_KB=0 ;; esac
 
   PAYLOAD="$(/opt/bin/jq -n \
     --arg xray_ver "$XRAY_VER" \
@@ -354,6 +362,10 @@ emit_stack_info() {
     --argjson ct_max "$CT_MAX" \
     --argjson xray_fd "$XRAY_FD_COUNT_S" \
     --argjson xray_fd_limit "$XRAY_FD_LIMIT_S" \
+    --argjson disk_total_kb "$DISK_TOTAL_KB" \
+    --argjson disk_used_kb "$DISK_USED_KB" \
+    --argjson disk_avail_kb "$DISK_AVAIL_KB" \
+    --arg disk_mount "$DISK_MOUNT" \
     '{
       ok: true,
       versions: { xray: $xray_ver, singbox: $sb_ver, kernel: $kernel, hostname: $hostname, uptimeSec: $uptime_sec },
@@ -361,7 +373,7 @@ emit_stack_info() {
       network:  { wanIface: $wan_iface, wanIp: $wan_ip, gateway: $gw, lanNet: $lan_net },
       xkeen:    { policyName: $policy_name, policyDescription: $policy_desc, mark: $xkeen_mark, tproxyUdp: 61221, redirectTcp: 61219, ssRelay: "127.0.0.1:62640" },
       runtime:  { selfhealIntervalSec: 15, logRotateInterval: "daily", backupRetention: 5, fdWarn: 400, fdCritical: 600 },
-      resources:{ memAvailKb: $mem_avail_kb, memTotalKb: $mem_total_kb, conntrackCount: $ct_count, conntrackMax: $ct_max, xrayFd: $xray_fd, xrayFdLimit: $xray_fd_limit }
+      resources:{ memAvailKb: $mem_avail_kb, memTotalKb: $mem_total_kb, conntrackCount: $ct_count, conntrackMax: $ct_max, xrayFd: $xray_fd, xrayFdLimit: $xray_fd_limit, diskTotalKb: $disk_total_kb, diskUsedKb: $disk_used_kb, diskAvailKb: $disk_avail_kb, diskMount: $disk_mount }
     }')"
 
   printf 'Status: 200 OK\r\n'

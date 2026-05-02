@@ -143,7 +143,7 @@ const LOCALES = {
     stackRuntimeSection: "Runtime",
     stackSelfhealInterval: "интервал self-heal", stackLogRotate: "ротация логов", stackLogRotateValue: "раз в сутки", stackBackupRetention: "хранение бэкапов", stackBackupRetentionValue: "{n} последних копий", stackFdThresh: "FD warn / critical",
     stackResourcesSection: "Ресурсы",
-    stackMem: "память", stackConntrack: "conntrack", stackXrayFd: "xray FD",
+    stackMem: "память", stackDisk: "диск", stackConntrack: "conntrack", stackXrayFd: "xray FD",
     stackCopyHint: "Кликни — скопировать",
     toastSvcRestarting: "Перезапуск {svc}…",
     toastSvcRestarted: "{svc} перезапущен",
@@ -287,7 +287,7 @@ const LOCALES = {
     stackRuntimeSection: "Runtime",
     stackSelfhealInterval: "self-heal interval", stackLogRotate: "log rotation", stackLogRotateValue: "once a day", stackBackupRetention: "backup retention", stackBackupRetentionValue: "last {n} files", stackFdThresh: "FD warn / critical",
     stackResourcesSection: "Resources",
-    stackMem: "memory", stackConntrack: "conntrack", stackXrayFd: "xray FD",
+    stackMem: "memory", stackDisk: "disk", stackConntrack: "conntrack", stackXrayFd: "xray FD",
     stackCopyHint: "Click to copy",
     toastSvcRestarting: "Restarting {svc}…",
     toastSvcRestarted: "{svc} restarted",
@@ -1009,6 +1009,12 @@ function fmtBytesKb(kb) {
   if (kb >= 1024) return `${(kb / 1024).toFixed(0)} MB`;
   return `${kb} KB`;
 }
+function fmtKbPair(used, total) {
+  if (!total || total <= 0) return "—";
+  if (total >= 1024 * 1024) return `${(used / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} GB`;
+  if (total >= 1024) return `${Math.round(used / 1024)} / ${Math.round(total / 1024)} MB`;
+  return `${used} / ${total} KB`;
+}
 
 async function renderStackInfo() {
   if (!els.stackInfo) return;
@@ -1030,7 +1036,10 @@ async function renderStackInfo() {
     ? `${xk.policyName || "?"} · ${xk.policyDescription}`
     : (xk.policyName || "—");
   const memTxt = (r.memAvailKb && r.memTotalKb)
-    ? `${fmtBytesKb(r.memAvailKb)} свободно из ${fmtBytesKb(r.memTotalKb)}`
+    ? fmtKbPair(r.memTotalKb - r.memAvailKb, r.memTotalKb)
+    : "—";
+  const diskTxt = (r.diskAvailKb && r.diskTotalKb)
+    ? fmtKbPair(r.diskUsedKb || 0, r.diskTotalKb)
     : "—";
   const ctTxt = r.conntrackMax ? `${r.conntrackCount} / ${r.conntrackMax}` : "—";
   const fdTxt = r.xrayFdLimit ? `${r.xrayFd} / ${r.xrayFdLimit}` : "—";
@@ -1084,7 +1093,8 @@ async function renderStackInfo() {
     {
       title: T.stackResourcesSection || "Ресурсы",
       rows: [
-        [T.stackMem || "память", memTxt],
+        [T.stackMem || "память (исп/всего)", memTxt],
+        [(T.stackDisk || "флешка (исп/всего)") + (r.diskMount ? ` ${r.diskMount}` : ""), diskTxt],
         [T.stackConntrack || "conntrack", ctTxt],
         [T.stackXrayFd || "xray FD", fdTxt]
       ]

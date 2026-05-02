@@ -1,16 +1,18 @@
 param(
-  [string]$RouterHost = "192.168.1.1",
-  [int]$Port = 8899,
-  [string]$RouterUser = 'root'
+  [string]$RouterHost,
+  [int]$Port = 0,
+  [string]$RouterUser
 )
 
 $ErrorActionPreference = 'Stop'
 
-if (-not $PSBoundParameters.ContainsKey('RouterUser') -and $env:ROUTER_SSH_USER) {
-  $RouterUser = $env:ROUTER_SSH_USER
-}
+. (Join-Path $PSScriptRoot '_load-env.ps1')
 
-$routerPassword = if ($env:ROUTER_SSH_PASSWORD) { $env:ROUTER_SSH_PASSWORD } else { throw "Set ROUTER_SSH_PASSWORD before running this script." }
+if (-not $RouterHost) { $RouterHost = if ($env:ROUTER_HOST) { $env:ROUTER_HOST } else { '192.168.1.1' } }
+if (-not $RouterUser) { $RouterUser = if ($env:ROUTER_SSH_USER) { $env:ROUTER_SSH_USER } else { 'root' } }
+if (-not $Port -or $Port -le 0) { $Port = if ($env:ANTIGOBLIN_UI_PORT) { [int]$env:ANTIGOBLIN_UI_PORT } else { 8899 } }
+
+if (-not $env:ROUTER_SSH_PASSWORD) { throw "ROUTER_SSH_PASSWORD is not set. Put it in .env or export it before running." }
 
 Write-Output "Deploying XKeen Manager UI..."
 & (Join-Path $PSScriptRoot 'deploy_xkeen_manager_ui_to_router.ps1') -RouterHost $RouterHost -RouterUser $RouterUser
