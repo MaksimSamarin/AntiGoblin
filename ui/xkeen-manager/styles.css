@@ -521,10 +521,18 @@ button.danger-solid {
   margin: 0 !important;
   padding: 0 16px !important;
   border-radius: 14px !important;
+  border: 1px solid var(--line) !important;
+  background: var(--bg-soft) !important;
+  color: var(--text) !important;
   box-sizing: border-box !important;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font: inherit !important;
+}
+.logs-controls .logs-action-cell .logs-action-btn:hover {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
 }
 .logs-select-label > span {
   font-size: 11px;
