@@ -415,8 +415,50 @@ repair_hooks() {
   return 1
 }
 
+dump_xray_diagnostics() {
+  [ -n "$XRAY_PID" ] || return 0
+  TS="$(date '+%Y%m%d-%H%M%S')"
+  DUMP_FILE="/opt/var/log/xray-fd-dump-${TS}.txt"
+  {
+    printf '=== xray fd diagnostic snapshot %s ===\n' "$TS"
+    printf 'trigger: %s\n' "${HEALTH_STATUS:-unknown}"
+    printf 'pid: %s\n' "${XRAY_PID:-0}"
+    printf 'fd: %s/%s (warn=%s critical=%s)\n' "${XRAY_FD_COUNT:-0}" "${XRAY_FD_LIMIT:-0}" "$XRAY_FD_WARN_THRESHOLD" "$XRAY_FD_CRITICAL_THRESHOLD"
+    printf 'mem_kb: %s/%s\n' "${MEM_AVAILABLE_KB:-0}" "${MEM_TOTAL_KB:-0}"
+    printf 'conntrack: %s/%s\n' "${CONNTRACK_COUNT:-0}" "${CONNTRACK_MAX:-0}"
+    printf 'vpn_remote: %s:%s (%s)\n' "${XRAY_REMOTE_HOST:-unknown}" "${XRAY_REMOTE_PORT:-0}" "${XRAY_REMOTE_IP:-unknown}"
+    printf 'vpn_sock: established=%s fin_wait=%s orphan_fin=%s total=%s\n' \
+      "${XRAY_REMOTE_ESTABLISHED_COUNT:-0}" \
+      "${XRAY_REMOTE_FIN_WAIT_COUNT:-0}" \
+      "${XRAY_REMOTE_ORPHAN_FIN_WAIT_COUNT:-0}" \
+      "${XRAY_REMOTE_TOTAL_COUNT:-0}"
+    printf '\n=== TCP socket states for xray (per state count) ===\n'
+    netstat -anp 2>/dev/null | grep "${XRAY_PID}/xray" | /opt/bin/awk '$1 == "tcp" || $1 == "tcp6" { print $6 }' | sort | uniq -c | sort -rn
+    printf '\n=== TCP sockets to VPN remote (full) ===\n'
+    if [ -n "$XRAY_REMOTE_IP" ]; then
+      netstat -anp 2>/dev/null | grep "${XRAY_PID}/xray" | grep "${XRAY_REMOTE_IP}:${XRAY_REMOTE_PORT}" | head -200
+    else
+      printf '(vpn remote ip unknown)\n'
+    fi
+    printf '\n=== All xray TCP sockets (top 200 by recency) ===\n'
+    netstat -anp 2>/dev/null | grep "${XRAY_PID}/xray" | head -200
+    printf '\n=== Last 40 xray-manual.log lines ===\n'
+    tail -n 40 "$LOG_PATH" 2>/dev/null
+  } > "$DUMP_FILE" 2>&1
+
+  ls -t /opt/var/log/xray-fd-dump-*.txt 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null
+  health_log "action=fd_dump file=$DUMP_FILE trigger=$HEALTH_STATUS fd=${XRAY_FD_COUNT:-0}/${XRAY_FD_LIMIT:-0} vpn_sock=${XRAY_REMOTE_ESTABLISHED_COUNT:-0}/${XRAY_REMOTE_FIN_WAIT_COUNT:-0}/${XRAY_REMOTE_TOTAL_COUNT:-0}"
+}
+
 restart_xray() {
   health_log "action=xray_restart reason=$HEALTH_STATUS pid=${XRAY_PID:-0} fd=${XRAY_FD_COUNT:-0}/${XRAY_FD_LIMIT:-0} mem_kb=${MEM_AVAILABLE_KB:-0}/${MEM_TOTAL_KB:-0} conntrack=${CONNTRACK_COUNT:-0}/${CONNTRACK_MAX:-0} vpn_remote=${XRAY_REMOTE_HOST:-unknown}:${XRAY_REMOTE_PORT:-0} vpn_ip=${XRAY_REMOTE_IP:-unknown} vpn_sock=${XRAY_REMOTE_ESTABLISHED_COUNT:-0}/${XRAY_REMOTE_FIN_WAIT_COUNT:-0}/${XRAY_REMOTE_TOTAL_COUNT:-0} vpn_orphan_fin=${XRAY_REMOTE_ORPHAN_FIN_WAIT_COUNT:-0}"
+
+  case "$HEALTH_STATUS" in
+    fd_critical|fd_warn|vpn_fin_critical|vpn_fin_warn|vpn_orphan_fin_warn)
+      dump_xray_diagnostics
+      ;;
+  esac
+
   killall xray 2>/dev/null || true
   rm -f /opt/var/run/xray-ui.pid /opt/var/run/xray.pid 2>/dev/null || true
   sleep 2

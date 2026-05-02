@@ -7,6 +7,7 @@ param(
   [string]$RemoteSelfhealLoop = "/opt/share/xkeen-manager/api/xkeen-selfheal-loop.sh",
   [string]$RemoteSelfhealInit = "/opt/etc/init.d/S25antigoblin-selfheal",
   [string]$RemoteSingboxInit = "/opt/etc/init.d/S24antigoblin-singbox",
+  [string]$RemoteSysctlInit = "/opt/etc/init.d/S20antigoblin-sysctl",
   [string]$RemoteInitScript = "/opt/etc/init.d/S26antigoblin",
   [string]$RemoteCronScript = "/opt/etc/cron.1min/50-antigoblin-selfheal",
   [string]$RemoteFsHook = "/opt/etc/ndm/fs.d/50-antigoblin.sh",
@@ -32,6 +33,7 @@ $localSingboxConfig = Join-Path $repoRoot 'configs\xkeen\sing-box-xkeen.sample.j
 $localSelfhealLoop = Join-Path $repoRoot 'scripts\xkeen\antigoblin-selfheal-loop.sh'
 $localSelfhealInit = Join-Path $repoRoot 'scripts\xkeen\antigoblin-selfheal.initd.sh'
 $localSingboxInit = Join-Path $repoRoot 'scripts\xkeen\antigoblin-singbox.initd.sh'
+$localSysctlInit = Join-Path $repoRoot 'scripts\xkeen\antigoblin-sysctl.initd.sh'
 $localInitScript = Join-Path $repoRoot 'scripts\xkeen\antigoblin.initd.sh'
 $localCronScript = Join-Path $repoRoot 'scripts\xkeen\antigoblin-selfheal.cron.sh'
 $localRemountHook = Join-Path $repoRoot 'scripts\xkeen\antigoblin-remount-hook.sh'
@@ -97,6 +99,9 @@ if (-not (Test-Path $localSelfhealInit)) {
 if (-not (Test-Path $localSingboxInit)) {
   throw "Missing sing-box init script: $localSingboxInit"
 }
+if (-not (Test-Path $localSysctlInit)) {
+  throw "Missing sysctl init script: $localSysctlInit"
+}
 if (-not (Test-Path $localInitScript)) {
   throw "Missing init script: $localInitScript"
 }
@@ -132,6 +137,7 @@ Send-RemoteFile -LocalPath $localSingboxConfig -RemotePath "/opt/etc/sing-box/xk
 Send-RemoteFile -LocalPath $localSelfhealLoop -RemotePath $RemoteSelfhealLoop
 Send-RemoteFile -LocalPath $localSelfhealInit -RemotePath $RemoteSelfhealInit
 Send-RemoteFile -LocalPath $localSingboxInit -RemotePath $RemoteSingboxInit
+Send-RemoteFile -LocalPath $localSysctlInit -RemotePath $RemoteSysctlInit
 Send-RemoteFile -LocalPath $localInitScript -RemotePath $RemoteInitScript
 Send-RemoteFile -LocalPath $localCronScript -RemotePath $RemoteCronScript
 Send-RemoteFile -LocalPath $localRemountHook -RemotePath $RemoteFsHook
@@ -190,4 +196,4 @@ if ! command -v sing-box >/dev/null 2>&1; then
 fi
 '@
 Invoke-RouterCommand -Command $installSingbox
-Invoke-RouterCommand -Command "chmod 755 '$RemoteSelfhealLoop' '$RemoteSelfhealInit' '$RemoteSingboxInit' '$RemoteInitScript' '$RemoteCronScript' '$RemoteFsHook' '$RemoteUsbHook' && '$RemoteSingboxInit' restart >/dev/null 2>&1 || true && '$RemoteSelfhealInit' restart >/dev/null 2>&1 || true && '$RemoteInitScript' restart >/dev/null 2>&1 || true"
+Invoke-RouterCommand -Command "chmod 755 '$RemoteSelfhealLoop' '$RemoteSelfhealInit' '$RemoteSingboxInit' '$RemoteSysctlInit' '$RemoteInitScript' '$RemoteCronScript' '$RemoteFsHook' '$RemoteUsbHook' && '$RemoteSysctlInit' start >/dev/null 2>&1 || true && '$RemoteSingboxInit' restart >/dev/null 2>&1 || true && '$RemoteSelfhealInit' restart >/dev/null 2>&1 || true && '$RemoteInitScript' restart >/dev/null 2>&1 || true"
