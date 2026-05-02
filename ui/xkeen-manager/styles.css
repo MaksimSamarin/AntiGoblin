@@ -503,20 +503,21 @@ button.danger-solid {
 }
 
 .logs-controls {
-  display: grid;
-  grid-template-columns: minmax(140px, 1.4fr) minmax(80px, 90px) auto;
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px;
-  align-items: end;
+  align-items: flex-end;
   margin: 14px 0 10px;
 }
-.logs-select-label { display: grid; gap: 4px; }
+.logs-select-label { display: grid; gap: 4px; flex: 1 1 140px; min-width: 140px; }
+.logs-select-label:nth-of-type(2) { flex: 0 1 90px; min-width: 80px; }
 .logs-controls select {
   height: 48px !important;
   padding: 0 14px !important;
   box-sizing: border-box !important;
 }
-.logs-controls .logs-action-cell .logs-action-btn {
-  width: auto !important;
+.logs-controls > .logs-action-btn {
+  flex: 0 0 auto;
   height: 48px !important;
   margin: 0 !important;
   padding: 0 28px !important;
@@ -530,8 +531,9 @@ button.danger-solid {
   justify-content: center !important;
   font: inherit !important;
   white-space: nowrap;
+  width: auto !important;
 }
-.logs-controls .logs-action-cell .logs-action-btn:hover {
+.logs-controls > .logs-action-btn:hover {
   border-color: var(--accent) !important;
   color: var(--accent) !important;
   background: rgba(79, 195, 161, 0.12) !important;
