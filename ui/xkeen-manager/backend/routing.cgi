@@ -231,6 +231,10 @@ emit_logs() {
     singbox)  LOG_FILE="/opt/var/log/sing-box-xkeen.log" ;;
     selfheal) LOG_FILE="/opt/var/log/xkeen-selfheal.log" ;;
     health)   LOG_FILE="/opt/var/log/xkeen-health.log" ;;
+    sysctl)   LOG_FILE="/opt/var/log/xkeen-sysctl.log" ;;
+    fd-dump)
+      LOG_FILE="$(ls -t /opt/var/log/xray-fd-dump-*.txt 2>/dev/null | head -n 1)"
+      ;;
     *)
       json_err "unknown svc"
       exit 0
@@ -241,8 +245,15 @@ emit_logs() {
   printf 'Content-Type: text/plain; charset=utf-8\r\n'
   printf 'Cache-Control: no-store\r\n'
   printf '\r\n'
-  if [ -f "$LOG_FILE" ]; then
-    tail -n "$N" "$LOG_FILE" 2>/dev/null
+  if [ -z "$LOG_FILE" ]; then
+    printf '(no fd-dump file present yet — none has been triggered since boot)\n'
+  elif [ -f "$LOG_FILE" ]; then
+    if [ "$SVC" = "fd-dump" ]; then
+      printf '# %s\n\n' "$LOG_FILE"
+      cat "$LOG_FILE" 2>/dev/null
+    else
+      tail -n "$N" "$LOG_FILE" 2>/dev/null
+    fi
   else
     printf '(log file %s does not exist)\n' "$LOG_FILE"
   fi
