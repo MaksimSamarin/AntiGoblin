@@ -306,11 +306,6 @@ button.danger-solid {
 }
 .panel.collapsed > :not(.panel-header) { display: none !important; }
 .panel.collapsed .panel-header { margin-bottom: 0; }
-.panel-header > div:first-child {
-  display: flex;
-  align-items: flex-start;
-  flex-wrap: wrap;
-}
 
 .health-panel { position: static; }
 .health-badges {

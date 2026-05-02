@@ -389,12 +389,11 @@ function setupPanelCollapse() {
     if (!header) return;
     if (header.querySelector(".panel-collapse-toggle")) return;
     const id = panel.dataset.panelId || `panel-${idx}`;
-    const titleSide = header.firstElementChild || header;
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "panel-collapse-toggle";
     btn.setAttribute("aria-expanded", "true");
-    titleSide.insertBefore(btn, titleSide.firstChild);
+    header.insertBefore(btn, header.firstChild);
     const saved = localStorage.getItem(`panel-collapsed-${id}`);
     btn.setAttribute("aria-label", "Свернуть/развернуть");
     const apply = (collapsed) => {
