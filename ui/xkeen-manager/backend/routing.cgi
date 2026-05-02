@@ -117,6 +117,9 @@ get_kind() {
     kind=restart-svc|*'&kind=restart-svc'|kind=restart-svc'&'*)
       printf 'restart-svc'
       ;;
+    kind=stack-info|*'&kind=stack-info'|kind=stack-info'&'*)
+      printf 'stack-info'
+      ;;
     *)
       printf 'routing'
       ;;
@@ -255,6 +258,117 @@ emit_logs() {
   else
     printf '(log file %s does not exist)\n' "$LOG_FILE"
   fi
+  exit 0
+}
+
+emit_stack_info() {
+  XRAY_VER="$(/opt/sbin/xray version 2>/dev/null | head -n 1 | /opt/bin/awk '{print $2,$3}')"
+  SB_VER="$(/opt/sbin/sing-box version 2>/dev/null | head -n 1 | /opt/bin/awk '{print $3}')"
+  KERNEL="$(uname -r 2>/dev/null)"
+  HOSTNAME_S="$(uname -n 2>/dev/null)"
+  UPTIME_SEC="$(/opt/bin/awk '{ printf "%d", int($1) }' /proc/uptime 2>/dev/null)"
+  case "$UPTIME_SEC" in ''|*[!0-9]*) UPTIME_SEC=0 ;; esac
+
+  OUTBOUNDS_FILE=/opt/etc/xray/configs/04_outbounds.json
+  VPN_HOST=""
+  VPN_PORT=0
+  VPN_SNI=""
+  if [ -f "$OUTBOUNDS_FILE" ] && command -v /opt/bin/jq >/dev/null 2>&1; then
+    VPN_HOST="$(/opt/bin/jq -r '.outbounds[]?|select(.tag=="vless-reality")|.settings.vnext[0].address // ""' "$OUTBOUNDS_FILE" 2>/dev/null)"
+    VPN_PORT="$(/opt/bin/jq -r '.outbounds[]?|select(.tag=="vless-reality")|.settings.vnext[0].port // 0' "$OUTBOUNDS_FILE" 2>/dev/null)"
+    VPN_SNI="$(/opt/bin/jq -r '.outbounds[]?|select(.tag=="vless-reality")|.streamSettings.realitySettings.serverName // ""' "$OUTBOUNDS_FILE" 2>/dev/null)"
+  fi
+  case "$VPN_PORT" in ''|*[!0-9]*) VPN_PORT=0 ;; esac
+  VPN_IP=""
+  if [ -n "$VPN_HOST" ]; then
+    VPN_IP="$(nslookup "$VPN_HOST" 2>/dev/null | /opt/bin/awk '
+      /^Name:/ { seen=1; next }
+      seen && /^Address [0-9]+: / { print $3; exit }
+      seen && /^Address: / { print $2; exit }
+    ' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)"
+  fi
+
+  WAN_IFACE="$(ip route show default 2>/dev/null | /opt/bin/awk '/^default/{print $5; exit}')"
+  WAN_IP=""
+  if [ -n "$WAN_IFACE" ]; then
+    WAN_IP="$(ip addr show "$WAN_IFACE" 2>/dev/null | /opt/bin/awk '/inet /{print $2; exit}' | cut -d/ -f1)"
+  fi
+  GW="$(ip route show default 2>/dev/null | /opt/bin/awk '/^default/{print $3; exit}')"
+  LAN_NET="$(ip route show 2>/dev/null | /opt/bin/awk '/scope link/ && /^(192\.168\.|10\.|172\.)/ {print $1; exit}')"
+
+  POLICY_BLOCK="$(ndmc -c 'show ip policy' 2>/dev/null)"
+  # Format A (newer): one-line "policy, name = Policy42, description = xkeen:Home"
+  # Format B (older): multi-line with separate "name: Policy42" / "description: xkeen:Home"
+  POLICY_LINE="$(printf '%s\n' "$POLICY_BLOCK" | grep 'description.*xkeen' | head -n 1)"
+  POLICY_NAME="$(printf '%s' "$POLICY_LINE" | sed -n 's/.*name *= *\([^,]*\).*/\1/p' | sed 's/[[:space:]]*$//')"
+  POLICY_DESC="$(printf '%s' "$POLICY_LINE" | sed -n 's/.*description *= *\([^,]*\).*/\1/p' | sed 's/[[:space:]]*$//')"
+  if [ -z "$POLICY_NAME" ]; then
+    POLICY_NAME="$(printf '%s\n' "$POLICY_BLOCK" | /opt/bin/awk '/^[[:space:]]*name:/{n=$2} /description.*xkeen/{print n; exit}')"
+  fi
+  if [ -z "$POLICY_DESC" ]; then
+    POLICY_DESC="$(printf '%s\n' "$POLICY_BLOCK" | /opt/bin/awk -F ': ' '/description.*xkeen/{gsub(/^[[:space:]]+/,"",$2); print $2; exit}')"
+  fi
+  XKEEN_MARK_VAL="$(printf '%s\n' "$POLICY_BLOCK" | /opt/bin/awk '
+    /description.*xkeen/ { want=1; next }
+    want && /mark/ { gsub(/[[:space:]]/,"",$0); split($0,a,":"); print a[2]; exit }
+  ')"
+
+  MEM_AVAIL_KB="$(grep '^MemAvailable:' /proc/meminfo 2>/dev/null | /opt/bin/awk '{print $2}')"
+  MEM_TOTAL_KB="$(grep '^MemTotal:' /proc/meminfo 2>/dev/null | /opt/bin/awk '{print $2}')"
+  CT_COUNT="$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)"
+  CT_MAX="$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)"
+  XRAY_PID_S="$(pidof xray 2>/dev/null | /opt/bin/awk '{print $1}')"
+  XRAY_FD_COUNT_S=0
+  XRAY_FD_LIMIT_S=0
+  if [ -n "$XRAY_PID_S" ] && [ -d "/proc/$XRAY_PID_S/fd" ]; then
+    XRAY_FD_COUNT_S="$(ls "/proc/$XRAY_PID_S/fd" 2>/dev/null | wc -l | tr -d ' ')"
+    XRAY_FD_LIMIT_S="$(grep 'Max open files' "/proc/$XRAY_PID_S/limits" 2>/dev/null | /opt/bin/awk '{print $4}')"
+  fi
+  case "$MEM_AVAIL_KB"  in ''|*[!0-9]*) MEM_AVAIL_KB=0 ;; esac
+  case "$MEM_TOTAL_KB"  in ''|*[!0-9]*) MEM_TOTAL_KB=0 ;; esac
+  case "$CT_COUNT"      in ''|*[!0-9]*) CT_COUNT=0 ;; esac
+  case "$CT_MAX"        in ''|*[!0-9]*) CT_MAX=0 ;; esac
+  case "$XRAY_FD_COUNT_S" in ''|*[!0-9]*) XRAY_FD_COUNT_S=0 ;; esac
+  case "$XRAY_FD_LIMIT_S" in ''|*[!0-9]*) XRAY_FD_LIMIT_S=0 ;; esac
+
+  PAYLOAD="$(/opt/bin/jq -n \
+    --arg xray_ver "$XRAY_VER" \
+    --arg sb_ver "$SB_VER" \
+    --arg kernel "$KERNEL" \
+    --arg hostname "$HOSTNAME_S" \
+    --argjson uptime_sec "$UPTIME_SEC" \
+    --arg vpn_host "$VPN_HOST" \
+    --argjson vpn_port "$VPN_PORT" \
+    --arg vpn_sni "$VPN_SNI" \
+    --arg vpn_ip "$VPN_IP" \
+    --arg wan_iface "$WAN_IFACE" \
+    --arg wan_ip "$WAN_IP" \
+    --arg lan_net "$LAN_NET" \
+    --arg gw "$GW" \
+    --arg policy_name "$POLICY_NAME" \
+    --arg policy_desc "$POLICY_DESC" \
+    --arg xkeen_mark "$XKEEN_MARK_VAL" \
+    --argjson mem_avail_kb "$MEM_AVAIL_KB" \
+    --argjson mem_total_kb "$MEM_TOTAL_KB" \
+    --argjson ct_count "$CT_COUNT" \
+    --argjson ct_max "$CT_MAX" \
+    --argjson xray_fd "$XRAY_FD_COUNT_S" \
+    --argjson xray_fd_limit "$XRAY_FD_LIMIT_S" \
+    '{
+      ok: true,
+      versions: { xray: $xray_ver, singbox: $sb_ver, kernel: $kernel, hostname: $hostname, uptimeSec: $uptime_sec },
+      vpn:      { host: $vpn_host, port: $vpn_port, sni: $vpn_sni, exitIp: $vpn_ip },
+      network:  { wanIface: $wan_iface, wanIp: $wan_ip, gateway: $gw, lanNet: $lan_net },
+      xkeen:    { policyName: $policy_name, policyDescription: $policy_desc, mark: $xkeen_mark, tproxyUdp: 61221, redirectTcp: 61219, ssRelay: "127.0.0.1:62640" },
+      runtime:  { selfhealIntervalSec: 15, logRotateInterval: "daily", backupRetention: 5, fdWarn: 400, fdCritical: 600 },
+      resources:{ memAvailKb: $mem_avail_kb, memTotalKb: $mem_total_kb, conntrackCount: $ct_count, conntrackMax: $ct_max, xrayFd: $xray_fd, xrayFdLimit: $xray_fd_limit }
+    }')"
+
+  printf 'Status: 200 OK\r\n'
+  printf 'Content-Type: application/json; charset=utf-8\r\n'
+  printf 'Cache-Control: no-store\r\n'
+  printf '\r\n'
+  printf '%s\n' "$PAYLOAD"
   exit 0
 }
 
@@ -450,6 +564,9 @@ case "$REQUEST_METHOD" in
     fi
     if [ "$KIND" = "logs" ]; then
       emit_logs
+    fi
+    if [ "$KIND" = "stack-info" ]; then
+      emit_stack_info
     fi
     emit_file "$ROUTING_PATH"
     ;;

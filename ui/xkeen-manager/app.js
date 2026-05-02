@@ -10,6 +10,7 @@ const LIVE_ROUTING_URL = "./api/routing.cgi";
 const HEALTH_URL = "./api/routing.cgi?kind=health";
 const LOGS_URL = "./api/routing.cgi?kind=logs";
 const RESTART_SVC_URL = "./api/routing.cgi?kind=restart-svc";
+const STACK_INFO_URL = "./api/routing.cgi?kind=stack-info";
 
 const LOCALES = {
   ru: {
@@ -130,6 +131,29 @@ const LOCALES = {
     logsCopiedDone: "Скопировано",
     dedupDomainsRemoved: "Убрано лишних доменов: {n} (покрыты родительским)",
     dedupCidrsRemoved: "Убрано лишних IP/CIDR: {n} (покрыты более широкой сетью)",
+    stackInfoFetchFailed: "Не удалось загрузить параметры стека",
+    stackVersions: "Версии",
+    stackXrayVer: "xray", stackSingboxVer: "sing-box", stackKernel: "ядро", stackUptime: "uptime",
+    stackVpnSection: "VPN",
+    stackVpnHost: "сервер", stackVpnExitIp: "exit IP", stackVpnSni: "Reality SNI",
+    stackNetSection: "Сеть",
+    stackWanIface: "WAN-интерфейс", stackWanIp: "WAN IP", stackGw: "default gateway", stackLan: "LAN сеть",
+    stackXkeenSection: "xkeen",
+    stackPolicy: "Keenetic policy", stackMark: "mark", stackTproxyPort: "TPROXY UDP", stackRedirectPort: "REDIRECT TCP", stackSsRelay: "SS-relay",
+    stackRuntimeSection: "Runtime",
+    stackSelfhealInterval: "интервал self-heal", stackLogRotate: "ротация логов", stackLogRotateValue: "раз в сутки", stackBackupRetention: "хранение бэкапов", stackBackupRetentionValue: "{n} последних копий", stackFdThresh: "FD warn / critical",
+    stackResourcesSection: "Ресурсы",
+    stackMem: "память", stackConntrack: "conntrack", stackXrayFd: "xray FD",
+    stackCopyHint: "Кликни — скопировать",
+    toastSvcRestarting: "Перезапуск {svc}…",
+    toastSvcRestarted: "{svc} перезапущен",
+    toastSvcRestartFailed: "Ошибка перезапуска {svc}: {error}",
+    toastRepairing: "Перестройка runtime…",
+    toastSavingState: "Сохранение профиля…",
+    toastSavingApplying: "Сохранение и применение…",
+    toastProbing: "Проверка {addr}:{port}…",
+    toastInvalidDomains: "Удалены не-домены: {list}",
+    toastInvalidCidrs: "Удалены не-IP/CIDR: {list}",
     ipsetUdpLabel: "UDP route ipset",
     ipsetBypassLabel: "Bypass ipset"
   },
@@ -251,6 +275,29 @@ const LOCALES = {
     logsCopiedDone: "Copied",
     dedupDomainsRemoved: "Removed redundant domains: {n} (covered by a parent domain)",
     dedupCidrsRemoved: "Removed redundant IP/CIDR: {n} (covered by a broader network)",
+    stackInfoFetchFailed: "Failed to load stack info",
+    stackVersions: "Versions",
+    stackXrayVer: "xray", stackSingboxVer: "sing-box", stackKernel: "kernel", stackUptime: "uptime",
+    stackVpnSection: "VPN",
+    stackVpnHost: "server", stackVpnExitIp: "exit IP", stackVpnSni: "Reality SNI",
+    stackNetSection: "Network",
+    stackWanIface: "WAN interface", stackWanIp: "WAN IP", stackGw: "default gateway", stackLan: "LAN net",
+    stackXkeenSection: "xkeen",
+    stackPolicy: "Keenetic policy", stackMark: "mark", stackTproxyPort: "TPROXY UDP", stackRedirectPort: "REDIRECT TCP", stackSsRelay: "SS-relay",
+    stackRuntimeSection: "Runtime",
+    stackSelfhealInterval: "self-heal interval", stackLogRotate: "log rotation", stackLogRotateValue: "once a day", stackBackupRetention: "backup retention", stackBackupRetentionValue: "last {n} files", stackFdThresh: "FD warn / critical",
+    stackResourcesSection: "Resources",
+    stackMem: "memory", stackConntrack: "conntrack", stackXrayFd: "xray FD",
+    stackCopyHint: "Click to copy",
+    toastSvcRestarting: "Restarting {svc}…",
+    toastSvcRestarted: "{svc} restarted",
+    toastSvcRestartFailed: "Failed to restart {svc}: {error}",
+    toastRepairing: "Rebuilding runtime…",
+    toastSavingState: "Saving profile…",
+    toastSavingApplying: "Saving and applying…",
+    toastProbing: "Probing {addr}:{port}…",
+    toastInvalidDomains: "Removed non-domain entries: {list}",
+    toastInvalidCidrs: "Removed non-IP/CIDR entries: {list}",
     ipsetUdpLabel: "UDP route ipset",
     ipsetBypassLabel: "Bypass ipset"
   }
@@ -362,6 +409,7 @@ const els = {
   refreshHealthBtn: document.getElementById("refreshHealthBtn"),
   healthBadges: document.getElementById("healthBadges"),
   healthChecks: document.getElementById("healthChecks"),
+  stackInfo: document.getElementById("stackInfo"),
   restartXrayBtn: document.getElementById("restartXrayBtn"),
   restartSingboxBtn: document.getElementById("restartSingboxBtn"),
   restartSelfhealBtn: document.getElementById("restartSelfhealBtn"),
@@ -423,6 +471,7 @@ async function bootstrap() {
     hideAuthOverlay();
     persistAndRender();
     renderHealth().catch(() => {});
+    renderStackInfo().catch(() => {});
   } catch (error) {
     pushDebug(`bootstrap failed: ${error.message}`);
     if (isAuthError(error)) {
@@ -576,17 +625,17 @@ function bindTopLevel() {
     const profile = getActiveProfile();
     if (!profile) return;
     const config = normalizeProxyConfig(profile.proxyConfig);
+    const toast = showToast(formatMessage(T.toastProbing || "Проверка {addr}:{port}...", { addr: config.address, port: config.port }), { kind: "progress" });
     try {
       const probe = await probeProxy(config);
       if (probe.ok) {
         const ipPart = probe.resolvedIp ? `, IP ${probe.resolvedIp}` : "";
-        queueMicrotask(() => setProbeStatus("success", formatMessage(T.probeAvailable, { address: probe.address, port: probe.port, ipPart })));
-        setProbeStatus("success", `TCP ${probe.address}:${probe.port} доступен${ipPart}`);
+        toast.update(formatMessage(T.probeAvailable, { address: probe.address, port: probe.port, ipPart }), "success");
       } else {
-        setProbeStatus("error", probe.error || "Проверка не прошла");
+        toast.update(probe.error || T.probeFailed, "error");
       }
     } catch (error) {
-      setProbeStatus("error", `Ошибка проверки: ${error.message}`);
+      toast.update(`${T.probeError}: ${error.message}`, "error");
     }
   });
 
@@ -632,30 +681,29 @@ function bindTopLevel() {
   });
 
   if (els.refreshHealthBtn) {
-    els.refreshHealthBtn.addEventListener("click", () => { renderHealth().catch(() => {}); });
+    els.refreshHealthBtn.addEventListener("click", () => {
+      renderHealth().catch(() => {});
+      renderStackInfo().catch(() => {});
+    });
   }
-  for (const [btn, svc] of [
-    [els.restartXrayBtn, "xray"],
-    [els.restartSingboxBtn, "singbox"],
-    [els.restartSelfhealBtn, "selfheal"]
+  for (const [btn, svc, label] of [
+    [els.restartXrayBtn, "xray", "xray"],
+    [els.restartSingboxBtn, "singbox", "sing-box"],
+    [els.restartSelfhealBtn, "selfheal", "self-heal"]
   ]) {
     if (!btn) continue;
     btn.addEventListener("click", async () => {
-      const previous = btn.textContent;
       btn.disabled = true;
-      btn.textContent = `${previous}...`;
+      const toast = showToast(formatMessage(T.toastSvcRestarting || "Перезапуск {svc}...", { svc: label }), { kind: "progress" });
       try {
         await restartService(svc);
-        btn.textContent = T.restartSvcDone;
+        toast.update(formatMessage(T.toastSvcRestarted || "{svc} перезапущен", { svc: label }), "success");
         await renderHealth().catch(() => {});
+        await renderStackInfo().catch(() => {});
       } catch (error) {
-        btn.textContent = T.restartSvcFailed;
-        alert(`${T.restartSvcFailed}: ${error.message}`);
+        toast.update(formatMessage(T.toastSvcRestartFailed || "Ошибка перезапуска {svc}: {error}", { svc: label, error: error.message }), "error");
       } finally {
-        setTimeout(() => {
-          btn.textContent = previous;
-          btn.disabled = false;
-        }, 1500);
+        btn.disabled = false;
       }
     });
   }
@@ -711,21 +759,16 @@ function bindTopLevel() {
   }
 
   els.repairRuntimeBtn.addEventListener("click", async () => {
-    const previous = els.repairRuntimeBtn.textContent;
     els.repairRuntimeBtn.disabled = true;
-    els.repairRuntimeBtn.textContent = `${T.repairBtn}...`;
+    const toast = showToast(T.toastRepairing || "Перестройка runtime...", { kind: "progress" });
     try {
       await repairRemoteRuntime();
-      els.repairRuntimeBtn.textContent = T.repairDone;
-      setTimeout(() => {
-        els.repairRuntimeBtn.textContent = previous;
-      }, 1600);
+      toast.update(T.repairDone, "success");
+      await renderHealth().catch(() => {});
+      await renderStackInfo().catch(() => {});
     } catch (error) {
-      if (isAuthError(error)) {
-        showAuthOverlay(AUTH_LOGIN_HINT);
-      }
-      alert(`${T.repairFailed}: ${error.message}`);
-      els.repairRuntimeBtn.textContent = previous;
+      if (isAuthError(error)) showAuthOverlay(AUTH_LOGIN_HINT);
+      toast.update(`${T.repairFailed}: ${error.message}`, "error");
     } finally {
       els.repairRuntimeBtn.disabled = false;
     }
@@ -744,40 +787,29 @@ function bindTopLevel() {
   });
 
   els.saveStateBtn.addEventListener("click", async () => {
-    const previous = els.saveStateBtn.textContent;
     els.saveStateBtn.disabled = true;
-    els.saveStateBtn.textContent = `${T.saveStateBtn}...`;
+    const toast = showToast(T.toastSavingState || "Сохранение профиля...", { kind: "progress" });
     try {
       await saveRemoteState();
       persistState();
-      els.saveStateBtn.textContent = T.saveStateDone;
-      setTimeout(() => {
-        els.saveStateBtn.textContent = previous;
-      }, 1400);
+      toast.update(T.saveStateDone, "success");
     } catch (error) {
-      if (isAuthError(error)) {
-        showAuthOverlay(AUTH_LOGIN_HINT);
-      }
-      alert(`${T.saveStateFailed}: ${error.message}`);
-      els.saveStateBtn.textContent = previous;
+      if (isAuthError(error)) showAuthOverlay(AUTH_LOGIN_HINT);
+      toast.update(`${T.saveStateFailed}: ${error.message}`, "error");
     } finally {
       els.saveStateBtn.disabled = false;
     }
   });
 
   els.saveApplyBtn.addEventListener("click", async () => {
-    const previous = els.saveApplyBtn.textContent;
     els.saveApplyBtn.disabled = true;
-    els.saveApplyBtn.textContent = `${T.saveApplyBtn}...`;
+    const toast = showToast(T.toastSavingApplying || "Сохранение и применение...", { kind: "progress" });
     try {
       await saveRemoteState();
       await saveRemoteOutbounds();
-
       const routingResponse = await fetch(LIVE_ROUTING_URL, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json; charset=utf-8"
-        },
+        headers: { "Content-Type": "application/json; charset=utf-8" },
         body: JSON.stringify(buildRoutingDocument(getActiveProfile()))
       });
       const routingPayload = await routingResponse.json();
@@ -785,16 +817,12 @@ function bindTopLevel() {
         throw new Error(routingResponse.status === 401 ? AUTH_REQUIRED_MESSAGE : (routingPayload.error || `HTTP ${routingResponse.status}`));
       }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      els.saveApplyBtn.textContent = T.saveApplyDone;
-      setTimeout(() => {
-        els.saveApplyBtn.textContent = previous;
-      }, 1400);
+      toast.update(T.saveApplyDone, "success");
+      await renderHealth().catch(() => {});
+      await renderStackInfo().catch(() => {});
     } catch (error) {
-      if (isAuthError(error)) {
-        showAuthOverlay(AUTH_LOGIN_HINT);
-      }
-      alert(`${T.saveApplyFailed}: ${error.message}`);
-      els.saveApplyBtn.textContent = previous;
+      if (isAuthError(error)) showAuthOverlay(AUTH_LOGIN_HINT);
+      toast.update(`${T.saveApplyFailed}: ${error.message}`, "error");
     } finally {
       els.saveApplyBtn.disabled = false;
     }
@@ -901,6 +929,198 @@ async function renderHealth() {
     const extra = row.extra ? escapeHtml(row.extra) : "";
     return `<div class="check-row ${okClass}"><span class="check-mark">${row.ok ? "✓" : "✗"}</span><span class="check-label">${escapeHtml(row.label)}</span><span class="check-extra">${extra}</span><span class="check-status">${escapeHtml(okText)}</span></div>`;
   }).join("");
+}
+
+async function fetchStackInfo() {
+  const response = await fetch(STACK_INFO_URL, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(response.status === 401 ? AUTH_REQUIRED_MESSAGE : `HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+const toastState = { container: null, nextId: 0, items: new Map() };
+
+function ensureToastContainer() {
+  if (toastState.container && document.body.contains(toastState.container)) return toastState.container;
+  const el = document.createElement("div");
+  el.className = "toast-container";
+  document.body.appendChild(el);
+  toastState.container = el;
+  return el;
+}
+
+function showToast(text, opts) {
+  opts = opts || {};
+  const kind = opts.kind || "info";
+  const id = ++toastState.nextId;
+  const persistent = kind === "progress" || opts.persistent === true;
+  const ttl = opts.ttl != null ? opts.ttl : 3200;
+
+  const container = ensureToastContainer();
+  const node = document.createElement("div");
+  node.className = `toast toast-${kind}`;
+  node.innerHTML = `<span class="toast-icon" aria-hidden="true"></span><span class="toast-text"></span>`;
+  node.querySelector(".toast-text").textContent = text;
+  container.appendChild(node);
+
+  let timer;
+  let currentKind = kind;
+  const dismiss = () => {
+    if (timer) clearTimeout(timer);
+    node.classList.add("toast-dismissing");
+    setTimeout(() => { node.remove(); toastState.items.delete(id); }, 220);
+  };
+  const handle = {
+    id,
+    update(newText, newKind) {
+      if (newText != null) node.querySelector(".toast-text").textContent = newText;
+      if (newKind && newKind !== currentKind) {
+        node.classList.remove(`toast-${currentKind}`);
+        node.classList.add(`toast-${newKind}`);
+        currentKind = newKind;
+        if (newKind !== "progress") {
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(dismiss, ttl);
+        }
+      }
+    },
+    dismiss
+  };
+  toastState.items.set(id, handle);
+  if (!persistent) timer = setTimeout(dismiss, ttl);
+  node.addEventListener("click", dismiss);
+  return handle;
+}
+
+function fmtUptime(sec) {
+  if (!sec || sec < 0) return "—";
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function fmtBytesKb(kb) {
+  if (!kb || kb <= 0) return "—";
+  if (kb >= 1024 * 1024) return `${(kb / 1024 / 1024).toFixed(1)} GB`;
+  if (kb >= 1024) return `${(kb / 1024).toFixed(0)} MB`;
+  return `${kb} KB`;
+}
+
+async function renderStackInfo() {
+  if (!els.stackInfo) return;
+  let payload;
+  try {
+    payload = await fetchStackInfo();
+  } catch (error) {
+    els.stackInfo.innerHTML = `<div class="health-error">${escapeHtml(T.stackInfoFetchFailed || "Failed to load stack info")}: ${escapeHtml(error.message)}</div>`;
+    return;
+  }
+  const v = payload.versions || {};
+  const vpn = payload.vpn || {};
+  const net = payload.network || {};
+  const xk = payload.xkeen || {};
+  const rt = payload.runtime || {};
+  const r = payload.resources || {};
+
+  const policyLabel = xk.policyDescription
+    ? `${xk.policyName || "?"} · ${xk.policyDescription}`
+    : (xk.policyName || "—");
+  const memTxt = (r.memAvailKb && r.memTotalKb)
+    ? `${fmtBytesKb(r.memAvailKb)} свободно из ${fmtBytesKb(r.memTotalKb)}`
+    : "—";
+  const ctTxt = r.conntrackMax ? `${r.conntrackCount} / ${r.conntrackMax}` : "—";
+  const fdTxt = r.xrayFdLimit ? `${r.xrayFd} / ${r.xrayFdLimit}` : "—";
+
+  const sections = [
+    {
+      title: T.stackVersions || "Версии",
+      rows: [
+        [T.stackXrayVer || "xray", v.xray || "—"],
+        [T.stackSingboxVer || "sing-box", v.singbox || "—"],
+        [T.stackKernel || "ядро", `${v.kernel || ""} (${v.hostname || ""})`.trim()],
+        [T.stackUptime || "uptime", fmtUptime(v.uptimeSec)]
+      ]
+    },
+    {
+      title: T.stackVpnSection || "VPN",
+      rows: [
+        [T.stackVpnHost || "сервер", vpn.host ? `${vpn.host}:${vpn.port}` : "—"],
+        [T.stackVpnExitIp || "exit IP", vpn.exitIp || "—"],
+        [T.stackVpnSni || "Reality SNI", vpn.sni || "—"]
+      ]
+    },
+    {
+      title: T.stackNetSection || "Сеть",
+      rows: [
+        [T.stackWanIface || "WAN-интерфейс", net.wanIface || "—"],
+        [T.stackWanIp || "WAN IP", net.wanIp || "—"],
+        [T.stackGw || "Default gateway", net.gateway || "—"],
+        [T.stackLan || "LAN сеть", net.lanNet || "—"]
+      ]
+    },
+    {
+      title: T.stackXkeenSection || "xkeen",
+      rows: [
+        [T.stackPolicy || "policy", policyLabel],
+        [T.stackMark || "mark", xk.mark ? `0x${xk.mark}` : "—"],
+        [T.stackTproxyPort || "TPROXY UDP", String(xk.tproxyUdp || "—")],
+        [T.stackRedirectPort || "REDIRECT TCP", String(xk.redirectTcp || "—")],
+        [T.stackSsRelay || "SS-relay", xk.ssRelay || "—"]
+      ]
+    },
+    {
+      title: T.stackRuntimeSection || "Runtime",
+      rows: [
+        [T.stackSelfhealInterval || "self-heal интервал", `${rt.selfhealIntervalSec || 0} сек`],
+        [T.stackLogRotate || "ротация логов", T.stackLogRotateValue || "раз в сутки"],
+        [T.stackBackupRetention || "хранение бэкапов", formatMessage(T.stackBackupRetentionValue || "{n} последних копий", { n: rt.backupRetention || 0 })],
+        [T.stackFdThresh || "FD warn / critical", `${rt.fdWarn || 0} / ${rt.fdCritical || 0}`]
+      ]
+    },
+    {
+      title: T.stackResourcesSection || "Ресурсы",
+      rows: [
+        [T.stackMem || "память", memTxt],
+        [T.stackConntrack || "conntrack", ctTxt],
+        [T.stackXrayFd || "xray FD", fdTxt]
+      ]
+    }
+  ];
+
+  els.stackInfo.innerHTML = sections.map((section) => `
+    <div class="stack-section">
+      <div class="stack-section-title">${escapeHtml(section.title)}</div>
+      <dl class="stack-dl">
+        ${section.rows.map(([k, v]) => `
+          <dt>${escapeHtml(k)}</dt>
+          <dd><span class="stack-value" title="${escapeHtml(T.stackCopyHint || "Кликни — скопировать")}">${escapeHtml(String(v))}</span></dd>
+        `).join("")}
+      </dl>
+    </div>
+  `).join("");
+
+  els.stackInfo.querySelectorAll(".stack-value").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const text = node.textContent || "";
+      if (!text || text === "—") return;
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+        }
+        const original = node.textContent;
+        node.classList.add("stack-value-copied");
+        node.textContent = T.logsCopiedDone || "Скопировано";
+        setTimeout(() => {
+          node.classList.remove("stack-value-copied");
+          node.textContent = original;
+        }, 1100);
+      } catch (_e) { /* noop */ }
+    });
+  });
 }
 
 async function fetchHealth() {
@@ -1111,23 +1331,43 @@ function renderGroups() {
     domainsEl.addEventListener("input", () => updateGroup(group.id, { domains: splitLinesOrCsv(domainsEl.value) }));
     cidrsEl.addEventListener("input", () => updateGroup(group.id, { cidrs: splitLinesOrCsv(cidrsEl.value) }));
     domainsEl.addEventListener("blur", () => {
-      const before = splitLinesOrCsv(domainsEl.value);
-      const after = dedupeDomainsList(before);
-      const removed = before.length - after.length;
-      if (removed > 0) {
+      const raw = splitLinesOrCsv(domainsEl.value);
+      const part = partitionList(raw, looksLikeDomain);
+      const after = dedupeDomainsList(part.valid);
+      const dedupRemoved = part.valid.length - after.length;
+      const changed = (after.length !== raw.length) || part.invalid.length > 0;
+      if (changed) {
         domainsEl.value = after.join("\n");
         updateGroup(group.id, { domains: after });
-        showFieldFlash(domainsEl, formatMessage(T.dedupDomainsRemoved, { n: removed }));
+        if (part.invalid.length > 0) {
+          showToast(
+            formatMessage(T.toastInvalidDomains || "Удалены не-домены: {list}", { list: part.invalid.slice(0, 3).join(", ") + (part.invalid.length > 3 ? "…" : "") }),
+            { kind: "error", ttl: 4500 }
+          );
+        }
+        if (dedupRemoved > 0) {
+          showFieldFlash(domainsEl, formatMessage(T.dedupDomainsRemoved, { n: dedupRemoved }));
+        }
       }
     });
     cidrsEl.addEventListener("blur", () => {
-      const before = splitLinesOrCsv(cidrsEl.value);
-      const after = dedupeCidrsList(before);
-      const removed = before.length - after.length;
-      if (removed > 0) {
+      const raw = splitLinesOrCsv(cidrsEl.value);
+      const part = partitionList(raw, looksLikeIpOrCidr);
+      const after = dedupeCidrsList(part.valid);
+      const dedupRemoved = part.valid.length - after.length;
+      const changed = (after.length !== raw.length) || part.invalid.length > 0;
+      if (changed) {
         cidrsEl.value = after.join("\n");
         updateGroup(group.id, { cidrs: after });
-        showFieldFlash(cidrsEl, formatMessage(T.dedupCidrsRemoved, { n: removed }));
+        if (part.invalid.length > 0) {
+          showToast(
+            formatMessage(T.toastInvalidCidrs || "Удалены не-IP/CIDR: {list}", { list: part.invalid.slice(0, 3).join(", ") + (part.invalid.length > 3 ? "…" : "") }),
+            { kind: "error", ttl: 4500 }
+          );
+        }
+        if (dedupRemoved > 0) {
+          showFieldFlash(cidrsEl, formatMessage(T.dedupCidrsRemoved, { n: dedupRemoved }));
+        }
       }
     });
     removeBtn.addEventListener("click", () => {
@@ -1643,6 +1883,33 @@ function escapeHtml(value) {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+// True if string looks like a valid domain (one or more labels, dots,
+// no IP-like all-numeric labels, no slashes, no spaces).
+const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+function looksLikeDomain(str) {
+  const s = String(str || "").trim().toLowerCase();
+  if (!s) return false;
+  if (/^\d+\.\d+\.\d+\.\d+(\/\d+)?$/.test(s)) return false;
+  return DOMAIN_RE.test(s);
+}
+// True if string is a valid IP or IP/mask CIDR.
+function looksLikeIpOrCidr(str) {
+  return parseCidrEntry(str) !== null;
+}
+
+// Split a list into {valid, invalid} based on a predicate.
+function partitionList(list, isValid) {
+  const valid = [];
+  const invalid = [];
+  for (const entry of (list || [])) {
+    const trimmed = String(entry || "").trim();
+    if (!trimmed) continue;
+    if (isValid(trimmed)) valid.push(trimmed);
+    else invalid.push(trimmed);
+  }
+  return { valid, invalid };
 }
 
 // Dedupe domains: drop subdomains already covered by a parent domain

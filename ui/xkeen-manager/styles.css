@@ -503,6 +503,16 @@ button.danger-solid {
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
+.logs-action-wrap {
+  display: grid;
+  gap: 4px;
+}
+.logs-action-spacer {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  visibility: hidden;
+}
 
 .log-preview-wrap {
   position: relative;
@@ -573,6 +583,134 @@ button.danger-solid {
   height: 36px;
   pointer-events: none;
   background: linear-gradient(180deg, rgba(10, 18, 27, 0.65), transparent);
+}
+
+.toast-container {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: calc(100vw - 40px);
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 240px;
+  max-width: 380px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(13, 22, 33, 0.94);
+  backdrop-filter: blur(8px);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+  animation: toastSlideIn 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.toast.toast-dismissing { animation: toastSlideOut 200ms forwards; }
+@keyframes toastSlideIn  { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes toastSlideOut { to { opacity: 0; transform: translateX(20px); } }
+@keyframes toastSpin     { to { transform: rotate(360deg); } }
+.toast-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  font-weight: 700;
+  font-size: 14px;
+}
+.toast-text { flex: 1 1 auto; word-break: break-word; }
+.toast-info    { border-color: rgba(79, 195, 161, 0.45); }
+.toast-info    .toast-icon::before { content: "i"; color: var(--accent); font-style: italic; }
+.toast-progress { border-color: rgba(79, 195, 161, 0.45); }
+.toast-progress .toast-icon::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(79, 195, 161, 0.30);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: toastSpin 800ms linear infinite;
+}
+.toast-success {
+  border-color: rgba(79, 195, 161, 0.65);
+  background: linear-gradient(180deg, rgba(79, 195, 161, 0.20), rgba(79, 195, 161, 0.06)), rgba(13, 22, 33, 0.94);
+}
+.toast-success .toast-icon::before { content: "✓"; color: #4fd6a3; }
+.toast-error {
+  border-color: rgba(232, 100, 100, 0.65);
+  background: linear-gradient(180deg, rgba(232, 100, 100, 0.22), rgba(232, 100, 100, 0.06)), rgba(13, 22, 33, 0.94);
+}
+.toast-error   .toast-icon::before { content: "✗"; color: #ff8e8e; }
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
+  .toast-progress .toast-icon::before { animation: none; border-top-color: rgba(79,195,161,0.30); }
+}
+
+.stack-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  margin: 4px 0 16px;
+}
+.stack-section {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
+}
+.stack-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 8px;
+}
+.stack-dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 14px;
+  row-gap: 6px;
+  margin: 0;
+  font-size: 13px;
+}
+.stack-dl dt {
+  color: var(--muted);
+  font-weight: 500;
+  min-width: 0;
+}
+.stack-dl dd {
+  margin: 0;
+  text-align: right;
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Mono", Consolas, "Roboto Mono", monospace;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+.stack-value {
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 5px;
+  transition: background 140ms ease, color 140ms ease;
+}
+.stack-value:hover {
+  background: rgba(79, 195, 161, 0.12);
+  color: var(--accent);
+}
+.stack-value-copied {
+  background: rgba(79, 195, 161, 0.20) !important;
+  color: var(--accent) !important;
 }
 
 .field-flash {

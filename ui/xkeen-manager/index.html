@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AntiGoblin</title>
-  <link rel="stylesheet" href="./styles.css?v=48">
+  <link rel="stylesheet" href="./styles.css?v=50">
 </head>
 <body>
     <div id="authOverlay" class="auth-overlay" hidden>
@@ -193,6 +193,7 @@
           </div>
           <div id="healthBadges" class="health-badges"></div>
           <div id="healthChecks" class="health-checks"></div>
+          <div id="stackInfo" class="stack-info"></div>
           <div class="hero-actions compact-actions service-actions">
             <button id="restartXrayBtn" type="button">&#1055;&#1077;&#1088;&#1077;&#1079;&#1072;&#1087;&#1091;&#1089;&#1090;&#1080;&#1090;&#1100; xray</button>
             <button id="restartSingboxBtn" type="button">&#1055;&#1077;&#1088;&#1077;&#1079;&#1072;&#1087;&#1091;&#1089;&#1090;&#1080;&#1090;&#1100; sing-box</button>
@@ -220,7 +221,10 @@
                 <option value="1000">1000</option>
               </select>
             </label>
-            <button id="loadLogsBtn" type="button">&#1047;&#1072;&#1075;&#1088;&#1091;&#1079;&#1080;&#1090;&#1100;</button>
+            <div class="logs-action-wrap">
+              <span class="logs-action-spacer" aria-hidden="true">&nbsp;</span>
+              <button id="loadLogsBtn" type="button">&#1047;&#1072;&#1075;&#1088;&#1091;&#1079;&#1080;&#1090;&#1100;</button>
+            </div>
           </div>
           <div class="log-preview-wrap" id="logsPreviewWrap" hidden>
             <button id="logsCopyBtn" type="button" class="log-copy-btn" aria-label="&#1057;&#1082;&#1086;&#1087;&#1080;&#1088;&#1086;&#1074;&#1072;&#1090;&#1100; &#1083;&#1086;&#1075;">&#1057;&#1082;&#1086;&#1087;&#1080;&#1088;&#1086;&#1074;&#1072;&#1090;&#1100;</button>
@@ -253,6 +257,6 @@
     </main>
   </div>
 
-  <script charset="utf-8" src="./app.js?v=48"></script>
+  <script charset="utf-8" src="./app.js?v=50"></script>
 </body>
 </html>
