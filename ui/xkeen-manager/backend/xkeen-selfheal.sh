@@ -38,6 +38,7 @@ XRAY_REMOTE_ORPHAN_FIN_WAIT_COUNT=0
 XRAY_REMOTE_FIN_WAIT_WARN_THRESHOLD=20
 XRAY_REMOTE_FIN_WAIT_CRITICAL_THRESHOLD=50
 XRAY_REMOTE_FIN_WAIT_STREAK_REQUIRED=3
+XRAY_REMOTE_ORPHAN_FIN_CRITICAL_THRESHOLD=30
 MEM_AVAILABLE_KB=0
 MEM_TOTAL_KB=0
 CONNTRACK_COUNT=0
@@ -234,6 +235,10 @@ capture_health_metrics() {
     HEALTH_STATUS="vpn_fin_warn"
   fi
 
+  if [ "${XRAY_REMOTE_ORPHAN_FIN_WAIT_COUNT:-0}" -ge "$XRAY_REMOTE_ORPHAN_FIN_CRITICAL_THRESHOLD" ]; then
+    HEALTH_STATUS="vpn_orphan_fin_critical"
+    return 0
+  fi
   if [ "${XRAY_REMOTE_ORPHAN_FIN_WAIT_COUNT:-0}" -ge "$XRAY_REMOTE_FIN_WAIT_WARN_THRESHOLD" ] && [ "$HEALTH_STATUS" = "ok" ]; then
     HEALTH_STATUS="vpn_orphan_fin_warn"
   fi
@@ -461,6 +466,9 @@ check_runtime() {
   if [ "$HEALTH_STATUS" = "vpn_fin_critical" ] && [ "${XRAY_REMOTE_FIN_WAIT_STREAK:-0}" -ge "$XRAY_REMOTE_FIN_WAIT_STREAK_REQUIRED" ]; then
     needs_repair=1
   fi
+  if [ "$HEALTH_STATUS" = "vpn_orphan_fin_critical" ]; then
+    needs_repair=1
+  fi
 }
 
 repair_hooks() {
@@ -513,7 +521,7 @@ restart_xray() {
   health_log "action=xray_restart reason=$HEALTH_STATUS pid=${XRAY_PID:-0} fd=${XRAY_FD_COUNT:-0}/${XRAY_FD_LIMIT:-0} mem_kb=${MEM_AVAILABLE_KB:-0}/${MEM_TOTAL_KB:-0} conntrack=${CONNTRACK_COUNT:-0}/${CONNTRACK_MAX:-0} vpn_remote=${XRAY_REMOTE_HOST:-unknown}:${XRAY_REMOTE_PORT:-0} vpn_ip=${XRAY_REMOTE_IP:-unknown} vpn_sock=${XRAY_REMOTE_ESTABLISHED_COUNT:-0}/${XRAY_REMOTE_FIN_WAIT_COUNT:-0}/${XRAY_REMOTE_TOTAL_COUNT:-0} vpn_orphan_fin=${XRAY_REMOTE_ORPHAN_FIN_WAIT_COUNT:-0}"
 
   case "$HEALTH_STATUS" in
-    fd_critical|fd_warn|vpn_fin_critical|vpn_fin_warn|vpn_orphan_fin_warn)
+    fd_critical|fd_warn|vpn_fin_critical|vpn_fin_warn|vpn_orphan_fin_warn|vpn_orphan_fin_critical)
       dump_xray_diagnostics
       ;;
   esac
