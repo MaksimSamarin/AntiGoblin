@@ -62,20 +62,20 @@ apply_all() {
   lower_sysctl net.ipv4.tcp_keepalive_intvl 30
   lower_sysctl net.ipv4.tcp_keepalive_probes 3
 
-  # Drop FIN_WAIT2 sockets after 30s instead of 60s. Most well-behaved
-  # peers close cleanly; this just stops the long tail from piling up.
-  lower_sysctl net.ipv4.tcp_fin_timeout 30
+  # Drop FIN_WAIT2 sockets faster. VPN tunnel connections that the peer
+  # never properly closes (orphan FIN) should be reaped in ~10s rather
+  # than 30s to prevent pileup when many short-lived flows close at once.
+  lower_sysctl net.ipv4.tcp_fin_timeout 10
 
   # Orphan sockets retry up to 2 times instead of the kernel default
   # (typically 7-15). Speeds up cleanup after xray restart.
   apply_sysctl net.ipv4.tcp_orphan_retries 2
 
-  # Conntrack timeouts for closed connections. Default 120s for
-  # FIN_WAIT and TIME_WAIT means each flow occupies a conntrack slot
-  # for 2 minutes after it ended. Halve that.
-  lower_sysctl net.netfilter.nf_conntrack_tcp_timeout_fin_wait 60
-  lower_sysctl net.netfilter.nf_conntrack_tcp_timeout_time_wait 60
-  lower_sysctl net.netfilter.nf_conntrack_tcp_timeout_close_wait 30
+  # Conntrack timeouts for closed connections. Tighten FIN_WAIT and
+  # TIME_WAIT so slots are freed quickly after VPN tunnel teardown.
+  lower_sysctl net.netfilter.nf_conntrack_tcp_timeout_fin_wait 15
+  lower_sysctl net.netfilter.nf_conntrack_tcp_timeout_time_wait 15
+  lower_sysctl net.netfilter.nf_conntrack_tcp_timeout_close_wait 10
   lower_sysctl net.netfilter.nf_conntrack_tcp_timeout_last_ack 15
 }
 
