@@ -408,6 +408,7 @@ const els = {
   healthTitle: document.getElementById("healthTitle"),
   refreshHealthBtn: document.getElementById("refreshHealthBtn"),
   healthBadges: document.getElementById("healthBadges"),
+  exitIpRow: document.getElementById("exitIpRow"),
   healthChecks: document.getElementById("healthChecks"),
   stackInfo: document.getElementById("stackInfo"),
   restartXrayBtn: document.getElementById("restartXrayBtn"),
@@ -472,6 +473,7 @@ async function bootstrap() {
     persistAndRender();
     renderHealth().catch(() => {});
     renderStackInfo().catch(() => {});
+    startExitIpCheck();
   } catch (error) {
     pushDebug(`bootstrap failed: ${error.message}`);
     if (isAuthError(error)) {
@@ -1012,6 +1014,78 @@ async function renderHealth() {
     const extra = row.extra ? escapeHtml(row.extra) : "";
     return `<div class="check-row ${okClass}"><span class="check-mark">${row.ok ? "✓" : "✗"}</span><span class="check-label">${escapeHtml(row.label)}</span><span class="check-extra">${extra}</span><span class="check-status">${escapeHtml(okText)}</span></div>`;
   }).join("");
+}
+
+// Exit IP check — runs every 60s, logs last 20 results
+const EXIT_IP_LOG = [];
+const EXIT_IP_MAX_LOG = 20;
+let exitIpTimer = null;
+let lastKnownVpnIp = null;
+
+async function checkExitIp() {
+  if (!els.exitIpRow) return;
+  const ts = new Date().toLocaleTimeString();
+  let ip = null;
+  let err = null;
+  try {
+    const res = await fetch("https://api.ipify.org?format=json", { cache: "no-cache", signal: AbortSignal.timeout(8000) });
+    const json = await res.json();
+    ip = json.ip || null;
+  } catch (e) {
+    err = e.message || "timeout";
+  }
+
+  // Resolve VPN server IP from stack-info cache if available
+  if (!lastKnownVpnIp) {
+    try {
+      const si = await fetch(STACK_INFO_URL, { cache: "no-store" }).then(r => r.json());
+      lastKnownVpnIp = si?.vpn?.exitIp || null;
+    } catch (_) {}
+  }
+
+  const entry = { ts, ip, err };
+  EXIT_IP_LOG.unshift(entry);
+  if (EXIT_IP_LOG.length > EXIT_IP_MAX_LOG) EXIT_IP_LOG.pop();
+
+  renderExitIpRow();
+}
+
+function renderExitIpRow() {
+  if (!els.exitIpRow) return;
+  const latest = EXIT_IP_LOG[0];
+  if (!latest) { els.exitIpRow.innerHTML = ""; return; }
+
+  const isVpn = lastKnownVpnIp && latest.ip && latest.ip === lastKnownVpnIp;
+  const isErr = !!latest.err;
+  const isDirect = !isErr && !isVpn && lastKnownVpnIp;
+
+  const statusCls = isErr ? "exit-ip-err" : isVpn ? "exit-ip-vpn" : isDirect ? "exit-ip-direct" : "exit-ip-unknown";
+  const statusIcon = isErr ? "✗" : isVpn ? "✓" : isDirect ? "!" : "?";
+  const statusText = isErr ? `ошибка: ${latest.err}` : isVpn ? `VPN (${latest.ip})` : isDirect ? `прямой (${latest.ip})` : (latest.ip || "—");
+
+  const logRows = EXIT_IP_LOG.map((e, i) => {
+    const cls = e.err ? "exit-log-err" : (lastKnownVpnIp && e.ip === lastKnownVpnIp) ? "exit-log-vpn" : (lastKnownVpnIp && e.ip) ? "exit-log-direct" : "";
+    const dot = e.err ? "✗" : (lastKnownVpnIp && e.ip === lastKnownVpnIp) ? "✓" : "!";
+    return `<div class="exit-log-row ${cls}"><span class="exit-log-dot">${dot}</span><span class="exit-log-ts">${escapeHtml(e.ts)}</span><span class="exit-log-ip">${escapeHtml(e.ip || e.err || "—")}</span></div>`;
+  }).join("");
+
+  els.exitIpRow.innerHTML = `
+    <div class="exit-ip-header">
+      <div class="exit-ip-current ${statusCls}">
+        <span class="exit-ip-icon">${statusIcon}</span>
+        <span class="exit-ip-label">exit IP</span>
+        <span class="exit-ip-value">${escapeHtml(statusText)}</span>
+        <span class="exit-ip-time">${escapeHtml(latest.ts)}</span>
+      </div>
+      ${lastKnownVpnIp ? `<span class="exit-ip-expected">VPN: ${escapeHtml(lastKnownVpnIp)}</span>` : ""}
+    </div>
+    ${EXIT_IP_LOG.length > 1 ? `<div class="exit-ip-log">${logRows}</div>` : ""}
+  `;
+}
+
+function startExitIpCheck() {
+  checkExitIp();
+  exitIpTimer = setInterval(checkExitIp, 60000);
 }
 
 async function fetchStackInfo() {

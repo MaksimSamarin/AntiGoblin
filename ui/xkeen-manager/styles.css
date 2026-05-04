@@ -454,6 +454,68 @@ button.danger-solid {
 .health-loading, .health-error { color: var(--muted); padding: 8px 0; font-size: 13px; }
 .health-error { color: #f3c8c8; }
 
+.exit-ip-row {
+  margin: 10px 0 4px;
+}
+.exit-ip-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.exit-ip-current {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  border: 1px solid;
+  flex: 1;
+  min-width: 180px;
+}
+.exit-ip-vpn    { border-color: rgba(79,195,161,0.5); background: rgba(79,195,161,0.08); }
+.exit-ip-direct { border-color: rgba(232,100,100,0.5); background: rgba(232,100,100,0.08); }
+.exit-ip-err    { border-color: rgba(150,150,150,0.3); background: rgba(150,150,150,0.05); }
+.exit-ip-unknown{ border-color: rgba(230,180,80,0.4); background: rgba(230,180,80,0.06); }
+.exit-ip-icon { font-size: 14px; }
+.exit-ip-vpn .exit-ip-icon    { color: #4fd6a3; }
+.exit-ip-direct .exit-ip-icon { color: #e86464; }
+.exit-ip-err .exit-ip-icon    { color: #888; }
+.exit-ip-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+.exit-ip-value { font-weight: 600; color: var(--text); flex: 1; }
+.exit-ip-vpn .exit-ip-value    { color: #d6f3e4; }
+.exit-ip-direct .exit-ip-value { color: #f7d2d2; }
+.exit-ip-time { font-size: 11px; color: var(--muted); }
+.exit-ip-expected { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.exit-ip-log {
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  max-height: 140px;
+  overflow-y: auto;
+}
+.exit-log-row {
+  display: grid;
+  grid-template-columns: 16px 1fr 1fr;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.exit-log-row:last-child { border-bottom: none; }
+.exit-log-vpn    { background: rgba(79,195,161,0.05); }
+.exit-log-direct { background: rgba(232,100,100,0.05); }
+.exit-log-err    { background: rgba(150,150,150,0.03); }
+.exit-log-dot { text-align: center; }
+.exit-log-vpn .exit-log-dot    { color: #4fd6a3; }
+.exit-log-direct .exit-log-dot { color: #e86464; }
+.exit-log-err .exit-log-dot    { color: #888; }
+.exit-log-ts { color: var(--muted); }
+.exit-log-ip { color: var(--text); }
+
 .health-checks {
   display: grid;
   gap: 6px;
