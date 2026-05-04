@@ -1061,7 +1061,7 @@ function renderExitIpRow() {
 
   const statusCls = isErr ? "exit-ip-err" : isVpn ? "exit-ip-vpn" : isDirect ? "exit-ip-direct" : "exit-ip-unknown";
   const statusIcon = isErr ? "✗" : isVpn ? "✓" : isDirect ? "!" : "?";
-  const statusText = isErr ? `ошибка: ${latest.err}` : isVpn ? `VPN (${latest.ip})` : isDirect ? `прямой (${latest.ip})` : (latest.ip || "—");
+  const statusText = isErr ? `ошибка: ${latest.err}` : isVpn ? `VPN (${latest.ip})` : isDirect ? `прямой (${latest.ip}) — добавь api.ipify.org в VPN-группу` : (latest.ip || "—");
 
   const logRows = EXIT_IP_LOG.map((e, i) => {
     const cls = e.err ? "exit-log-err" : (lastKnownVpnIp && e.ip === lastKnownVpnIp) ? "exit-log-vpn" : (lastKnownVpnIp && e.ip) ? "exit-log-direct" : "";
