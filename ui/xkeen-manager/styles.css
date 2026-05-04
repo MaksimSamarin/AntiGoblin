@@ -361,8 +361,49 @@ button.danger-solid {
   border-radius: 50%;
   background: radial-gradient(circle, rgba(255,255,255,0.6) 0 30%, transparent 30%);
 }
+.health-badge.health-warn {
+  border-color: rgba(230, 180, 80, 0.55);
+  background: rgba(230, 180, 80, 0.06);
+}
+.health-badge.health-warn .health-dot {
+  background: #e6b450;
+  animation: pulse-warn 2s ease-in-out infinite;
+}
+.health-badge.health-warn .health-name { color: #f5e4b0; }
+.health-badge.health-warn .health-status { color: #cfa060; }
+@keyframes pulse-warn {
+  0% { box-shadow: 0 0 0 0 rgba(230, 180, 80, 0.5); }
+  70% { box-shadow: 0 0 0 8px rgba(230, 180, 80, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(230, 180, 80, 0); }
+}
+.health-banner {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.health-banner-warn {
+  background: rgba(230, 180, 80, 0.15);
+  border: 1px solid rgba(230, 180, 80, 0.4);
+  color: #e6b450;
+}
+.health-banner-critical {
+  background: rgba(232, 100, 100, 0.15);
+  border: 1px solid rgba(232, 100, 100, 0.4);
+  color: #e86464;
+}
+.health-banner-icon { font-size: 15px; }
+.health-metric { font-variant-numeric: tabular-nums; }
+.metric-warn { color: #e6b450 !important; }
+.metric-crit { color: #e86464 !important; }
 @media (prefers-reduced-motion: reduce) {
   .health-badge.health-ok .health-dot { animation: none; }
+  .health-badge.health-warn .health-dot { animation: none; }
 }
 @keyframes pulse-ok {
   0% { box-shadow: 0 0 0 0 rgba(79, 214, 163, 0.5); }

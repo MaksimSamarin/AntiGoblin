@@ -175,6 +175,74 @@ emit_health() {
     BYPASS_IPSET_SIZE="$(ipset list xkeen_bypass 2>/dev/null | /opt/bin/awk '/^Members:/ { m=1; next } m && NF { c++ } END { print c+0 }')"
   fi
 
+  # FD count
+  XRAY_FD=0
+  XRAY_FD_LIMIT=0
+  if [ -n "$XRAY_PID" ] && [ -d "/proc/$XRAY_PID/fd" ]; then
+    XRAY_FD="$(ls "/proc/$XRAY_PID/fd" 2>/dev/null | wc -l | tr -d ' ')"
+    XRAY_FD_LIMIT="$(grep 'Max open files' "/proc/$XRAY_PID/limits" 2>/dev/null | /opt/bin/awk '{ print $4; exit }')"
+    case "$XRAY_FD_LIMIT" in ''|unlimited) XRAY_FD_LIMIT=0 ;; esac
+  fi
+  case "$XRAY_FD"       in ''|*[!0-9]*) XRAY_FD=0 ;; esac
+  case "$XRAY_FD_LIMIT" in ''|*[!0-9]*) XRAY_FD_LIMIT=0 ;; esac
+
+  # Conntrack
+  CT_COUNT="$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)"
+  CT_MAX="$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)"
+  case "$CT_COUNT" in ''|*[!0-9]*) CT_COUNT=0 ;; esac
+  case "$CT_MAX"   in ''|*[!0-9]*) CT_MAX=0 ;; esac
+
+  # VPN socket metrics
+  VPN_HOST=""
+  VPN_PORT=0
+  VPN_IP=""
+  VPN_ESTABLISHED=0
+  VPN_FIN_WAIT=0
+  VPN_ORPHAN_FIN=0
+  VPN_TOTAL=0
+  if [ -f /opt/etc/xray/configs/04_outbounds.json ] && command -v /opt/bin/jq >/dev/null 2>&1; then
+    VPN_HOST="$(/opt/bin/jq -r '.outbounds[]?|select(.tag=="vless-reality")|.settings.vnext[0].address // ""' /opt/etc/xray/configs/04_outbounds.json 2>/dev/null | head -1)"
+    VPN_PORT="$(/opt/bin/jq -r '.outbounds[]?|select(.tag=="vless-reality")|.settings.vnext[0].port // 0' /opt/etc/xray/configs/04_outbounds.json 2>/dev/null | head -1)"
+  fi
+  case "$VPN_PORT" in ''|*[!0-9]*) VPN_PORT=0 ;; esac
+  if [ -n "$VPN_HOST" ] && [ "$VPN_PORT" -gt 0 ]; then
+    VPN_IP="$(nslookup "$VPN_HOST" 2>/dev/null | /opt/bin/awk '/^Name:/{seen=1;next} seen&&/^Address [0-9]+:/{print $3;exit} seen&&/^Address:/{print $2;exit}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)"
+  fi
+  if [ -n "$XRAY_PID" ] && [ -n "$VPN_IP" ] && [ "$VPN_PORT" -gt 0 ]; then
+    SOCK_LINES="$(netstat -anp 2>/dev/null | grep "${XRAY_PID}/xray" | grep "${VPN_IP}:${VPN_PORT}")"
+    VPN_TOTAL="$(printf '%s\n' "$SOCK_LINES" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+    VPN_ESTABLISHED="$(printf '%s\n' "$SOCK_LINES" | grep -c 'ESTABLISHED' || true)"
+    VPN_FIN_WAIT="$(printf '%s\n' "$SOCK_LINES" | grep -cE 'FIN_WAIT1|FIN_WAIT2' || true)"
+    VPN_ORPHAN_FIN="$(netstat -anp 2>/dev/null | grep "${VPN_IP}:${VPN_PORT}" | grep -E 'FIN_WAIT1|FIN_WAIT2' | grep -c '[[:space:]]-[[:space:]]*$' || true)"
+  fi
+  case "$VPN_ESTABLISHED" in ''|*[!0-9]*) VPN_ESTABLISHED=0 ;; esac
+  case "$VPN_FIN_WAIT"    in ''|*[!0-9]*) VPN_FIN_WAIT=0 ;; esac
+  case "$VPN_ORPHAN_FIN"  in ''|*[!0-9]*) VPN_ORPHAN_FIN=0 ;; esac
+  case "$VPN_TOTAL"       in ''|*[!0-9]*) VPN_TOTAL=0 ;; esac
+
+  # Compute health status (mirrors selfheal thresholds)
+  HEALTH_STATUS="ok"
+  if [ -z "$XRAY_PID" ]; then
+    HEALTH_STATUS="xray_down"
+  elif [ "$XRAY_FD" -ge 600 ]; then
+    HEALTH_STATUS="fd_critical"
+  elif [ "$VPN_ORPHAN_FIN" -ge 30 ]; then
+    HEALTH_STATUS="vpn_orphan_fin_critical"
+  elif [ "$VPN_FIN_WAIT" -ge 50 ]; then
+    HEALTH_STATUS="vpn_fin_critical"
+  elif [ "$XRAY_FD" -ge 400 ]; then
+    HEALTH_STATUS="fd_warn"
+  elif [ "$VPN_ORPHAN_FIN" -ge 20 ]; then
+    HEALTH_STATUS="vpn_orphan_fin_warn"
+  elif [ "$VPN_FIN_WAIT" -ge 20 ]; then
+    HEALTH_STATUS="vpn_fin_warn"
+  fi
+  if [ "$CT_MAX" -gt 0 ]; then
+    CT_PCT=$(( CT_COUNT * 100 / CT_MAX ))
+    if [ "$CT_PCT" -ge 95 ] && [ "$HEALTH_STATUS" = "ok" ]; then HEALTH_STATUS="conntrack_critical"; fi
+    if [ "$CT_PCT" -ge 85 ] && [ "$HEALTH_STATUS" = "ok" ]; then HEALTH_STATUS="conntrack_warn"; fi
+  fi
+
   XRAY_RUN=$([ -n "$XRAY_PID" ] && printf 'true' || printf 'false')
   SB_RUN=$([ -n "$SB_PID" ] && printf 'true' || printf 'false')
   SH_RUN=$([ -n "$SELFHEAL_PID" ] && printf 'true' || printf 'false')
@@ -195,8 +263,19 @@ emit_health() {
     --argjson bypass_ipset_ok "$BYPASS_IPSET_OK" \
     --argjson udp_ipset_size "$UDP_IPSET_SIZE" \
     --argjson bypass_ipset_size "$BYPASS_IPSET_SIZE" \
+    --argjson xray_fd "$XRAY_FD" \
+    --argjson xray_fd_limit "$XRAY_FD_LIMIT" \
+    --argjson ct_count "$CT_COUNT" \
+    --argjson ct_max "$CT_MAX" \
+    --argjson vpn_established "$VPN_ESTABLISHED" \
+    --argjson vpn_fin_wait "$VPN_FIN_WAIT" \
+    --argjson vpn_orphan_fin "$VPN_ORPHAN_FIN" \
+    --argjson vpn_total "$VPN_TOTAL" \
+    --arg vpn_host "${VPN_HOST:-}" \
+    --arg health_status "$HEALTH_STATUS" \
     '{
       ok: true,
+      healthStatus: $health_status,
       services: {
         xray:    { running: $xray_run, pid: $xray_pid, listenTcp: ($xray_tcp == 1), listenRelayUdp: ($xray_relay == 1) },
         singbox: { running: $sb_run, pid: $sb_pid, listenUdp: ($sb_listen == 1) },
@@ -208,7 +287,16 @@ emit_health() {
         udpIpsetExists:  ($udp_ipset_ok == 1),
         bypassIpsetExists: ($bypass_ipset_ok == 1)
       },
-      ipsetSize: { udpRoute: $udp_ipset_size, bypass: $bypass_ipset_size }
+      ipsetSize: { udpRoute: $udp_ipset_size, bypass: $bypass_ipset_size },
+      xrayFd: { count: $xray_fd, limit: $xray_fd_limit },
+      conntrack: { count: $ct_count, max: $ct_max },
+      vpnTunnel: {
+        host: $vpn_host,
+        established: $vpn_established,
+        finWait: $vpn_fin_wait,
+        orphanFin: $vpn_orphan_fin,
+        total: $vpn_total
+      }
     }')"
 
   printf 'Status: 200 OK\r\n'

@@ -874,6 +874,41 @@ async function repairRemoteRuntime() {
   }
 }
 
+function healthSeverity(status) {
+  if (!status || status === "ok") return "ok";
+  if (status.endsWith("_critical") || status === "xray_down") return "critical";
+  if (status.endsWith("_warn")) return "warn";
+  return "ok";
+}
+
+function fdSeverity(fd, limit) {
+  if (!fd || !limit) return "ok";
+  if (fd >= 600) return "critical";
+  if (fd >= 400) return "warn";
+  return "ok";
+}
+
+function ctSeverity(count, max) {
+  if (!max) return "ok";
+  const pct = (count / max) * 100;
+  if (pct >= 95) return "critical";
+  if (pct >= 85) return "warn";
+  return "ok";
+}
+
+function vpnSeverity(established, finWait, orphanFin) {
+  if (orphanFin >= 30 || finWait >= 50) return "critical";
+  if (orphanFin >= 20 || finWait >= 20) return "warn";
+  if (established === 0) return "warn";
+  return "ok";
+}
+
+function severityClass(sev) {
+  if (sev === "critical") return "health-bad";
+  if (sev === "warn") return "health-warn";
+  return "health-ok";
+}
+
 async function renderHealth() {
   if (!els.healthBadges || !els.healthChecks) return;
   els.healthBadges.innerHTML = '<div class="health-loading">…</div>';
@@ -888,26 +923,44 @@ async function renderHealth() {
   const services = payload.services || {};
   const checks = payload.checks || {};
   const sizes = payload.ipsetSize || {};
+  const fd = payload.xrayFd || {};
+  const ct = payload.conntrack || {};
+  const vpn = payload.vpnTunnel || {};
+  const overallStatus = payload.healthStatus || "ok";
+  const overallSev = healthSeverity(overallStatus);
+
+  // Overall status banner (only shown when not ok)
+  let bannerHtml = "";
+  if (overallSev !== "ok") {
+    const bannerClass = overallSev === "critical" ? "health-banner-critical" : "health-banner-warn";
+    bannerHtml = `<div class="health-banner ${bannerClass}"><span class="health-banner-icon">${overallSev === "critical" ? "✗" : "!"}</span> ${escapeHtml(overallStatus)}</div>`;
+  }
+
+  // Service badges
+  const fdSev = fdSeverity(fd.count, fd.limit);
+  const fdLabel = fd.limit ? `FD ${fd.count}/${fd.limit}` : "";
 
   const badges = [
-    { name: "xray", svc: services.xray, extras: [
-      services.xray && services.xray.listenTcp ? "tcp 61219" : null,
-      services.xray && services.xray.listenRelayUdp ? "udp 62640" : null
+    { name: "xray", svc: services.xray, sev: services.xray?.running ? (fdSev !== "ok" ? fdSev : "ok") : "critical", extras: [
+      services.xray?.listenTcp ? "tcp 61219" : null,
+      services.xray?.listenRelayUdp ? "relay 62640" : null,
+      fdLabel || null
     ] },
-    { name: "sing-box", svc: services.singbox, extras: [
-      services.singbox && services.singbox.listenUdp ? "udp 61221" : null
+    { name: "sing-box", svc: services.singbox, sev: services.singbox?.running ? "ok" : "critical", extras: [
+      services.singbox?.listenUdp ? "udp 61221" : null
     ] },
-    { name: "self-heal", svc: services.selfheal, extras: [] }
+    { name: "self-heal", svc: services.selfheal, sev: services.selfheal?.running ? "ok" : "critical", extras: [] }
   ];
-  els.healthBadges.innerHTML = badges.map((item) => {
+
+  const badgesHtml = badges.map((item) => {
     if (!item.svc) {
       return `<div class="health-badge health-bad"><span class="health-dot" aria-hidden="true"></span><span class="health-text"><span class="health-name">${escapeHtml(item.name)}</span><span class="health-status">?</span></span></div>`;
     }
-    const okClass = item.svc.running ? "health-ok" : "health-bad";
+    const cls = severityClass(item.sev);
     const status = item.svc.running ? T.healthRunning : T.healthStopped;
     const pid = item.svc.pid ? `<span class="health-pid">pid ${escapeHtml(String(item.svc.pid))}</span>` : "";
     const extras = item.extras.filter(Boolean).map((x) => `<span class="health-extra">${escapeHtml(x)}</span>`).join("");
-    return `<div class="health-badge ${okClass}">
+    return `<div class="health-badge ${cls}">
       <span class="health-dot" aria-hidden="true"></span>
       <span class="health-text">
         <span class="health-name">${escapeHtml(item.name)}</span>
@@ -917,6 +970,35 @@ async function renderHealth() {
       ${extras ? `<span class="health-extra">${extras}</span>` : ""}
     </div>`;
   }).join("");
+
+  // VPN tunnel block
+  const vpnSev = vpnSeverity(vpn.established || 0, vpn.finWait || 0, vpn.orphanFin || 0);
+  const vpnCls = severityClass(vpnSev);
+  const vpnHtml = `<div class="health-badge ${vpnCls}">
+    <span class="health-dot" aria-hidden="true"></span>
+    <span class="health-text">
+      <span class="health-name">VPN tunnel</span>
+      <span class="health-status">${escapeHtml(vpn.host || "—")}</span>
+    </span>
+    <span class="health-extra health-metric ${vpn.established > 0 ? "" : "metric-warn"}">connected: ${vpn.established || 0}</span>
+    ${(vpn.finWait || 0) > 0 ? `<span class="health-extra health-metric ${(vpn.finWait || 0) >= 20 ? "metric-warn" : ""}">FIN_WAIT: ${vpn.finWait}</span>` : ""}
+    ${(vpn.orphanFin || 0) > 0 ? `<span class="health-extra health-metric ${(vpn.orphanFin || 0) >= 20 ? "metric-crit" : ""}">orphan FIN: ${vpn.orphanFin}</span>` : ""}
+  </div>`;
+
+  // Conntrack block
+  const ctSev = ctSeverity(ct.count || 0, ct.max || 0);
+  const ctCls = severityClass(ctSev);
+  const ctPct = ct.max ? Math.round((ct.count / ct.max) * 100) : null;
+  const ctHtml = `<div class="health-badge ${ctCls}">
+    <span class="health-dot" aria-hidden="true"></span>
+    <span class="health-text">
+      <span class="health-name">conntrack</span>
+      <span class="health-status">${ct.count || 0}${ct.max ? ` / ${ct.max}` : ""}</span>
+    </span>
+    ${ctPct !== null ? `<span class="health-extra">${ctPct}%</span>` : ""}
+  </div>`;
+
+  els.healthBadges.innerHTML = bannerHtml + badgesHtml + vpnHtml + ctHtml;
 
   const checkRows = [
     { label: T.healthCheckTproxy, ok: checks.tproxyRuleAtEnd },
