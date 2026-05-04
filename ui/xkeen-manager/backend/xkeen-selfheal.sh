@@ -15,8 +15,6 @@ LOCK_DIR="/tmp/xkeen-selfheal.lock"
 LOCK_PID_FILE="$LOCK_DIR/pid"
 HEALTH_STAMP_FILE="/tmp/xkeen-health-last.ts"
 XRAY_RESTART_STAMP_FILE="/tmp/xkeen-xray-restart-last.ts"
-RUNTIME_REFRESH_STAMP_FILE="/tmp/xkeen-runtime-refresh-last.ts"
-RUNTIME_REFRESH_INTERVAL_SEC=300
 LOG_ROTATE_INTERVAL_SEC=86400
 LOG_ROTATE_STAMP_FILE="/tmp/xkeen-log-rotate-last.ts"
 RUNTIME_DIR="/opt/share/xkeen-manager/runtime"
@@ -68,7 +66,6 @@ cron_running() {
 
 needs_repair=0
 force_mode=0
-runtime_refresh_due=0
 
 if [ "$1" = "--force" ]; then
   force_mode=1
@@ -326,18 +323,6 @@ mark_xray_restarted() {
   date +%s > "$XRAY_RESTART_STAMP_FILE"
 }
 
-check_runtime_refresh_due() {
-  NOW_TS="$(date +%s)"
-  LAST_TS="$(cat "$RUNTIME_REFRESH_STAMP_FILE" 2>/dev/null || echo 0)"
-  if [ $(( NOW_TS - LAST_TS )) -ge "$RUNTIME_REFRESH_INTERVAL_SEC" ]; then
-    runtime_refresh_due=1
-    needs_repair=1
-  fi
-}
-
-mark_runtime_refreshed() {
-  date +%s > "$RUNTIME_REFRESH_STAMP_FILE"
-}
 
 rotate_log_if_large() {
   FILE="$1"
@@ -453,7 +438,6 @@ check_runtime() {
   maybe_log_health
   update_fd_critical_streak
   update_remote_fin_wait_streak
-  check_runtime_refresh_due
   [ "$HEALTH_PROBE_OK" -eq 1 ] || needs_repair=1
   case "$HEALTH_STATUS" in
     mem_critical|conntrack_critical)
@@ -552,7 +536,6 @@ restart_singbox() {
 
 repair_runtime() {
   log "repair start"
-  [ "$runtime_refresh_due" -eq 1 ] && log "runtime refresh scheduled"
 
   if ! cron_running; then
     CRON_INIT="$(find_cron_init 2>/dev/null || true)"
@@ -563,7 +546,6 @@ repair_runtime() {
     log "repair failed: runtime hooks"
     return 1
   fi
-  mark_runtime_refreshed
 
   capture_health_metrics
   maybe_log_health
