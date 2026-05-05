@@ -317,6 +317,17 @@ xkeen_append_local_returns() {
   done
 }
 
+xkeen_block_ipv6_forward() {
+  # Prevent IPv6 leaks for xkeen-policy devices: AAAA-resolved domains
+  # (claude.ai, anthropic.com, etc) bypass our IPv4-only iptables and
+  # leak the real ISP IPv6 to the destination. Reject IPv6 forward for
+  # the xkeen connmark so clients fall back to IPv4 (which goes via VPN).
+  command -v ip6tables >/dev/null 2>&1 || return 0
+  [ -n "$XKEEN_MARK" ] || return 0
+  ip6tables -C FORWARD -m connmark --mark "0x$XKEEN_MARK" -j REJECT --reject-with icmp6-port-unreachable 2>/dev/null && return 0
+  ip6tables -I FORWARD -m connmark --mark "0x$XKEEN_MARK" -j REJECT --reject-with icmp6-port-unreachable 2>/dev/null || true
+}
+
 xkeen_repair_hooks() {
   xkeen_ensure_mark || return 1
   mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
@@ -334,6 +345,7 @@ xkeen_repair_hooks() {
   iptables -t nat -C PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || \
     iptables -t nat -I PREROUTING 1 -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -j xkeen
 
+  xkeen_block_ipv6_forward
   xkeen_cleanup_retired_udp
   xkeen_apply_udp_route
 }

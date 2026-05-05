@@ -420,6 +420,9 @@ check_runtime() {
   has_rule iptables -t nat -C xkeen -p tcp -j REDIRECT --to-ports 61219 || needs_repair=1
   has_rule iptables -t nat -C xkeen -j RETURN || needs_repair=1
   has_rule ipset list xkeen_bypass || needs_repair=1
+  if command -v ip6tables >/dev/null 2>&1 && [ -n "$XKEEN_MARK" ]; then
+    has_rule ip6tables -C FORWARD -m connmark --mark "0x$XKEEN_MARK" -j REJECT --reject-with icmp6-port-unreachable || needs_repair=1
+  fi
   if has_rule iptables -t filter -S xkeen_udp443_block; then
     needs_repair=1
   fi
