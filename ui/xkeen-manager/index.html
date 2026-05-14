@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AntiGoblin</title>
-  <link rel="stylesheet" href="./styles.css?v=61">
+  <link rel="stylesheet" href="./styles.css?v=63">
 </head>
 <body>
     <div id="authOverlay" class="auth-overlay" hidden>
@@ -178,6 +178,44 @@
                 <input id="proxyFingerprint" type="text" placeholder="random">
               </label>
             </div>
+
+            <div class="mux-settings">
+              <div class="mux-settings-head">
+                <div>
+                  <p id="muxKicker" class="panel-kicker">Mux / XUDP</p>
+                  <h4 id="muxTitle">Mux mode</h4>
+                </div>
+                <span id="muxSummary" class="mux-summary">Off</span>
+              </div>
+              <div class="grid two">
+                <label>
+                  <span id="muxModeLabel">Mode</span>
+                  <select id="muxMode">
+                    <option value="off">Off</option>
+                    <option value="xudp">XUDP only</option>
+                    <option value="tcp-xudp">TCP + XUDP</option>
+                  </select>
+                </label>
+                <label>
+                  <span id="muxUdp443Label">UDP/443</span>
+                  <select id="muxUdp443">
+                    <option value="reject">reject</option>
+                    <option value="skip">skip</option>
+                    <option value="allow">allow</option>
+                  </select>
+                </label>
+              </div>
+              <div class="grid two mux-number-grid">
+                <label>
+                  <span id="muxTcpConcurrencyLabel">TCP concurrency</span>
+                  <input id="muxTcpConcurrency" type="number" min="1" max="128" step="1" placeholder="8">
+                </label>
+                <label>
+                  <span id="muxXudpConcurrencyLabel">XUDP concurrency</span>
+                  <input id="muxXudpConcurrency" type="number" min="1" max="1024" step="1" placeholder="8">
+                </label>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -255,6 +293,6 @@
     </main>
   </div>
 
-  <script charset="utf-8" src="./app.js?v=61"></script>
+  <script charset="utf-8" src="./app.js?v=63"></script>
 </body>
 </html>

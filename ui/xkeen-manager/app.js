@@ -11,6 +11,8 @@ const HEALTH_URL = "./api/routing.cgi?kind=health";
 const LOGS_URL = "./api/routing.cgi?kind=logs";
 const RESTART_SVC_URL = "./api/routing.cgi?kind=restart-svc";
 const STACK_INFO_URL = "./api/routing.cgi?kind=stack-info";
+const MUX_MODES = new Set(["off", "xudp", "tcp-xudp"]);
+const MUX_UDP443_MODES = new Set(["reject", "skip", "allow"]);
 
 const LOCALES = {
   ru: {
@@ -37,6 +39,15 @@ const LOCALES = {
     proxyUrlLabel: "VLESS URL",
     proxyAddressLabel: "\u0421\u0435\u0440\u0432\u0435\u0440",
     proxyPortLabel: "\u041f\u043e\u0440\u0442",
+    muxKicker: "Mux / XUDP",
+    muxTitle: "Mux режим",
+    muxModeLabel: "Режим",
+    muxUdp443Label: "UDP/443",
+    muxTcpConcurrencyLabel: "TCP concurrency",
+    muxXudpConcurrencyLabel: "XUDP concurrency",
+    muxModeOff: "Off",
+    muxModeXudp: "XUDP only",
+    muxModeTcpXudp: "TCP + XUDP",
     previewKicker: "\u041f\u0440\u0435\u0434\u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440",
     previewTitle: "\u0418\u0442\u043e\u0433\u043e\u0432\u044b\u0439 routing.json",
     groupsKicker: "\u0413\u0440\u0443\u043f\u043f\u044b",
@@ -181,6 +192,15 @@ const LOCALES = {
     proxyUrlLabel: "VLESS URL",
     proxyAddressLabel: "Server",
     proxyPortLabel: "Port",
+    muxKicker: "Mux / XUDP",
+    muxTitle: "Mux mode",
+    muxModeLabel: "Mode",
+    muxUdp443Label: "UDP/443",
+    muxTcpConcurrencyLabel: "TCP concurrency",
+    muxXudpConcurrencyLabel: "XUDP concurrency",
+    muxModeOff: "Off",
+    muxModeXudp: "XUDP only",
+    muxModeTcpXudp: "TCP + XUDP",
     previewKicker: "Preview",
     previewTitle: "Generated routing.json",
     groupsKicker: "Groups",
@@ -320,6 +340,7 @@ const fallbackState = {
       domainStrategy: "IPIfNonMatch",
       fallbackOutbound: "direct",
       proxyConfig: createDefaultProxyConfig(),
+      muxConfig: createDefaultMuxConfig(),
       groups: [
         {
           id: "fallback-vpn",
@@ -382,6 +403,17 @@ const els = {
   proxyServerName: document.getElementById("proxyServerName"),
   proxyShortId: document.getElementById("proxyShortId"),
   proxyFingerprint: document.getElementById("proxyFingerprint"),
+  muxKicker: document.getElementById("muxKicker"),
+  muxTitle: document.getElementById("muxTitle"),
+  muxSummary: document.getElementById("muxSummary"),
+  muxModeLabel: document.getElementById("muxModeLabel"),
+  muxMode: document.getElementById("muxMode"),
+  muxUdp443Label: document.getElementById("muxUdp443Label"),
+  muxUdp443: document.getElementById("muxUdp443"),
+  muxTcpConcurrencyLabel: document.getElementById("muxTcpConcurrencyLabel"),
+  muxTcpConcurrency: document.getElementById("muxTcpConcurrency"),
+  muxXudpConcurrencyLabel: document.getElementById("muxXudpConcurrencyLabel"),
+  muxXudpConcurrency: document.getElementById("muxXudpConcurrency"),
   proxyImportUrl: document.getElementById("proxyImportUrl"),
   importProxyBtn: document.getElementById("importProxyBtn"),
   probeProxyBtn: document.getElementById("probeProxyBtn"),
@@ -604,6 +636,10 @@ function bindTopLevel() {
   bindProxyField(els.proxyServerName, "serverName");
   bindProxyField(els.proxyShortId, "shortId");
   bindProxyField(els.proxyFingerprint, "fingerprint");
+  bindMuxField(els.muxMode, "mode");
+  bindMuxField(els.muxUdp443, "xudpProxyUDP443");
+  bindMuxField(els.muxTcpConcurrency, "tcpConcurrency", (value) => clampInt(value, 8, 1, 128));
+  bindMuxField(els.muxXudpConcurrency, "xudpConcurrency", (value) => clampInt(value, 8, 1, 1024));
 
   els.importProxyBtn.addEventListener("click", () => {
     try {
@@ -982,7 +1018,7 @@ async function renderHealth() {
       <span class="health-name">VPN tunnel</span>
       <span class="health-status">${escapeHtml(vpn.host || "—")}</span>
     </span>
-    <span class="health-extra health-metric ${vpn.established > 0 ? "" : "metric-warn"}">connected: ${vpn.established || 0}</span>
+    <span class="health-extra health-metric ${vpn.established > 0 ? "" : "metric-warn"}">upstream TCP: ${vpn.established || 0}</span>
     ${(vpn.finWait || 0) > 0 ? `<span class="health-extra health-metric ${(vpn.finWait || 0) >= 20 ? "metric-warn" : ""}">FIN_WAIT: ${vpn.finWait}</span>` : ""}
     ${(vpn.orphanFin || 0) > 0 ? `<span class="health-extra health-metric ${(vpn.orphanFin || 0) >= 20 ? "metric-crit" : ""}">orphan FIN: ${vpn.orphanFin}</span>` : ""}
   </div>`;
@@ -1756,11 +1792,15 @@ async function hydrateProxyConfigFromRemote() {
   try {
     const remoteOutbounds = await loadRemoteOutbounds();
     const remoteConfig = extractProxyConfig(remoteOutbounds);
-    if (!remoteConfig) return;
+    const remoteMuxConfig = extractMuxConfig(remoteOutbounds);
+    if (!remoteConfig && !remoteMuxConfig) return;
     for (const profile of state.profiles || []) {
       const current = normalizeProxyConfig(profile.proxyConfig);
-      if (isProxyConfigEmpty(current)) {
+      if (remoteConfig && isProxyConfigEmpty(current)) {
         profile.proxyConfig = { ...remoteConfig };
+      }
+      if (remoteMuxConfig && profile.id === state.activeProfileId) {
+        profile.muxConfig = { ...remoteMuxConfig };
       }
     }
   } catch (error) {
@@ -1808,6 +1848,21 @@ function bindProxyField(element, key, transform = (value) => value) {
   });
 }
 
+function bindMuxField(element, key, transform = (value) => value) {
+  if (!element) return;
+  const eventName = element.tagName === "SELECT" ? "change" : "input";
+  element.addEventListener(eventName, () => {
+    const profile = getActiveProfile();
+    if (!profile) return;
+    profile.muxConfig = normalizeMuxConfig({
+      ...profile.muxConfig,
+      [key]: transform(element.value)
+    });
+    persistState();
+    renderMuxConfig(profile);
+  });
+}
+
 function renderProxyConfig(profile) {
   const config = normalizeProxyConfig(profile.proxyConfig);
   els.proxyAddress.value = config.address;
@@ -1818,6 +1873,29 @@ function renderProxyConfig(profile) {
   els.proxyServerName.value = config.serverName;
   els.proxyShortId.value = config.shortId;
   els.proxyFingerprint.value = config.fingerprint;
+  renderMuxConfig(profile);
+}
+
+function renderMuxConfig(profile) {
+  const config = normalizeMuxConfig(profile.muxConfig);
+  if (els.muxMode) els.muxMode.value = config.mode;
+  if (els.muxUdp443) els.muxUdp443.value = config.xudpProxyUDP443;
+  if (els.muxTcpConcurrency) els.muxTcpConcurrency.value = config.tcpConcurrency;
+  if (els.muxXudpConcurrency) els.muxXudpConcurrency.value = config.xudpConcurrency;
+
+  const numbersHidden = config.mode === "off";
+  const numberGrid = els.muxTcpConcurrency?.closest(".mux-number-grid");
+  if (numberGrid) numberGrid.hidden = numbersHidden;
+  if (els.muxTcpConcurrency) els.muxTcpConcurrency.disabled = config.mode !== "tcp-xudp";
+  if (els.muxXudpConcurrency) els.muxXudpConcurrency.disabled = config.mode === "off";
+  if (els.muxUdp443) els.muxUdp443.disabled = config.mode === "off";
+  if (els.muxSummary) els.muxSummary.textContent = muxModeLabel(config.mode);
+}
+
+function muxModeLabel(mode) {
+  if (mode === "xudp") return T.muxModeXudp || "XUDP only";
+  if (mode === "tcp-xudp") return T.muxModeTcpXudp || "TCP + XUDP";
+  return T.muxModeOff || "Off";
 }
 
 function setProbeStatus(kind, message) {
@@ -1828,6 +1906,7 @@ function setProbeStatus(kind, message) {
 
 function buildOutboundsDocument(profile) {
   const config = normalizeProxyConfig(profile.proxyConfig);
+  const mux = buildMuxObject(profile.muxConfig);
   return {
     outbounds: [
       {
@@ -1860,9 +1939,7 @@ function buildOutboundsDocument(profile) {
             spiderX: "/"
           }
         },
-        mux: {
-          enabled: false
-        }
+        mux
       },
       {
         protocol: "freedom",
@@ -1890,6 +1967,12 @@ function extractProxyConfig(doc) {
   });
 }
 
+function extractMuxConfig(doc) {
+  const outbound = (doc?.outbounds || []).find((item) => item.tag === "vless-reality");
+  if (!outbound) return null;
+  return normalizeMuxConfig(outbound.mux || {});
+}
+
 function createDefaultProxyConfig() {
   return {
     address: "",
@@ -1903,11 +1986,73 @@ function createDefaultProxyConfig() {
   };
 }
 
+function createDefaultMuxConfig() {
+  return {
+    mode: "off",
+    tcpConcurrency: 8,
+    xudpConcurrency: 8,
+    xudpProxyUDP443: "reject"
+  };
+}
+
 function normalizeProxyConfig(config) {
   return {
     ...createDefaultProxyConfig(),
     ...(config || {})
   };
+}
+
+function normalizeMuxConfig(config) {
+  const source = config || {};
+  let mode = source.mode;
+  if (!mode) {
+    if (source.enabled === true) {
+      const tcpConcurrency = Number(source.concurrency);
+      const xudpConcurrency = Number(source.xudpConcurrency);
+      mode = tcpConcurrency < 0 && xudpConcurrency > 0 ? "xudp" : "tcp-xudp";
+    } else {
+      mode = "off";
+    }
+  }
+  if (!MUX_MODES.has(mode)) mode = "off";
+
+  const xudpProxyUDP443 = MUX_UDP443_MODES.has(source.xudpProxyUDP443)
+    ? source.xudpProxyUDP443
+    : "reject";
+
+  return {
+    mode,
+    tcpConcurrency: clampInt(source.tcpConcurrency ?? source.concurrency, 8, 1, 128),
+    xudpConcurrency: clampInt(source.xudpConcurrency, 8, 1, 1024),
+    xudpProxyUDP443
+  };
+}
+
+function buildMuxObject(config) {
+  const mux = normalizeMuxConfig(config);
+  if (mux.mode === "off") {
+    return { enabled: false };
+  }
+  if (mux.mode === "xudp") {
+    return {
+      enabled: true,
+      concurrency: -1,
+      xudpConcurrency: mux.xudpConcurrency,
+      xudpProxyUDP443: mux.xudpProxyUDP443
+    };
+  }
+  return {
+    enabled: true,
+    concurrency: mux.tcpConcurrency,
+    xudpConcurrency: mux.xudpConcurrency,
+    xudpProxyUDP443: mux.xudpProxyUDP443
+  };
+}
+
+function clampInt(value, fallback, min, max) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
 }
 
 function isProxyConfigEmpty(config) {
@@ -1937,6 +2082,7 @@ function normalizeState(input) {
         domainStrategy: input.domainStrategy || "IPIfNonMatch",
         fallbackOutbound: input.fallbackOutbound || "direct",
         proxyConfig: input.proxyConfig,
+        muxConfig: input.muxConfig,
         groups: input.groups
       })
     ]
@@ -1966,6 +2112,7 @@ function createEmptyProfile(name = T.defaultProfileName) {
     domainStrategy: "IPIfNonMatch",
     fallbackOutbound: "direct",
     proxyConfig: createDefaultProxyConfig(),
+    muxConfig: createDefaultMuxConfig(),
     groups: [createEmptyGroup()]
   };
 }
@@ -1991,6 +2138,7 @@ function normalizeProfile(profile) {
     domainStrategy: profile.domainStrategy || "IPIfNonMatch",
     fallbackOutbound: profile.fallbackOutbound || "direct",
     proxyConfig: normalizeProxyConfig(profile.proxyConfig),
+    muxConfig: normalizeMuxConfig(profile.muxConfig),
     groups: groups.length ? groups : [createEmptyGroup()]
   };
 }
@@ -2221,6 +2369,22 @@ function applyTranslations() {
   if (els.proxyUrlLabel) els.proxyUrlLabel.textContent = T.proxyUrlLabel;
   if (els.proxyAddressLabel) els.proxyAddressLabel.textContent = T.proxyAddressLabel;
   if (els.proxyPortLabel) els.proxyPortLabel.textContent = T.proxyPortLabel;
+  if (els.muxKicker) els.muxKicker.textContent = T.muxKicker;
+  if (els.muxTitle) els.muxTitle.textContent = T.muxTitle;
+  if (els.muxModeLabel) els.muxModeLabel.textContent = T.muxModeLabel;
+  if (els.muxUdp443Label) els.muxUdp443Label.textContent = T.muxUdp443Label;
+  if (els.muxTcpConcurrencyLabel) els.muxTcpConcurrencyLabel.textContent = T.muxTcpConcurrencyLabel;
+  if (els.muxXudpConcurrencyLabel) els.muxXudpConcurrencyLabel.textContent = T.muxXudpConcurrencyLabel;
+  if (els.muxMode) {
+    const optionLabels = {
+      off: T.muxModeOff,
+      xudp: T.muxModeXudp,
+      "tcp-xudp": T.muxModeTcpXudp
+    };
+    for (const option of els.muxMode.options) {
+      option.textContent = optionLabels[option.value] || option.value;
+    }
+  }
   if (els.previewKicker) els.previewKicker.textContent = T.previewKicker;
   if (els.previewTitle) els.previewTitle.textContent = T.previewTitle;
   if (els.groupsKicker) els.groupsKicker.textContent = T.groupsKicker;

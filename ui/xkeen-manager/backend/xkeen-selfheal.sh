@@ -335,8 +335,9 @@ rotate_log_if_large() {
   [ "$SIZE" -gt "$MAX_BYTES" ] || return 0
   KEEP_BYTES=$((MAX_BYTES / 2))
   TMP="${FILE}.rotate.tmp"
-  if tail -c "$KEEP_BYTES" "$FILE" > "$TMP" 2>/dev/null && mv "$TMP" "$FILE" 2>/dev/null; then
+  if tail -c "$KEEP_BYTES" "$FILE" > "$TMP" 2>/dev/null && : > "$FILE" 2>/dev/null && dd if="$TMP" of="$FILE" bs=65536 2>/dev/null; then
     health_log "action=log_rotate file=$FILE old_size=$SIZE new_size=$KEEP_BYTES"
+    rm -f "$TMP" 2>/dev/null || true
   else
     rm -f "$TMP" 2>/dev/null || true
   fi
@@ -350,6 +351,8 @@ maybe_rotate_logs() {
   esac
   [ $((NOW_TS - LAST_TS)) -ge "$LOG_ROTATE_INTERVAL_SEC" ] || return 0
 
+  rotate_log_if_large "/opt/var/log/xray/access.log"     20971520
+  rotate_log_if_large "/opt/var/log/xray/error.log"      20971520
   rotate_log_if_large "/opt/var/log/xray-manual.log"     20971520
   rotate_log_if_large "/opt/var/log/sing-box-xkeen.log"   5242880
   rotate_log_if_large "/opt/var/log/xkeen-selfheal.log"   5242880
