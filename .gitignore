@@ -3,6 +3,7 @@ snapshots/
 tmp/
 tmp_*.json
 nul
+docs/troubleshooting.md
 *.tar.gz
 archive/*.zip
 configs/xkeen/*.router-live.json
