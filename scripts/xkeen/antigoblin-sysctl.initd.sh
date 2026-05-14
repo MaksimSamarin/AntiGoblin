@@ -53,12 +53,14 @@ lower_sysctl() {
 apply_all() {
   mkdir -p /opt/var/log 2>/dev/null || true
 
-  # Detect dead TCP peers faster. Some Keenetic models ship 120s
-  # already (good); generic Linux is 7200s (bad for a router with
-  # many short-lived flows). Cap at 300s either way — far enough to
-  # avoid spurious churn on healthy idle TCP, soon enough to free
-  # FDs from disappeared VPN servers within a few minutes.
-  lower_sysctl net.ipv4.tcp_keepalive_time 300
+  # Detect dead TCP peers without killing long-lived idle streams.
+  # Linux default is 7200s; we sat at 300s for a while but that broke
+  # Claude extended-thinking responses (5-10min of model silence inside
+  # an HTTP/2 stream gets killed at ~390s = 300 + 3*30). Bumped to
+  # 1800s so the kill window is ~31 min — covers any reasonable
+  # streaming idle, still reaps dead VPN servers within half an hour.
+  # Orphan FD pileup is handled separately by tightened FIN_WAIT / orphan_retries.
+  apply_sysctl net.ipv4.tcp_keepalive_time 1800
   lower_sysctl net.ipv4.tcp_keepalive_intvl 30
   lower_sysctl net.ipv4.tcp_keepalive_probes 3
 
