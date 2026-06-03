@@ -73,6 +73,20 @@ validate_confdir() {
   /opt/sbin/xray run -test -confdir /opt/etc/xray/configs >/dev/null 2>&1
 }
 
+get_xray_pid() {
+  PID="$(netstat -lnpt 2>/dev/null | /opt/bin/awk '/:61219 / && /\/xray/ { split($NF, p, "/"); print p[1]; exit }')"
+  [ -n "$PID" ] && { printf '%s\n' "$PID"; return 0; }
+
+  for PID in $(pidof xray 2>/dev/null); do
+    CMDLINE="$(tr '\0' ' ' < "/proc/$PID/cmdline" 2>/dev/null || true)"
+    case "$CMDLINE" in
+      *" -test "*) continue ;;
+    esac
+    printf '%s\n' "$PID"
+    return 0
+  done
+}
+
 repair_runtime() {
   if [ -x "$SELFHEAL_PATH" ]; then
     "$SELFHEAL_PATH" --force >/dev/null 2>&1
@@ -143,7 +157,7 @@ parse_qs_param() {
 }
 
 emit_health() {
-  XRAY_PID="$(pidof xray 2>/dev/null | /opt/bin/awk '{ print $1 }')"
+  XRAY_PID="$(get_xray_pid)"
   SB_PID="$(pidof sing-box 2>/dev/null | /opt/bin/awk '{ print $1 }')"
   SELFHEAL_PID="$(cat /opt/var/run/antigoblin-selfheal-loop.pid 2>/dev/null | /opt/bin/awk 'NR==1 && $0 ~ /^[0-9]+$/ { print }')"
   if [ -n "$SELFHEAL_PID" ] && ! kill -0 "$SELFHEAL_PID" 2>/dev/null; then
@@ -410,7 +424,7 @@ emit_stack_info() {
   DISK_MOUNT="$(printf '%s' "$DISK_LINE" | /opt/bin/awk '{print $NF}')"
   CT_COUNT="$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)"
   CT_MAX="$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)"
-  XRAY_PID_S="$(pidof xray 2>/dev/null | /opt/bin/awk '{print $1}')"
+  XRAY_PID_S="$(get_xray_pid)"
   XRAY_FD_COUNT_S=0
   XRAY_FD_LIMIT_S=0
   if [ -n "$XRAY_PID_S" ] && [ -d "/proc/$XRAY_PID_S/fd" ]; then

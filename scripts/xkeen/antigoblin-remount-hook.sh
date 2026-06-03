@@ -19,8 +19,21 @@ cron_running() {
   ps | grep -E '[[:space:]](cron|crond)([[:space:]]|$)' | grep -v grep >/dev/null 2>&1
 }
 
+ensure_xray_init_confdir() {
+  [ -f "$XRAY_INIT" ] || return 0
+  grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$XRAY_INIT" 2>/dev/null && return 0
+  grep -q 'ARGS="run -confdir /opt/etc/xray"' "$XRAY_INIT" 2>/dev/null || return 0
+  cp "$XRAY_INIT" "$XRAY_INIT.bak-antigoblin-confdir" 2>/dev/null || true
+  sed 's#ARGS="run -confdir /opt/etc/xray"#ARGS="run -confdir /opt/etc/xray/configs"#' "$XRAY_INIT" > "$XRAY_INIT.tmp" \
+    && cat "$XRAY_INIT.tmp" > "$XRAY_INIT" \
+    && rm -f "$XRAY_INIT.tmp" \
+    && chmod 755 "$XRAY_INIT" 2>/dev/null
+}
+
 [ -d /opt ] || exit 0
 [ -d "$ROOT_DIR" ] || exit 0
+
+ensure_xray_init_confdir
 
 [ -x "$SELFHEAL_INIT" ] && "$SELFHEAL_INIT" restart >/dev/null 2>&1 || true
 

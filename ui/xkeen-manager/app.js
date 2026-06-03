@@ -11,7 +11,7 @@ const HEALTH_URL = "./api/routing.cgi?kind=health";
 const LOGS_URL = "./api/routing.cgi?kind=logs";
 const RESTART_SVC_URL = "./api/routing.cgi?kind=restart-svc";
 const STACK_INFO_URL = "./api/routing.cgi?kind=stack-info";
-const MUX_MODES = new Set(["off", "xudp", "tcp-xudp"]);
+const MUX_MODES = new Set(["off", "xudp"]);
 const MUX_UDP443_MODES = new Set(["reject", "skip", "allow"]);
 
 const LOCALES = {
@@ -43,11 +43,9 @@ const LOCALES = {
     muxTitle: "Mux режим",
     muxModeLabel: "Режим",
     muxUdp443Label: "UDP/443",
-    muxTcpConcurrencyLabel: "TCP concurrency",
     muxXudpConcurrencyLabel: "XUDP concurrency",
     muxModeOff: "Off",
     muxModeXudp: "XUDP only",
-    muxModeTcpXudp: "TCP + XUDP",
     previewKicker: "\u041f\u0440\u0435\u0434\u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440",
     previewTitle: "\u0418\u0442\u043e\u0433\u043e\u0432\u044b\u0439 routing.json",
     groupsKicker: "\u0413\u0440\u0443\u043f\u043f\u044b",
@@ -196,11 +194,9 @@ const LOCALES = {
     muxTitle: "Mux mode",
     muxModeLabel: "Mode",
     muxUdp443Label: "UDP/443",
-    muxTcpConcurrencyLabel: "TCP concurrency",
     muxXudpConcurrencyLabel: "XUDP concurrency",
     muxModeOff: "Off",
     muxModeXudp: "XUDP only",
-    muxModeTcpXudp: "TCP + XUDP",
     previewKicker: "Preview",
     previewTitle: "Generated routing.json",
     groupsKicker: "Groups",
@@ -410,8 +406,6 @@ const els = {
   muxMode: document.getElementById("muxMode"),
   muxUdp443Label: document.getElementById("muxUdp443Label"),
   muxUdp443: document.getElementById("muxUdp443"),
-  muxTcpConcurrencyLabel: document.getElementById("muxTcpConcurrencyLabel"),
-  muxTcpConcurrency: document.getElementById("muxTcpConcurrency"),
   muxXudpConcurrencyLabel: document.getElementById("muxXudpConcurrencyLabel"),
   muxXudpConcurrency: document.getElementById("muxXudpConcurrency"),
   proxyImportUrl: document.getElementById("proxyImportUrl"),
@@ -638,7 +632,6 @@ function bindTopLevel() {
   bindProxyField(els.proxyFingerprint, "fingerprint");
   bindMuxField(els.muxMode, "mode");
   bindMuxField(els.muxUdp443, "xudpProxyUDP443");
-  bindMuxField(els.muxTcpConcurrency, "tcpConcurrency", (value) => clampInt(value, 8, 1, 128));
   bindMuxField(els.muxXudpConcurrency, "xudpConcurrency", (value) => clampInt(value, 8, 1, 1024));
 
   els.importProxyBtn.addEventListener("click", () => {
@@ -1880,13 +1873,11 @@ function renderMuxConfig(profile) {
   const config = normalizeMuxConfig(profile.muxConfig);
   if (els.muxMode) els.muxMode.value = config.mode;
   if (els.muxUdp443) els.muxUdp443.value = config.xudpProxyUDP443;
-  if (els.muxTcpConcurrency) els.muxTcpConcurrency.value = config.tcpConcurrency;
   if (els.muxXudpConcurrency) els.muxXudpConcurrency.value = config.xudpConcurrency;
 
   const numbersHidden = config.mode === "off";
-  const numberGrid = els.muxTcpConcurrency?.closest(".mux-number-grid");
+  const numberGrid = els.muxXudpConcurrency?.closest(".mux-number-grid");
   if (numberGrid) numberGrid.hidden = numbersHidden;
-  if (els.muxTcpConcurrency) els.muxTcpConcurrency.disabled = config.mode !== "tcp-xudp";
   if (els.muxXudpConcurrency) els.muxXudpConcurrency.disabled = config.mode === "off";
   if (els.muxUdp443) els.muxUdp443.disabled = config.mode === "off";
   if (els.muxSummary) els.muxSummary.textContent = muxModeLabel(config.mode);
@@ -1894,7 +1885,6 @@ function renderMuxConfig(profile) {
 
 function muxModeLabel(mode) {
   if (mode === "xudp") return T.muxModeXudp || "XUDP only";
-  if (mode === "tcp-xudp") return T.muxModeTcpXudp || "TCP + XUDP";
   return T.muxModeOff || "Off";
 }
 
@@ -2009,12 +1999,14 @@ function normalizeMuxConfig(config) {
     if (source.enabled === true) {
       const tcpConcurrency = Number(source.concurrency);
       const xudpConcurrency = Number(source.xudpConcurrency);
-      mode = tcpConcurrency < 0 && xudpConcurrency > 0 ? "xudp" : "tcp-xudp";
+      mode = tcpConcurrency < 0 && xudpConcurrency > 0 ? "xudp" : "off";
     } else {
       mode = "off";
     }
   }
-  if (!MUX_MODES.has(mode)) mode = "off";
+  if (!MUX_MODES.has(mode)) {
+    mode = Number(source.xudpConcurrency) > 0 ? "xudp" : "off";
+  }
 
   const xudpProxyUDP443 = MUX_UDP443_MODES.has(source.xudpProxyUDP443)
     ? source.xudpProxyUDP443
@@ -2022,7 +2014,7 @@ function normalizeMuxConfig(config) {
 
   return {
     mode,
-    tcpConcurrency: clampInt(source.tcpConcurrency ?? source.concurrency, 8, 1, 128),
+    tcpConcurrency: 8,
     xudpConcurrency: clampInt(source.xudpConcurrency, 8, 1, 1024),
     xudpProxyUDP443
   };
@@ -2041,12 +2033,7 @@ function buildMuxObject(config) {
       xudpProxyUDP443: mux.xudpProxyUDP443
     };
   }
-  return {
-    enabled: true,
-    concurrency: mux.tcpConcurrency,
-    xudpConcurrency: mux.xudpConcurrency,
-    xudpProxyUDP443: mux.xudpProxyUDP443
-  };
+  return { enabled: false };
 }
 
 function clampInt(value, fallback, min, max) {
@@ -2373,13 +2360,11 @@ function applyTranslations() {
   if (els.muxTitle) els.muxTitle.textContent = T.muxTitle;
   if (els.muxModeLabel) els.muxModeLabel.textContent = T.muxModeLabel;
   if (els.muxUdp443Label) els.muxUdp443Label.textContent = T.muxUdp443Label;
-  if (els.muxTcpConcurrencyLabel) els.muxTcpConcurrencyLabel.textContent = T.muxTcpConcurrencyLabel;
   if (els.muxXudpConcurrencyLabel) els.muxXudpConcurrencyLabel.textContent = T.muxXudpConcurrencyLabel;
   if (els.muxMode) {
     const optionLabels = {
       off: T.muxModeOff,
-      xudp: T.muxModeXudp,
-      "tcp-xudp": T.muxModeTcpXudp
+      xudp: T.muxModeXudp
     };
     for (const option of els.muxMode.options) {
       option.textContent = optionLabels[option.value] || option.value;

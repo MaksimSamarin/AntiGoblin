@@ -131,7 +131,30 @@ ensure_tproxy_module() {
 }
 
 get_xray_pid() {
-  pidof xray 2>/dev/null | /opt/bin/awk '{ print $1; exit }'
+  PID="$(netstat -lnpt 2>/dev/null | /opt/bin/awk '/:61219 / && /\/xray/ { split($NF, p, "/"); print p[1]; exit }')"
+  [ -n "$PID" ] && { printf '%s\n' "$PID"; return 0; }
+
+  for PID in $(pidof xray 2>/dev/null); do
+    CMDLINE="$(tr '\0' ' ' < "/proc/$PID/cmdline" 2>/dev/null || true)"
+    case "$CMDLINE" in
+      *" -test "*) continue ;;
+    esac
+    printf '%s\n' "$PID"
+    return 0
+  done
+}
+
+ensure_xray_init_confdir() {
+  INIT="/opt/etc/init.d/S24xray"
+  [ -f "$INIT" ] || return 0
+  grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$INIT" 2>/dev/null && return 0
+  grep -q 'ARGS="run -confdir /opt/etc/xray"' "$INIT" 2>/dev/null || return 0
+  cp "$INIT" "$INIT.bak-antigoblin-confdir" 2>/dev/null || true
+  sed 's#ARGS="run -confdir /opt/etc/xray"#ARGS="run -confdir /opt/etc/xray/configs"#' "$INIT" > "$INIT.tmp" \
+    && cat "$INIT.tmp" > "$INIT" \
+    && rm -f "$INIT.tmp" \
+    && chmod 755 "$INIT" 2>/dev/null \
+    && health_log "action=xray_init_confdir file=$INIT value=/opt/etc/xray/configs"
 }
 
 get_xray_remote_endpoint() {
@@ -542,6 +565,7 @@ restart_singbox() {
 
 repair_runtime() {
   log "repair start"
+  ensure_xray_init_confdir
 
   if ! cron_running; then
     CRON_INIT="$(find_cron_init 2>/dev/null || true)"

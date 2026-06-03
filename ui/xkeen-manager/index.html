@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AntiGoblin</title>
-  <link rel="stylesheet" href="./styles.css?v=63">
+  <link rel="stylesheet" href="./styles.css?v=64">
 </head>
 <body>
     <div id="authOverlay" class="auth-overlay" hidden>
@@ -193,7 +193,6 @@
                   <select id="muxMode">
                     <option value="off">Off</option>
                     <option value="xudp">XUDP only</option>
-                    <option value="tcp-xudp">TCP + XUDP</option>
                   </select>
                 </label>
                 <label>
@@ -206,10 +205,6 @@
                 </label>
               </div>
               <div class="grid two mux-number-grid">
-                <label>
-                  <span id="muxTcpConcurrencyLabel">TCP concurrency</span>
-                  <input id="muxTcpConcurrency" type="number" min="1" max="128" step="1" placeholder="8">
-                </label>
                 <label>
                   <span id="muxXudpConcurrencyLabel">XUDP concurrency</span>
                   <input id="muxXudpConcurrency" type="number" min="1" max="1024" step="1" placeholder="8">
@@ -293,6 +288,6 @@
     </main>
   </div>
 
-  <script charset="utf-8" src="./app.js?v=63"></script>
+  <script charset="utf-8" src="./app.js?v=64"></script>
 </body>
 </html>

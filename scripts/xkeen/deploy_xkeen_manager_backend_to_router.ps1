@@ -173,4 +173,16 @@ if ! command -v sing-box >/dev/null 2>&1; then
 fi
 '@
 Invoke-RouterCommand -Command $installSingbox
+
+$patchXrayInit = @'
+XRAY_INIT="/opt/etc/init.d/S24xray"
+if [ -f "$XRAY_INIT" ] && grep -q 'ARGS="run -confdir /opt/etc/xray"' "$XRAY_INIT" 2>/dev/null && ! grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$XRAY_INIT" 2>/dev/null; then
+  cp "$XRAY_INIT" "$XRAY_INIT.bak-antigoblin-confdir" 2>/dev/null || true
+  sed 's#ARGS="run -confdir /opt/etc/xray"#ARGS="run -confdir /opt/etc/xray/configs"#' "$XRAY_INIT" > "$XRAY_INIT.tmp" \
+    && cat "$XRAY_INIT.tmp" > "$XRAY_INIT" \
+    && rm -f "$XRAY_INIT.tmp" \
+    && chmod 755 "$XRAY_INIT"
+fi
+'@
+Invoke-RouterCommand -Command $patchXrayInit
 Invoke-RouterCommand -Command "chmod 755 '$RemoteSelfhealLoop' '$RemoteSelfhealInit' '$RemoteSingboxInit' '$RemoteSysctlInit' '$RemoteInitScript' '$RemoteCronScript' '$RemoteFsHook' '$RemoteUsbHook' && '$RemoteSysctlInit' start >/dev/null 2>&1 || true && '$RemoteSingboxInit' restart >/dev/null 2>&1 || true && '$RemoteSelfhealInit' restart >/dev/null 2>&1 || true && '$RemoteInitScript' restart >/dev/null 2>&1 || true"
