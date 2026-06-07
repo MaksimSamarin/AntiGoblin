@@ -38,17 +38,68 @@ die() {
   exit 1
 }
 
-# Resolve which wget to use. Prefer Entware's /opt/bin/wget (TLS via ca-bundle),
-# fall back to busybox wget if that's all we have.
-WGET_BIN=""
-resolve_wget() {
-  if [ -x /opt/bin/wget ]; then
-    WGET_BIN="/opt/bin/wget"
-  elif command -v wget >/dev/null 2>&1; then
-    WGET_BIN="$(command -v wget)"
-  else
-    die "Neither /opt/bin/wget nor system wget is available."
+# Resolve an HTTPS-capable downloader. Default Entware ships wget-nossl
+# (compiled without HTTPS), so prefer curl, then wget if it links a TLS
+# library. As a last resort install curl via opkg (the package index is
+# fetched over HTTP, so that works even without HTTPS).
+FETCHER_BIN=""
+FETCHER_TYPE=""
+
+_fetcher_try_wget() {
+  cand="$1"
+  [ -x "$cand" ] || return 1
+  "$cand" --version 2>&1 | grep -qiE '\+https|gnutls|openssl|ssl/tls' || return 1
+  FETCHER_BIN="$cand"
+  FETCHER_TYPE="wget"
+  return 0
+}
+
+ensure_https_fetcher() {
+  [ -n "$FETCHER_BIN" ] && return 0
+
+  if [ -x /opt/bin/curl ]; then
+    FETCHER_BIN="/opt/bin/curl"; FETCHER_TYPE="curl"; return 0
   fi
+  if command -v curl >/dev/null 2>&1; then
+    FETCHER_BIN="$(command -v curl)"; FETCHER_TYPE="curl"; return 0
+  fi
+  _fetcher_try_wget /opt/bin/wget     && return 0
+  _fetcher_try_wget /opt/usr/bin/wget && return 0
+  if command -v wget >/dev/null 2>&1; then
+    _fetcher_try_wget "$(command -v wget)" && return 0
+  fi
+
+  # Nothing HTTPS-capable yet. Try to install curl via opkg.
+  if [ -x /opt/bin/opkg ]; then
+    log "No HTTPS-capable downloader found, trying: opkg install curl"
+    /opt/bin/opkg update >/dev/null 2>&1 || true
+    /opt/bin/opkg install curl >/dev/null 2>&1 || true
+    if [ -x /opt/bin/curl ]; then
+      FETCHER_BIN="/opt/bin/curl"; FETCHER_TYPE="curl"; return 0
+    fi
+  fi
+
+  die "No HTTPS-capable downloader (curl or wget-ssl) and could not install one. Run: opkg install curl"
+}
+
+fetch_to() {
+  ensure_https_fetcher
+  url="$1"; dest="$2"
+  case "$FETCHER_TYPE" in
+    curl) "$FETCHER_BIN" -fsSL -o "$dest" "$url" ;;
+    wget) "$FETCHER_BIN" -q -O "$dest" "$url" ;;
+    *)    die "fetcher not resolved" ;;
+  esac
+}
+
+fetch_stdout() {
+  ensure_https_fetcher
+  url="$1"
+  case "$FETCHER_TYPE" in
+    curl) "$FETCHER_BIN" -fsSL "$url" ;;
+    wget) "$FETCHER_BIN" -q -O - "$url" ;;
+    *)    die "fetcher not resolved" ;;
+  esac
 }
 
 require_entware() {
@@ -61,7 +112,7 @@ install_packages() {
   log "Updating Entware package index"
   /opt/bin/opkg update >/dev/null 2>&1 || true
 
-  PKGS="ca-bundle wget tar gzip jq gawk coreutils-base64 net-tools-netstat cron uhttpd_kn xray iptables ipset conntrack"
+  PKGS="ca-bundle curl wget tar gzip jq gawk coreutils-base64 net-tools-netstat cron uhttpd_kn xray iptables ipset conntrack"
   for pkg in $PKGS; do
     if ! /opt/bin/opkg list-installed | grep -q "^${pkg} "; then
       log "Installing $pkg"
@@ -71,12 +122,12 @@ install_packages() {
 }
 
 fetch_sources() {
-  resolve_wget
+  ensure_https_fetcher
   rm -rf "$WORK_DIR"
   mkdir -p "$WORK_DIR"
 
-  log "Fetching repository tarball: $REPO_TARBALL"
-  if ! "$WGET_BIN" -O "$WORK_DIR/src.tar.gz" "$REPO_TARBALL"; then
+  log "Fetching repository tarball: $REPO_TARBALL (via $FETCHER_TYPE)"
+  if ! fetch_to "$REPO_TARBALL" "$WORK_DIR/src.tar.gz"; then
     die "Failed to download repository tarball. Check internet access and ca-bundle."
   fi
 
@@ -245,8 +296,7 @@ install_singbox() {
   rm -rf /tmp/antigoblin-sing-box /tmp/antigoblin-sing-box.tar.gz
   mkdir -p /tmp/antigoblin-sing-box
 
-  resolve_wget
-  if ! "$WGET_BIN" -O /tmp/antigoblin-sing-box.tar.gz "$URL"; then
+  if ! fetch_to "$URL" /tmp/antigoblin-sing-box.tar.gz; then
     log "WARN: failed to download sing-box. UDP-VPN groups will not work until you install /opt/sbin/sing-box manually."
     return 0
   fi
