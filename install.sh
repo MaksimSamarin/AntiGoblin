@@ -145,7 +145,7 @@ install_packages() {
 }
 
 fetch_sources() {
-  # Offline / staged mode: firstboot script (S99antigoblin-firstboot) sets
+  # Offline / staged mode: firstboot script (S99antigoblin-firstboot.sh) sets
   # ANTIGOBLIN_SRC_DIR to a pre-unpacked source tree bundled into the USB
   # installer tarball. Skip the GitHub download entirely — /opt is a fresh
   # Entware with no ca-bundle guaranteed and possibly no WAN.

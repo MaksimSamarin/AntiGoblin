@@ -174,9 +174,14 @@ printf '%s\n' "$VERSION" > "$STAGED_REPO/VERSION"
 FIRSTBOOT_SRC="$REPO_ROOT/scripts/xkeen/antigoblin-firstboot.sh"
 [ -f "$FIRSTBOOT_SRC" ] || { echo "Missing $FIRSTBOOT_SRC — cannot build USB installer" >&2; exit 1; }
 
+# The `.sh` suffix is load-bearing, not cosmetic: rc.unslung sources `S*.sh`
+# but requires an execute bit for extension-less `S*`. That bit does not
+# survive npkg extraction onto NTFS/FAT sticks, where an extension-less
+# script is skipped in complete silence. See the header of
+# antigoblin-firstboot.sh for the full story.
 mkdir -p "$STAGE/etc/init.d"
-cp "$FIRSTBOOT_SRC" "$STAGE/etc/init.d/S99antigoblin-firstboot"
-chmod 755 "$STAGE/etc/init.d/S99antigoblin-firstboot"
+cp "$FIRSTBOOT_SRC" "$STAGE/etc/init.d/S99antigoblin-firstboot.sh"
+chmod 755 "$STAGE/etc/init.d/S99antigoblin-firstboot.sh"
 
 # ---- 5. Optional: bundle .ipk cache for offline install ----
 # We ship an empty cache for MVP. firstboot's install.sh call will `opkg
@@ -231,8 +236,9 @@ Alternative (for people who prefer to drop the tarball manually):
   → put in <USB root>/install/${ARCH}-installer.tar.gz
 
 Then in Keenetic Web UI: "Приложения → Менеджер пакетов OPKG" → point at
-this USB. Router will unpack, reboot, and on next boot S99antigoblin-firstboot
-runs install.sh with ANTIGOBLIN_SRC_DIR=/opt/share/antigoblin-staged.
+this USB. Router will unpack, reboot, and on next boot
+S99antigoblin-firstboot.sh runs install.sh with
+ANTIGOBLIN_SRC_DIR=/opt/share/antigoblin-staged.
 
 Verify version on the router later:
   cat /opt/share/antigoblin-staged/VERSION

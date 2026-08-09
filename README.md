@@ -202,7 +202,7 @@ exec sh                    # выйти из NDM CLI в обычный shell
 
 Ничего не вводишь руками. Скачал zip → распаковал на флешку → воткнул → активировал OPKG в web UI. Всё.
 
-Как это работает: zip содержит папку `install/` с уже готовым `<arch>-installer.tar.gz`, внутри которого лежит Entware **плюс** предустановленный AntiGoblin и `sing-box`. Keenetic развернёт Entware, при первом старте одноразовый `S99antigoblin-firstboot` запустит `install.sh` из локальной копии без похода в GitHub — репозиторий уже внутри архива.
+Как это работает: zip содержит папку `install/` с уже готовым `<arch>-installer.tar.gz`, внутри которого лежит Entware **плюс** предустановленный AntiGoblin и `sing-box`. Keenetic развернёт Entware, при первом старте одноразовый `S99antigoblin-firstboot.sh` запустит `install.sh` из локальной копии без похода в GitHub — репозиторий уже внутри архива.
 
 **Шаги:**
 
@@ -225,7 +225,7 @@ exec sh                    # выйти из NDM CLI в обычный shell
 
 4. Вставить флешку в роутер, в web UI Keenetic зайти в `Приложения → Менеджер пакетов OPKG` и указать эту флешку — [Шаг 3](#шаг-3-подключить-entware-к-opkg-менеджеру-и-перезагрузить). Роутер один раз перезагрузится (разворачивает Entware).
 
-5. После перезагрузки подождать ещё ~1-2 минуты — идёт `S99antigoblin-firstboot`. Прогресс можно смотреть, открывая UI в браузере (страница появится, как только сервис поднимется — адрес см. ниже [Как открыть UI после установки](#как-открыть-ui-после-установки)). Если нужен подробный лог — SSH и `cat /opt/var/log/antigoblin-firstboot.log`.
+5. После перезагрузки подождать ещё ~1-2 минуты — идёт `S99antigoblin-firstboot.sh`. Прогресс можно смотреть, открывая UI в браузере (страница появится, как только сервис поднимется — адрес см. ниже [Как открыть UI после установки](#как-открыть-ui-после-установки)). Если нужен подробный лог — SSH и `cat /opt/var/log/antigoblin-firstboot.log`.
 
 6. Открыть UI, залогиниться через Keenetic-креды, добавить ключ / подписку, Save & Apply. Дальше как в разделе [Что делать после установки](#что-делать-после-установки).
 
@@ -237,7 +237,7 @@ exec sh                    # выйти из NDM CLI в обычный shell
 
 - `/opt/sbin/sing-box` (уже нужного arch);
 - `/opt/share/antigoblin-staged/` — полная копия репозитория;
-- `/opt/etc/init.d/S99antigoblin-firstboot` — one-shot init-скрипт, который ждёт готовности NDM, запускает `install.sh` с флагом `ANTIGOBLIN_SRC_DIR=/opt/share/antigoblin-staged` (без похода в GitHub), после успеха `touch /opt/etc/antigoblin.done` и `rm` себя из init.d — второй раз при следующем boot не сработает.
+- `/opt/etc/init.d/S99antigoblin-firstboot.sh` — one-shot init-скрипт, который ждёт готовности NDM, запускает `install.sh` с флагом `ANTIGOBLIN_SRC_DIR=/opt/share/antigoblin-staged` (без похода в GitHub), после успеха `touch /opt/etc/antigoblin.done` и `rm` себя из init.d — второй раз при следующем boot не сработает.
 
 **Собрать свой USB-installer** (например, если хочешь пропатчить репозиторий перед раскаткой):
 
@@ -253,7 +253,7 @@ exec sh                    # выйти из NDM CLI в обычный shell
 **Ограничения:**
 
 - Поддерживаемые архитектуры — `aarch64` и `armv7`. Для `mipsel`/`mips`/`x86_64` используй Вариант 2 или 3.
-- `S99antigoblin-firstboot` при запуске выполняет `opkg install` для обязательных пакетов (`xray`, `uhttpd_kn`, `iptables`, `ipset`, `conntrack`, `jq`, `gawk`, `ca-bundle`). Для этого нужен работающий WAN. Если WAN недоступен на первом boot — flash-install зафейлится, лог в `/opt/var/log/antigoblin-firstboot.log`.
+- `S99antigoblin-firstboot.sh` при запуске выполняет `opkg install` для обязательных пакетов (`xray`, `uhttpd_kn`, `iptables`, `ipset`, `conntrack`, `jq`, `gawk`, `ca-bundle`). Для этого нужен работающий WAN. Если WAN недоступен на первом boot — flash-install зафейлится, лог в `/opt/var/log/antigoblin-firstboot.log`.
 - Если хочется прогнать firstboot ещё раз (например, после сброса) — удалить `/opt/etc/antigoblin.done` и перезагрузить роутер.
 
 ### Вариант 2 — через Keenetic Web CLI
