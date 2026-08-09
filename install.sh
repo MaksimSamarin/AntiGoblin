@@ -111,11 +111,56 @@ require_entware() {
   [ -d /opt ] || die "/opt is not mounted. Enable Entware (Поддержка открытых пакетов) in Keenetic and mount the USB stick first."
   [ -x /opt/bin/opkg ] || die "/opt/bin/opkg not found. Entware is not initialized on this router."
   mkdir -p /opt/sbin
+  # opkg keeps its lock at /opt/tmp/opkg.lock and does NOT create the
+  # directory itself — without it every single call dies with
+  # "opkg_conf_load: Could not create lock file /opt/tmp/opkg.lock".
+  # Entware's own installer creates /opt/tmp eventually, but the USB
+  # firstboot path can reach us before that, so make sure it exists.
+  mkdir -p /opt/tmp
+}
+
+# Entware's opkg can wait indefinitely for an unreachable repository. That is
+# particularly harmful during USB firstboot: the user sees neither a UI nor an
+# actionable error. Run each call as a child, cap it, and let the caller retry.
+# opkg performs downloads in-process on the supported Entware build, so killing
+# the child also stops the stalled transfer.
+OPKG_TIMEOUT="${ANTIGOBLIN_OPKG_TIMEOUT:-120}"
+opkg_run() {
+  /opt/bin/opkg "$@" &
+  _opkg_pid=$!
+  _opkg_waited=0
+  while kill -0 "$_opkg_pid" 2>/dev/null; do
+    if [ "$_opkg_waited" -ge "$OPKG_TIMEOUT" ]; then
+      log "WARN: opkg $* exceeded ${OPKG_TIMEOUT}s; terminating it"
+      kill "$_opkg_pid" 2>/dev/null || true
+      sleep 1
+      kill -9 "$_opkg_pid" 2>/dev/null || true
+      wait "$_opkg_pid" 2>/dev/null || true
+      return 1
+    fi
+    sleep 1
+    _opkg_waited=$((_opkg_waited + 1))
+  done
+  wait "$_opkg_pid"
+}
+
+opkg_install_retry() {
+  _opkg_pkg="$1"
+  _opkg_try=1
+  while [ "$_opkg_try" -le 3 ]; do
+    if opkg_run install "$_opkg_pkg"; then
+      return 0
+    fi
+    log "WARN: opkg install $_opkg_pkg failed (attempt $_opkg_try/3)"
+    _opkg_try=$((_opkg_try + 1))
+    [ "$_opkg_try" -le 3 ] && sleep 5
+  done
+  return 1
 }
 
 install_packages() {
   log "Updating Entware package index"
-  /opt/bin/opkg update >/dev/null 2>&1 || true
+  opkg_run update || log "WARN: opkg update failed; trying package installs with the current index"
 
   # Essentials — the stack literally can't run without them; fail hard.
   # Optionals — nice-to-have (rich netstat, coreutils base64, standalone
@@ -127,7 +172,7 @@ install_packages() {
   for pkg in $ESSENTIAL_PKGS; do
     if ! /opt/bin/opkg list-installed | grep -q "^${pkg} "; then
       log "Installing (essential) $pkg"
-      if ! /opt/bin/opkg install "$pkg" >/dev/null 2>&1; then
+      if ! opkg_install_retry "$pkg"; then
         MISSING_ESSENTIAL="$MISSING_ESSENTIAL $pkg"
       fi
     fi
@@ -139,7 +184,7 @@ install_packages() {
   for pkg in $OPTIONAL_PKGS; do
     if ! /opt/bin/opkg list-installed | grep -q "^${pkg} "; then
       log "Installing (optional) $pkg"
-      /opt/bin/opkg install "$pkg" >/dev/null 2>&1 || log "WARN: failed to install optional $pkg (continuing)"
+      opkg_install_retry "$pkg" || log "WARN: failed to install optional $pkg (continuing)"
     fi
   done
 }

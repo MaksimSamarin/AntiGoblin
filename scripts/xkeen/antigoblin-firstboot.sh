@@ -4,7 +4,8 @@
 # /opt/etc/init.d/S99antigoblin-firstboot.sh. Runs once, then removes itself.
 #
 # What it does (offline-friendly, works with no WAN):
-#   1. Bails out quietly if Entware isn't up yet — see "boot ordering" below.
+#   1. Starts a background worker that waits until Entware is ready — see
+#      "boot ordering" below. The init chain is never blocked.
 #   2. Waits for NDM (ndmc) to answer — cold boot needs a few seconds.
 #   3. Installs bundled .ipk files from /opt/var/opkg-cache/ (if any).
 #   4. Runs the staged install.sh with ANTIGOBLIN_SRC_DIR pointing at
@@ -36,15 +37,35 @@
 #
 # On the very first boot npkg extracts our tarball and immediately runs the
 # init.d scripts, BEFORE Entware's own installer has fetched libc/busybox/opkg.
-# There is nothing useful we can do that early, so we detect it and exit 0
-# without disarming ourselves. Entware finishes a few minutes later, and on the
-# next boot rc.unslung runs us in a sane environment.
+# There is nothing useful we can install that early, but simply exiting would
+# require a second reboot: rc.unslung only invokes S* scripts at startup.
+# Instead the tiny launcher below starts one background worker. It polls for
+# Entware for up to 30 minutes, then continues in the same router session.
+# This removes both the second reboot and the need for a manual SSH command.
+
+DONE_FLAG=/opt/etc/antigoblin.done
+LOG=/opt/var/log/antigoblin-firstboot.log
+PID_FILE=/opt/var/run/antigoblin-firstboot.pid
+
+# rc.unslung can source this file more than once (and npkg may invoke it while
+# changing initrc). One worker is enough. A stale PID from a power loss is
+# discarded on the next invocation.
+mkdir -p /opt/var/run 2>/dev/null || true
+if [ ! -f "$DONE_FLAG" ]; then
+  old_pid="$(cat "$PID_FILE" 2>/dev/null)"
+  if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+    true
+  else
+    rm -f "$PID_FILE"
 
 (
   DONE_FLAG=/opt/etc/antigoblin.done
   LOG=/opt/var/log/antigoblin-firstboot.log
+  PID_FILE=/opt/var/run/antigoblin-firstboot.pid
   STAGED=/opt/share/antigoblin-staged
   OPKG_CACHE=/opt/var/opkg-cache
+
+  trap 'rm -f "$PID_FILE"' 0 1 2 15
 
   # Idempotency guard — a manual second run (or reboot into `restart`) is a
   # no-op. The final `rm -f` below is the real disarm.
@@ -69,29 +90,32 @@
     [ -f "$cand" ] && { SELF="$cand"; break; }
   done
 
-  # --- Entware readiness gate ---
+  # --- Entware readiness wait ---
   #
   # First boot runs us straight after npkg unpacked the tarball, while
   # Entware's installer is still downloading libc. Without opkg and busybox
-  # there is no point going further: install.sh would die on its own
-  # `[ -x /opt/bin/opkg ]` check anyway. Exit 0 (NOT 1) so npkg doesn't log a
-  # spurious error, and leave ourselves armed for the next boot.
-  if [ ! -x /opt/bin/opkg ] || [ ! -x /opt/bin/busybox ]; then
-    # Whole thing in a subshell: if /opt/var isn't writable yet the redirect
-    # itself fails, and that error must not leak into rc.unslung's stderr
-    # (which ends up in the Keenetic system log as noise).
-    (
-      mkdir -p /opt/var/log
-      printf '%s firstboot: Entware not ready yet (opkg/busybox missing) — deferring to next boot\n' \
-        "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG"
-    ) 2>/dev/null
-    exit 0
-  fi
-
   mkdir -p /opt/var/log
   touch "$LOG"
   log() { printf '%s firstboot: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG"; }
   die() { log "FATAL: $*"; exit 1; }
+
+  # Npkg extracts this file before its own Entware bootstrap has installed
+  # opkg/busybox. Poll in the background rather than relying on a later boot.
+  # Five-second ticks keep the common case fast while avoiding a busy loop on
+  # the tiny router CPU. The finite cap makes a genuinely broken Entware setup
+  # visible in the log instead of leaving an immortal process behind.
+  i=0
+  while [ "$i" -lt 360 ]; do
+    if [ -x /opt/bin/opkg ] && [ -x /opt/bin/busybox ]; then
+      break
+    fi
+    if [ "$i" -eq 0 ]; then
+      log "Entware not ready yet; waiting in background (up to 30 minutes)"
+    fi
+    sleep 5
+    i=$((i + 1))
+  done
+  [ "$i" -lt 360 ] || die "Entware did not become ready within 30 minutes"
 
   log "=== AntiGoblin first-boot begin ==="
 
@@ -108,6 +132,14 @@
     i=$((i + 1))
   done
   [ $i -lt 20 ] || die "NDM did not respond within 40s"
+
+  # opkg stores its lock at /opt/tmp/opkg.lock and will not create the
+  # directory on its own: without it EVERY opkg call fails with
+  # "opkg_conf_load: Could not create lock file /opt/tmp/opkg.lock". Entware's
+  # installer does create /opt/tmp, but on the USB path we can run before it
+  # gets there — opkg and busybox already exist, so the readiness gate above
+  # lets us through while /opt/tmp is still missing.
+  mkdir -p /opt/tmp
 
   # Restore execute bits that a non-POSIX filesystem may have dropped. On
   # ext this is a no-op; on NTFS/FAT it is what makes the staged tree usable.
@@ -132,7 +164,10 @@
   # present, so this check is really diagnostics: if the tarball was built
   # wrong, we want a clear line in the log rather than silent missing UDP.
   if [ -f /opt/sbin/sing-box ]; then
-    log "sing-box binary present: $(/opt/sbin/sing-box version 2>/dev/null | head -n 1)"
+    # Do not execute the bundled binary here. During the Entware bootstrap its
+    # dynamic loader may not be available yet, which can make this harmless
+    # diagnostic block firstboot for minutes.
+    log "sing-box binary present"
   else
     log "WARN: /opt/sbin/sing-box missing — install.sh will try to download online"
   fi
@@ -159,7 +194,11 @@
   [ -n "$SELF" ] && rm -f "$SELF"
 
   exit 0
-)
+) &
+    worker_pid=$!
+    printf '%s\n' "$worker_pid" > "$PID_FILE"
+  fi
+fi
 
 # Swallow the subshell's status: when rc.unslung sources us, a non-zero here
 # would leak into its loop. Real failures are recorded in the log and, more
