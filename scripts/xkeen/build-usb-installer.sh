@@ -214,9 +214,28 @@ mkdir -p "$ZIP_STAGE/install"
 cp "$TAR_OUT" "$ZIP_STAGE/install/${ARCH}-installer.tar.gz"
 log "Packing user-facing zip: $ZIP_OUT"
 rm -f "$ZIP_OUT"
-# -j would strip paths; we want `install/…` preserved. -q silences the
-# per-file listing but keeps errors visible.
-( cd "$ZIP_STAGE" && zip -qr "$ZIP_OUT" install/ )
+# -j would strip paths; we want `install/…` preserved. GitHub's Ubuntu
+# runner has `zip`, while a minimal local builder may not. Python's standard
+# library keeps local verification possible without a system package install.
+if command -v zip >/dev/null 2>&1; then
+  ( cd "$ZIP_STAGE" && zip -qr "$ZIP_OUT" install/ )
+elif command -v python3 >/dev/null 2>&1; then
+  python3 - "$ZIP_STAGE" "$ZIP_OUT" <<'PY'
+import os
+import sys
+import zipfile
+
+source, target = sys.argv[1:]
+with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+    for root, _, files in os.walk(os.path.join(source, "install")):
+        for name in files:
+            path = os.path.join(root, name)
+            archive.write(path, os.path.relpath(path, source))
+PY
+else
+  echo "Need either zip or python3 to build $ZIP_OUT" >&2
+  exit 1
+fi
 
 TAR_SIZE_MB="$(du -m "$TAR_OUT" | awk '{print $1}')"
 ZIP_SIZE_MB="$(du -m "$ZIP_OUT" | awk '{print $1}')"
@@ -236,9 +255,9 @@ Alternative (for people who prefer to drop the tarball manually):
   → put in <USB root>/install/${ARCH}-installer.tar.gz
 
 Then in Keenetic Web UI: "Приложения → Менеджер пакетов OPKG" → point at
-this USB. Router will unpack, reboot, and on next boot
-S99antigoblin-firstboot.sh runs install.sh with
-ANTIGOBLIN_SRC_DIR=/opt/share/antigoblin-staged.
+this USB. Npkg unpacks Entware in the current session; the background
+S99antigoblin-firstboot.sh worker waits for it and then runs install.sh with
+ANTIGOBLIN_SRC_DIR=/opt/share/antigoblin-staged. No reboot or SSH is needed.
 
 Verify version on the router later:
   cat /opt/share/antigoblin-staged/VERSION
