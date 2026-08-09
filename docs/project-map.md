@@ -42,7 +42,7 @@ Backend и runtime-сборка. Раскатывается в `/opt/share/xkeen
 | `antigoblin-selfheal.cron.sh` | `/opt/etc/cron.1min/50-antigoblin-selfheal` | Страховочный слой self-heal раз в минуту. |
 | `antigoblin-remount-hook.sh` | `/opt/etc/ndm/usb.d/50-antigoblin.sh` | Восстановление после USB-remount / возврата `/opt`. Legacy-копия в `fs.d/` снимается при upgrade. |
 | `antigoblin-netfilter-hook.sh` | `/opt/etc/ndm/netfilter.d/50-antigoblin.sh` | Мгновенное восстановление TPROXY-jump в mangle PREROUTING при NDM-reload netfilter (WAN reconnect, WiFi client join, firewall changes). |
-| `antigoblin-firstboot.sh` | `/opt/etc/init.d/S99antigoblin-firstboot` | One-shot init.d, только для «USB-installer» пути (см. ниже). Внутри USB-tarball, при обычной установке через `curl install.sh` не используется. |
+| `antigoblin-firstboot.sh` | `/opt/etc/init.d/S99antigoblin-firstboot.sh` | One-shot init.d, только для «USB-installer» пути (см. ниже). Внутри USB-tarball, при обычной установке через `curl install.sh` не используется. |
 
 ### Dev-скрипты (только локально на Windows)
 
@@ -120,7 +120,7 @@ UI и state:
   - весь `opt/` из чистого Entware installer нужной архитектуры;
   - `/opt/sbin/sing-box` — предзагруженный бинарь;
   - `/opt/share/antigoblin-staged/` — полная копия репы (для offline install);
-  - `/opt/etc/init.d/S99antigoblin-firstboot` — берётся из `scripts/xkeen/antigoblin-firstboot.sh`.
+  - `/opt/etc/init.d/S99antigoblin-firstboot.sh` — берётся из `scripts/xkeen/antigoblin-firstboot.sh`.
 - `.github/workflows/release-usb-installer.yml` — CI, matrix `aarch64` × `armv7`, публикует артефакты в GitHub Release при пуше тега `v*`.
 - Флаг `/opt/etc/antigoblin.done` — маркер что firstboot уже отработал (защита от повторного запуска). Удалить и перезагрузить роутер, если нужен полный re-provision.
 
