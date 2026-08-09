@@ -80,10 +80,11 @@ LAN-IP роутера подставляется в inbound-конфиг **ди�
   - [Шаг 1. Установить компоненты KeeneticOS](#шаг-1-установить-компоненты-keeneticos)
   - [Шаг 2. Подготовить флешку с Entware на PC](#шаг-2-подготовить-флешку-с-entware-на-pc)
   - [Шаг 3. Подключить Entware к OPKG-менеджеру и перезагрузить](#шаг-3-подключить-entware-к-opkg-менеджеру-и-перезагрузить)
-- [Установка одной командой](#установка-одной-командой)
-  - [Вариант без SSH: через Keenetic Web CLI](#вариант-без-ssh-через-keenetic-web-cli)
-  - [Вариант через SSH](#вариант-через-ssh)
-  - [Вариант «всё-на-флешке» (без SSH и без web CLI)](#вариант-всё-на-флешке-без-ssh-и-без-web-cli)
+- [Установка](#установка)
+  - [Вариант 1 — «всё-на-флешке» (рекомендуемый, без SSH и без web CLI)](#вариант-1--всё-на-флешке-рекомендуемый-без-ssh-и-без-web-cli)
+  - [Вариант 2 — через Keenetic Web CLI](#вариант-2--через-keenetic-web-cli)
+  - [Вариант 3 — через SSH](#вариант-3--через-ssh)
+  - [Как открыть UI после установки](#как-открыть-ui-после-установки)
 - [Что делать после установки](#что-делать-после-установки)
 - [Где брать списки IP / CIDR / доменов для популярных сервисов](#где-брать-списки-ip--cidr--доменов-для-популярных-сервисов)
 - [Структура проекта](#структура-проекта)
@@ -193,79 +194,15 @@ exec sh                    # выйти из NDM CLI в обычный shell
 
 > На некоторых прошивках Keenetic (с включённым SSH-компонентом) порт SSH — `222`, а пользователь по умолчанию — `root` с паролем `keenetic`. Если `ssh admin@192.168.1.1` не пускает, попробуй `ssh root@192.168.1.1 -p 222`.
 
-## Установка одной командой
+## Установка
 
-### Вариант без SSH: через Keenetic Web CLI
+Три варианта, от самого простого к самому «hands-on». Все три ведут к одному результату — рабочему UI на роутере. Флеш-путь рекомендуется всем, кто не хочет открывать терминал.
 
-Открыть встроенный Web CLI Keenetic:
+### Вариант 1 — «всё-на-флешке» (рекомендуемый, без SSH и без web CLI)
 
-```text
-http://192.168.1.1/a
-```
+Ничего не вводишь руками. Скачал zip → распаковал на флешку → воткнул → активировал OPKG в web UI. Всё.
 
-Ввести команду:
-
-```sh
-exec sh -c "opkg install curl >/dev/null 2>&1; /opt/bin/curl -fsSL https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/scripts/xkeen/antigoblin-web-cli-install.sh | /opt/bin/sh"
-```
-
-Что происходит:
-
-- Keenetic Web CLI запускает shell-команду через `exec sh -c`;
-- `opkg install curl` тихо доставит `curl`, если его ещё нет (базовый Entware ставит только `wget-nossl`, без HTTPS — своим `wget` этот bootstrap не скачать);
-- Entware-овский `/opt/bin/curl` скачивает `scripts/xkeen/antigoblin-web-cli-install.sh`;
-- этот bootstrap-скрипт скачивает обычный `install.sh` из репозитория и запускает его через `/opt/bin/sh`.
-
-Такой вариант удобен, когда не хочется открывать SSH/PuTTY/Terminal только ради запуска установщика.
-
-### Вариант через SSH
-
-SSH на роутер и выполнить:
-
-```sh
-ssh admin@192.168.1.1
-exec sh
-curl -fsSL https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/install.sh | sh
-```
-
-> **`exec sh` обязателен**. После `ssh admin@…` Keenetic пускает в свой NDM CLI (промпт `(config)>`), а не в обычный shell. Если ввести `curl …` сразу — увидишь `unknown command`. `exec sh` переключает сессию в BusyBox-shell, где работают `curl`, `opkg`, `install.sh` и всё остальное.
-
-> На дефолтном Entware стоит `wget-nossl` (без HTTPS), поэтому `wget https://...` не сработает. Если `curl` ещё не установлен — сначала `opkg install curl`, потом команду выше.
-
-Если `curl` ещё не установлен, а хочется сначала посмотреть скрипт:
-
-```sh
-ssh admin@192.168.1.1
-exec sh
-opkg install curl
-curl -fsSL -o install.sh https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/install.sh
-sh install.sh
-```
-
-Скрипт:
-
-- проверяет `Entware/OPKG` в `/opt`;
-- ставит пакеты Entware (`xray`, `uhttpd_kn`, `jq`, `iptables`, `ipset`, `conntrack`, `ca-bundle`, `wget`, `tar`, `gzip` и др.);
-- скачивает `sing-box` musl-бинарь под архитектуру роутера и кладет в `/opt/sbin/sing-box`;
-- скачивает свежий tarball репозитория с GitHub и распаковывает во временный каталог;
-- создает UI-видимую политику Keenetic `xkeen` как `Policy42+`, если ее еще нет;
-- раскладывает sample-конфиги `xray` и `sing-box` (существующие конфиги не трогаются — для перезаписи использовать `ANTIGOBLIN_FORCE=1`);
-- кладет UI и backend в `/opt/share/xkeen-manager/`;
-- ставит init-скрипты `S20antigoblin-sysctl`, `S24antigoblin-singbox`, `S25antigoblin-selfheal`, `S26antigoblin`;
-- ставит cron и `ndm/usb.d`/`ndm/netfilter.d` хуки для авто-восстановления после reboot, USB-событий и reload netfilter;
-- запускает первый цикл `xkeen-selfheal.sh --force` и поднимает UI на `:8899`.
-
-Скрипт идемпотентный: повторный запуск обновит исходники без затирания пользовательской конфигурации. Чтобы пересеять и sample-конфиги:
-
-```sh
-ANTIGOBLIN_FORCE=1 sh install.sh
-```
-
-После установки скрипт сам напишет URL для UI. Логин и пароль — от web UI Keenetic.
-
-### Вариант «всё-на-флешке» (без SSH и без web CLI)
-
-Схема для тех, кто вообще не хочет открывать SSH или Keenetic Web CLI. Работает поверх обычной подготовки Entware через флешку — только вместо чистого `<arch>-installer.tar.gz` мы кладём готовый zip с папкой `install/`, где внутри лежит наш USB-installer (в котором уже есть Entware **плюс** предустановленный AntiGoblin и `sing-box`). При первом монтировании флешки Keenetic развернёт Entware, и запустится наш `S99antigoblin-firstboot`, который сам вызовет `install.sh` с локальной копией — без интернета для скачивания репозитория.
+Как это работает: zip содержит папку `install/` с уже готовым `<arch>-installer.tar.gz`, внутри которого лежит Entware **плюс** предустановленный AntiGoblin и `sing-box`. Keenetic развернёт Entware, при первом старте одноразовый `S99antigoblin-firstboot` запустит `install.sh` из локальной копии без похода в GitHub — репозиторий уже внутри архива.
 
 **Шаги:**
 
@@ -274,7 +211,7 @@ ANTIGOBLIN_FORCE=1 sh install.sh
    - `antigoblin-usb-aarch64.zip` — большинство современных Keenetic: Giga, Ultra, Hero, Peak, Speedster, Runner, Hopper, Skipper.
    - `antigoblin-usb-armv7.zip` — старые: Extra, Giga II/III, Duo, Air, Omni.
 
-   > Внутри zip лежит папка `install/` с правильно названным `<arch>-installer.tar.gz` — папку и файл создавать вручную не нужно.
+   > Внутри zip лежит папка `install/` с правильно названным `<arch>-installer.tar.gz` — папку и файл создавать вручную не нужно. Внутри также лежит файл `VERSION`, который позже можно прочитать на роутере (см. ниже).
 
 2. Флешку подготовить как обычно ([Шаг 2](#шаг-2-подготовить-флешку-с-entware-на-pc)) — отформатировать в ext4.
 
@@ -288,13 +225,13 @@ ANTIGOBLIN_FORCE=1 sh install.sh
 
 4. Вставить флешку в роутер, в web UI Keenetic зайти в `Приложения → Менеджер пакетов OPKG` и указать эту флешку — [Шаг 3](#шаг-3-подключить-entware-к-opkg-менеджеру-и-перезагрузить). Роутер один раз перезагрузится (разворачивает Entware).
 
-5. После перезагрузки подождать ещё ~1-2 минуты — идёт `S99antigoblin-firstboot`. Прогресс можно смотреть по адресу `http://192.168.1.1:8899/` (страница появится, как только UI поднимется). Если нужен подробный лог — SSH и `cat /opt/var/log/antigoblin-firstboot.log`.
+5. После перезагрузки подождать ещё ~1-2 минуты — идёт `S99antigoblin-firstboot`. Прогресс можно смотреть, открывая UI в браузере (страница появится, как только сервис поднимется — адрес см. ниже [Как открыть UI после установки](#как-открыть-ui-после-установки)). Если нужен подробный лог — SSH и `cat /opt/var/log/antigoblin-firstboot.log`.
 
-6. Открыть `http://192.168.1.1:8899/`, залогиниться через Keenetic-креды, добавить ключ / подписку, Save & Apply. Дальше как в разделе [Что делать после установки](#что-делать-после-установки).
+6. Открыть UI, залогиниться через Keenetic-креды, добавить ключ / подписку, Save & Apply. Дальше как в разделе [Что делать после установки](#что-делать-после-установки).
 
 > Если предпочитаешь класть tarball руками — в том же Release лежит `<arch>-installer.tar.gz` рядом с zip'ом. Скачал → сам создал `install/` на флешке → положил.
 
-> Проверить версию установленной сборки на роутере: `ssh admin@192.168.1.1` → `exec sh` → `cat /opt/share/antigoblin-staged/VERSION`.
+> Проверить версию установленной сборки на роутере: `ssh admin@<адрес-роутера>` → `exec sh` → `cat /opt/share/antigoblin-staged/VERSION`.
 
 **Как это устроено под капотом.** Наш USB-tarball — это исходный `<arch>-installer.tar.gz` от Entware плюс:
 
@@ -315,9 +252,100 @@ ANTIGOBLIN_FORCE=1 sh install.sh
 
 **Ограничения:**
 
-- Поддерживаемые архитектуры — `aarch64` и `armv7`. Для `mipsel`/`mips`/`x86_64` используй классический путь через SSH / Web CLI.
+- Поддерживаемые архитектуры — `aarch64` и `armv7`. Для `mipsel`/`mips`/`x86_64` используй Вариант 2 или 3.
 - `S99antigoblin-firstboot` при запуске выполняет `opkg install` для обязательных пакетов (`xray`, `uhttpd_kn`, `iptables`, `ipset`, `conntrack`, `jq`, `gawk`, `ca-bundle`). Для этого нужен работающий WAN. Если WAN недоступен на первом boot — flash-install зафейлится, лог в `/opt/var/log/antigoblin-firstboot.log`.
 - Если хочется прогнать firstboot ещё раз (например, после сброса) — удалить `/opt/etc/antigoblin.done` и перезагрузить роутер.
+
+### Вариант 2 — через Keenetic Web CLI
+
+Для случая, когда Entware уже развёрнут ([Шаги 1-3 подготовки Keenetic](#подготовка-keenetic-один-раз-руками)), но качать zip и распаковывать не хочется. Достаточно браузера — SSH-клиент не нужен.
+
+Открыть встроенный Web CLI Keenetic:
+
+```text
+http://<адрес-роутера>/a
+```
+
+(например `http://my.keenetic.net/a` или `http://192.168.1.1/a` — см. [ниже](#как-открыть-ui-после-установки) как узнать адрес роутера).
+
+Ввести команду:
+
+```sh
+exec sh -c "opkg install curl >/dev/null 2>&1; /opt/bin/curl -fsSL https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/scripts/xkeen/antigoblin-web-cli-install.sh | /opt/bin/sh"
+```
+
+Что происходит:
+
+- Keenetic Web CLI запускает shell-команду через `exec sh -c`;
+- `opkg install curl` тихо доставит `curl`, если его ещё нет (базовый Entware ставит только `wget-nossl`, без HTTPS — своим `wget` этот bootstrap не скачать);
+- Entware-овский `/opt/bin/curl` скачивает `scripts/xkeen/antigoblin-web-cli-install.sh`;
+- этот bootstrap-скрипт скачивает обычный `install.sh` из репозитория и запускает его через `/opt/bin/sh`.
+
+### Вариант 3 — через SSH
+
+Классический путь для тех, кто уже привык к терминалу. Требует SSH-доступа к роутеру (компонент «Доступ через SSH» в KeeneticOS).
+
+```sh
+ssh admin@<адрес-роутера>
+exec sh
+curl -fsSL https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/install.sh | sh
+```
+
+Подставь адрес роутера ([как узнать](#как-открыть-ui-после-установки)) вместо `<адрес-роутера>` — например `my.keenetic.net` или `192.168.1.1`.
+
+> **`exec sh` обязателен**. После `ssh admin@…` Keenetic пускает в свой NDM CLI (промпт `(config)>`), а не в обычный shell. Если ввести `curl …` сразу — увидишь `unknown command`. `exec sh` переключает сессию в BusyBox-shell, где работают `curl`, `opkg`, `install.sh` и всё остальное.
+
+> На дефолтном Entware стоит `wget-nossl` (без HTTPS), поэтому `wget https://...` не сработает. Если `curl` ещё не установлен — сначала `opkg install curl`, потом команду выше.
+
+Если `curl` ещё не установлен, а хочется сначала посмотреть скрипт:
+
+```sh
+ssh admin@<адрес-роутера>
+exec sh
+opkg install curl
+curl -fsSL -o install.sh https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/install.sh
+sh install.sh
+```
+
+Скрипт (общий для всех трёх вариантов):
+
+- проверяет `Entware/OPKG` в `/opt`;
+- ставит пакеты Entware (`xray`, `uhttpd_kn`, `jq`, `iptables`, `ipset`, `conntrack`, `ca-bundle`, `wget`, `tar`, `gzip` и др.);
+- скачивает `sing-box` musl-бинарь под архитектуру роутера и кладет в `/opt/sbin/sing-box`;
+- скачивает свежий tarball репозитория с GitHub и распаковывает во временный каталог;
+- создает UI-видимую политику Keenetic `xkeen` как `Policy42+`, если ее еще нет;
+- раскладывает sample-конфиги `xray` и `sing-box` (существующие конфиги не трогаются — для перезаписи использовать `ANTIGOBLIN_FORCE=1`);
+- кладет UI и backend в `/opt/share/xkeen-manager/`;
+- ставит init-скрипты `S20antigoblin-sysctl`, `S24antigoblin-singbox`, `S25antigoblin-selfheal`, `S26antigoblin`;
+- ставит cron и `ndm/usb.d`/`ndm/netfilter.d` хуки для авто-восстановления после reboot, USB-событий и reload netfilter;
+- запускает первый цикл `xkeen-selfheal.sh --force` и поднимает UI на `:8899`.
+
+Скрипт идемпотентный: повторный запуск обновит исходники без затирания пользовательской конфигурации. Чтобы пересеять и sample-конфиги:
+
+```sh
+ANTIGOBLIN_FORCE=1 sh install.sh
+```
+
+### Как открыть UI после установки
+
+Открыть в браузере: `http://<адрес-роутера>:8899/`. Логин и пароль — от web UI Keenetic.
+
+**Какой адрес подставить:**
+
+- `http://my.keenetic.net:8899/` — универсально работает, если клиент подключён к Keenetic и включён компонент «Служба Keenetic DNS» (стоит по умолчанию). Не зависит от того, менялся ли LAN-IP роутера.
+- `http://192.168.1.1:8899/` — заводской дефолт LAN-IP Keenetic. Работает, если ты его не менял.
+- **Свой IP роутера**, если ты менял LAN-подсеть. Пример: у нас в тестовой инсталляции роутер стоит на `192.168.2.1`, поэтому UI живёт на `http://192.168.2.1:8899/`.
+
+**Как узнать текущий адрес роутера:**
+
+- В web UI Keenetic: `Мои сети и Wi-Fi → Домашняя сеть → Адрес роутера`.
+- Или через command line на клиенте:
+  - Windows: `ipconfig` — строка «Основной шлюз» под активным интерфейсом.
+  - Linux / macOS: `ip route | grep default` или `netstat -rn | grep default`.
+  - Android: настройки Wi-Fi → текущая сеть → «Шлюз».
+- Или посмотреть последнюю строчку вывода `install.sh` — он сам пишет URL для UI по завершении.
+
+Порт `:8899` — дефолт AntiGoblin. Меняется через `-Port` в PowerShell-скриптах разработки или редактированием `/opt/etc/antigoblin.conf` на роутере.
 
 ## Что делать после установки
 
