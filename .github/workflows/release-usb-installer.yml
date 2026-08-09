@@ -47,7 +47,12 @@ jobs:
           if [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION_ARG="--version ${{ github.event.inputs.version }}"
           fi
-          ./scripts/xkeen/build-usb-installer.sh --arch ${{ matrix.arch }} $VERSION_ARG
+          # Invoke via `bash` explicitly instead of ./script.sh so the
+          # workflow doesn't depend on the file's executable bit surviving
+          # a `git add` from a Windows checkout (git on Windows stores new
+          # files as 100644 by default; `git update-index --chmod=+x` was
+          # applied to the same commit for local use, but belt-and-braces).
+          bash scripts/xkeen/build-usb-installer.sh --arch ${{ matrix.arch }} $VERSION_ARG
 
       - name: Show artifact metadata
         run: ls -lah dist/
