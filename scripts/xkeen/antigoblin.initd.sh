@@ -2,7 +2,25 @@
 
 PATH=/opt/bin:/opt/sbin:/sbin:/bin:/usr/sbin:/usr/bin
 
+# Port defaults to 8899 but can be overridden via /opt/etc/antigoblin.conf
+# (written by install.sh from $ANTIGOBLIN_UI_PORT). Keeps install.sh's summary
+# URL and the actual bound port in sync.
 PORT="8899"
+if [ -r /opt/etc/antigoblin.conf ]; then
+  # Parse PORT=NNN safely (no `source` — that would execute arbitrary shell
+  # if the file were tampered with, and would also silently propagate a
+  # non-numeric or empty PORT into `is_running` where `grep -q ": "` would
+  # match any listener).
+  _cfg_port="$(awk -F= '$1=="PORT" && $2 ~ /^[0-9]+$/ { gsub(/[^0-9]/,"",$2); print $2; exit }' /opt/etc/antigoblin.conf 2>/dev/null)"
+  case "$_cfg_port" in
+    ''|*[!0-9]*) ;;
+    *)
+      if [ "$_cfg_port" -ge 1 ] && [ "$_cfg_port" -le 65535 ]; then
+        PORT="$_cfg_port"
+      fi
+      ;;
+  esac
+fi
 ROOT_DIR="/opt/share/xkeen-manager"
 LOG_FILE="/opt/var/log/xkeen-manager-uhttpd.log"
 SELFHEAL="/opt/share/xkeen-manager/api/xkeen-selfheal.sh"

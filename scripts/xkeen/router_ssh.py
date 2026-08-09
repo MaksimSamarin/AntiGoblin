@@ -38,6 +38,11 @@ def run_command(args: argparse.Namespace) -> int:
         command = sys.stdin.read() if args.stdin else args.command
         if not command:
             raise SystemExit("Command is empty.")
+        # Symmetric with upload_file: normalize CRLF -> LF before sending.
+        # PowerShell here-strings picked up by `Get-Content -Raw` inherit the
+        # file's line endings, which under `core.autocrlf=true` become \r\n.
+        # BusyBox sh then parses `if [ ... ]\r` and dies with "syntax error".
+        command = command.replace("\r\n", "\n").replace("\r", "\n")
         _, stdout, stderr = client.exec_command(command, timeout=args.timeout)
         exit_code = stdout.channel.recv_exit_status()
         out = stdout.read().decode("utf-8", errors="replace")
@@ -74,15 +79,21 @@ def upload_file(args: argparse.Namespace) -> int:
             raise SystemExit(f"Failed to create remote directory: {remote_dir}")
 
         with open(args.local, "rb") as local_file:
-            stdin, stdout, stderr = client.exec_command(
-                f"cat > '{args.remote}'", timeout=args.timeout
-            )
-            stdin.channel.sendall(local_file.read())
-            stdin.channel.shutdown_write()
-            exit_code = stdout.channel.recv_exit_status()
-            err = stderr.read().decode("utf-8", errors="replace")
-            if exit_code != 0:
-                raise SystemExit(err or f"Failed to upload file to {args.remote}")
+            payload = local_file.read()
+        # Normalize CRLF -> LF. Windows git-checkout often leaves \r\n which
+        # BusyBox sh treats as an invalid path on the shebang line
+        # (`#!/bin/sh\r` -> "not found"). Pass --binary to skip for binaries.
+        if not getattr(args, "binary", False):
+            payload = payload.replace(b"\r\n", b"\n")
+        stdin, stdout, stderr = client.exec_command(
+            f"cat > '{args.remote}'", timeout=args.timeout
+        )
+        stdin.channel.sendall(payload)
+        stdin.channel.shutdown_write()
+        exit_code = stdout.channel.recv_exit_status()
+        err = stderr.read().decode("utf-8", errors="replace")
+        if exit_code != 0:
+            raise SystemExit(err or f"Failed to upload file to {args.remote}")
 
         if args.mode:
             _, stdout, stderr = client.exec_command(
@@ -117,7 +128,12 @@ def main() -> int:
     parser.add_argument("--password")
     default_port = int(os.environ.get("ROUTER_SSH_PORT") or 22)
     parser.add_argument("--ssh-port", type=int, default=default_port)
-    parser.add_argument("--timeout", type=int, default=15)
+    # 300s covers heavy remote commands like `opkg update && opkg install ...`
+    # (chain of xray/uhttpd_kn/ipset/iptables on a router with slow storage)
+    # and downloading sing-box tarball. Override via ROUTER_SSH_TIMEOUT or
+    # --timeout for tighter dev-loops.
+    default_timeout = int(os.environ.get("ROUTER_SSH_TIMEOUT") or 300)
+    parser.add_argument("--timeout", type=int, default=default_timeout)
 
     subparsers = parser.add_subparsers(dest="action", required=True)
 
@@ -127,6 +143,8 @@ def main() -> int:
 
     upload_parser = subparsers.add_parser("upload")
     upload_parser.add_argument("--local", required=True)
+    upload_parser.add_argument("--binary", action="store_true",
+        help="skip CRLF->LF normalization (use for images/binaries)")
     upload_parser.add_argument("--remote", required=True)
     upload_parser.add_argument("--mode")
 

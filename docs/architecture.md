@@ -88,6 +88,40 @@ PREROUTING  UDP, dst ∈ xkeen_udp_route -> TPROXY :61221 (sing-box)
 
 `bypass` и `direct` — **не одно и то же**. `bypass` — это `RETURN` ещё в `iptables`, поток вообще не доходит до `xray`. `direct` — поток вошёл в `xray`, но был выпущен наружу без VPN. Для локалки, discovery и части IoT cloud-сценариев нужен именно `bypass`, а не `direct`.
 
+### SOCKS5-inbound для приложений с PC
+
+Отдельный вход `socks-in` в `xray` — порт `61080` на LAN-адресе роутера, TCP+UDP (SOCKS5 UDP-ASSOCIATE поддержан). Даёт **точечный туннель по имени процесса** для клиентов на PC, использующих process-based SOCKS5-перехват.
+
+```text
+Приложение на PC
+  │
+  ▼  SOCKS5-клиент перехватывает по имени процесса и
+     заворачивает TCP+UDP в SOCKS5
+  │
+  ▼  SOCKS5 → <LAN-IP роутера>:61080
+  │
+xray socks-in inbound
+  │
+  ▼  routing.json rule: `inboundTag=socks-in → outboundTag=vless-reality`
+     (правило захардкожено в `buildRoutingDocument` в `app.js`, всегда
+     генерируется при apply, не зависит от групп в UI)
+  │
+  ▼  vless-reality outbound → активный ключ VPN
+     (или SOCKS5 → sing-box 61225 если активный ключ hysteria2)
+```
+
+Зачем: для приложений с anycast/динамическими IP серверов, когда ловить назначения в UI-группы вручную неудобно. Все пакеты приложения гарантированно идут через VPN с одного exit-IP.
+
+LAN-IP роутера, который `xray` возвращает клиенту в SOCKS5 UDP-ASSOCIATE reply, подставляется **динамически** — функция `xkeen_ensure_socks_inbound_ip` в `xkeen-runtime.sh` при каждом `apply`/`restart_xray` определяет адрес через интерфейс `br0`. Проект работает на любом LAN-адресе без правки конфига.
+
+### Быстрое восстановление UDP-TPROXY после reload netfilter
+
+TPROXY-jump для UDP-route живёт **в самом конце** mangle PREROUTING — matчит только пакеты с `connmark` политики xkeen (`0xffffaaX`, конкретное значение у каждого роутера своё, читается из `ndmc show ip policy`), который проставляет NDM в цепочке `_NDM_HOTSPOT_PREROUTING_MANGL`. Порядок критичен: правило должно проверяться **после** NDM-цепочки.
+
+KeeneticOS при некоторых событиях (WAN reconnect, WiFi client join, DHCP-lease, изменения firewall) пересобирает mangle PREROUTING — при этом наше правило может оказаться не в конце, и первый UDP-пакет флоу уходит через WAN direct с провайдерским IP. Для протоколов, чувствительных к смене source-IP (Discord voice, realtime-игры), это приводит к моментальному переустанавливанию канала.
+
+Восстановление даёт NDM-хук `/opt/etc/ndm/netfilter.d/50-antigoblin.sh` — вызывается сразу после каждой перезагрузки netfilter. Хук источникует `xkeen-runtime.sh`, проверяет `tail -1` mangle PREROUTING и, если правило не последнее, удаляет старые jumps и append'ит его заново. Время реакции ~40 мс. Селфхил каждые 15 секунд остаётся страховкой на случай если хук не отработал.
+
 ## Источник истины
 
 `/opt/share/xkeen-manager/xkeen-ui-state.json` — единственный источник истины для UI и runtime.
@@ -114,7 +148,8 @@ PREROUTING  UDP, dst ∈ xkeen_udp_route -> TPROXY :61221 (sing-box)
 Дополнительно стоит:
 
 - cron-хук `cron.1min/50-antigoblin-selfheal` как страховочный слой;
-- `ndm/fs.d/50-antigoblin.sh` и `ndm/usb.d/50-antigoblin.sh` — поднимают всё после возврата `/opt` или USB-событий;
+- `ndm/usb.d/50-antigoblin.sh` — поднимает всё после USB-remount / возврата `/opt`. Ставится только в `usb.d/` начиная с v1.1.x; дублирование в `fs.d/` было убрано (двойной запуск при USB-событиях);
+- `ndm/netfilter.d/50-antigoblin.sh` — мгновенно восстанавливает TPROXY-jump в mangle PREROUTING при перезагрузке netfilter (WAN reconnect, WiFi client join, firewall changes) без ожидания следующего selfheal-тика;
 - `S20antigoblin-sysctl` — точечно занижает TCP/conntrack-таймауты, чтобы fd на роутере не накапливались.
 
 ## Что больше не часть live-архитектуры

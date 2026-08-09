@@ -42,7 +42,9 @@ if ($LASTEXITCODE -ne 0) {
 if ($alreadyListening -match 'YES') {
   Write-Output "UI already listening on $Port"
 } else {
-  Invoke-RouterCommand -Command ": > /opt/var/log/xkeen-manager-uhttpd.log && cd $RemoteRoot && /opt/sbin/uhttpd -f -p 0.0.0.0:$Port -h $RemoteRoot -I index.html -x /api -i .cgi=/bin/sh -r 'AntiGoblin' >/opt/var/log/xkeen-manager-uhttpd.log 2>&1 &"
+  # -t 120 -T 120 mirrors S26antigoblin — full Save+Apply rebuilds ~700
+  # ipset CIDRs + xray reload, which cross the default 60s CGI timeout.
+  Invoke-RouterCommand -Command ": > /opt/var/log/xkeen-manager-uhttpd.log && cd $RemoteRoot && /opt/sbin/uhttpd -f -p 0.0.0.0:$Port -h $RemoteRoot -I index.html -x /api -i .cgi=/bin/sh -r 'AntiGoblin' -t 120 -T 120 >/opt/var/log/xkeen-manager-uhttpd.log 2>&1 &"
 }
 
 Invoke-RouterCommand -Command "sleep 2"

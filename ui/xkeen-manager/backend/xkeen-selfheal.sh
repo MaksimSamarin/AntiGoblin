@@ -11,8 +11,8 @@ XRAY_ASSET_DIR="/opt/etc/xray/dat"
 XRAY_CONF_DIR="/opt/etc/xray/configs"
 SING_BOX_CONF="/opt/etc/sing-box/xkeen.json"
 STATE_PATH="/opt/share/xkeen-manager/xkeen-ui-state.json"
-LOCK_DIR="/tmp/xkeen-selfheal.lock"
-LOCK_PID_FILE="$LOCK_DIR/pid"
+# LOCK_DIR/LOCK_PID_FILE come from xkeen-runtime.sh (XKEEN_LOCK_*).
+# Kept for legacy references (health rotate log paths).
 HEALTH_STAMP_FILE="/tmp/xkeen-health-last.ts"
 XRAY_RESTART_STAMP_FILE="/tmp/xkeen-xray-restart-last.ts"
 LOG_ROTATE_INTERVAL_SEC=86400
@@ -45,6 +45,8 @@ HEALTH_PROBE_OK=0
 HEALTH_STATUS="ok"
 XRAY_FD_CRITICAL_STREAK_FILE="/tmp/xkeen-xray-fd-critical-streak"
 XRAY_REMOTE_FIN_WAIT_STREAK_FILE="/tmp/xkeen-xray-remote-fin-wait-streak"
+XRAY_START_FAIL_STREAK_FILE="/tmp/xkeen-xray-start-fail-streak"
+XRAY_START_BACKOFF_STAMP_FILE="/tmp/xkeen-xray-start-backoff.ts"
 
 XKEEN_RUNTIME_LOG="$LOG_PATH"
 if [ -f "/opt/share/xkeen-manager/api/xkeen-runtime.sh" ]; then
@@ -109,7 +111,11 @@ xray_ready() {
 }
 
 xray_relay_ready() {
-  netstat -lnpt 2>/dev/null | grep -q ':62640 '
+  # SS-relay 62640 is used for UDP-over-shadowsocks from sing-box (TPROXY
+  # UDP → sing-box → SS-relay UDP → xray VLESS outbound). Check the UDP
+  # socket, not TCP — TCP is opened as a side effect of the same inbound
+  # but not what we actually rely on for the datapath.
+  netstat -lnpu 2>/dev/null | grep -q '127.0.0.1:62640 '
 }
 
 singbox_ready() {
@@ -150,11 +156,16 @@ ensure_xray_init_confdir() {
   grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$INIT" 2>/dev/null && return 0
   grep -q 'ARGS="run -confdir /opt/etc/xray"' "$INIT" 2>/dev/null || return 0
   cp "$INIT" "$INIT.bak-antigoblin-confdir" 2>/dev/null || true
-  sed 's#ARGS="run -confdir /opt/etc/xray"#ARGS="run -confdir /opt/etc/xray/configs"#' "$INIT" > "$INIT.tmp" \
-    && cat "$INIT.tmp" > "$INIT" \
-    && rm -f "$INIT.tmp" \
-    && chmod 755 "$INIT" 2>/dev/null \
-    && health_log "action=xray_init_confdir file=$INIT value=/opt/etc/xray/configs"
+  # Atomic swap via mv. The old `cat tmp > INIT` did truncate+write in two
+  # steps; if killed between them, INIT would be left empty and xray would
+  # not start on next boot. `mv` is atomic within a filesystem.
+  if sed 's#ARGS="run -confdir /opt/etc/xray"#ARGS="run -confdir /opt/etc/xray/configs"#' "$INIT" > "$INIT.tmp" \
+      && chmod 755 "$INIT.tmp" 2>/dev/null \
+      && mv "$INIT.tmp" "$INIT"; then
+    health_log "action=xray_init_confdir file=$INIT value=/opt/etc/xray/configs"
+  else
+    rm -f "$INIT.tmp" 2>/dev/null || true
+  fi
 }
 
 get_xray_remote_endpoint() {
@@ -172,11 +183,19 @@ get_xray_remote_endpoint() {
   esac
 
   if [ -n "$XRAY_REMOTE_HOST" ]; then
-    XRAY_REMOTE_IP="$(nslookup "$XRAY_REMOTE_HOST" 2>/dev/null | /opt/bin/awk '
-      /^Name:/ { seen_name=1; next }
-      seen_name && /^Address [0-9]+: / { print $3; exit }
-      seen_name && /^Address: / { print $2; exit }
-    ' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
+    # Use the cached, timeout-guarded resolver from xkeen-runtime.sh
+    # instead of a fresh synchronous nslookup — the value is used from
+    # inside `flush_vpn_conntrack` (called under the selfheal lock) and
+    # from every capture_health_metrics tick.
+    if type xkeen_resolve_ipv4 >/dev/null 2>&1; then
+      XRAY_REMOTE_IP="$(xkeen_resolve_ipv4 "$XRAY_REMOTE_HOST" | head -n 1)"
+    else
+      XRAY_REMOTE_IP="$(nslookup "$XRAY_REMOTE_HOST" 2>/dev/null | /opt/bin/awk '
+        /^Name:/ { seen_name=1; next }
+        seen_name && /^Address [0-9]+: / { print $3; exit }
+        seen_name && /^Address: / { print $2; exit }
+      ' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
+    fi
   fi
 }
 
@@ -190,10 +209,20 @@ capture_xray_remote_socket_metrics() {
   [ "${XRAY_REMOTE_PORT:-0}" -gt 0 ] || return 0
 
   if [ -n "$XRAY_REMOTE_IP" ]; then
-    XRAY_REMOTE_ORPHAN_FIN_WAIT_COUNT="$(netstat -anp 2>/dev/null | grep "${XRAY_REMOTE_IP}:${XRAY_REMOTE_PORT}" | grep -E 'FIN_WAIT1|FIN_WAIT2' | grep -c '[[:space:]]-[[:space:]]*$' || true)"
+    # Match remote endpoint on the address field, not anywhere on the line —
+    # otherwise the source-address field of an unrelated socket would count.
+    XRAY_REMOTE_ORPHAN_FIN_WAIT_COUNT="$(netstat -anp 2>/dev/null | /opt/bin/awk -v ep="${XRAY_REMOTE_IP}:${XRAY_REMOTE_PORT}" '
+      ($4 == ep || $5 == ep) && ($6 == "FIN_WAIT1" || $6 == "FIN_WAIT2") && $NF == "-" { c++ }
+      END { print c+0 }
+    ')"
   fi
 
-  SOCKET_LINES="$(netstat -anp 2>/dev/null | grep "${XRAY_PID}/xray" | grep ":${XRAY_REMOTE_PORT} " || true)"
+  # PID/xray on the last field only. `grep "${PID}/xray"` substring-matches
+  # e.g. 4567/xray inside 14567/xray, and inflates counts when a similar
+  # PID appears.
+  SOCKET_LINES="$(netstat -anp 2>/dev/null | /opt/bin/awk -v pid="$XRAY_PID" -v port=":${XRAY_REMOTE_PORT}" '
+    $NF == pid "/xray" && (index($4, port) || index($5, port)) { print }
+  ')"
   [ -n "$SOCKET_LINES" ] || return 0
 
   XRAY_REMOTE_TOTAL_COUNT="$(printf '%s\n' "$SOCKET_LINES" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
@@ -385,6 +414,11 @@ maybe_rotate_logs() {
   trim_backups "/opt/etc/xray/configs"            "*.bak-ui-*" 5
   trim_backups "/opt/share/xkeen-manager"         "xkeen-ui-state.json.bak-ui-*" 5
 
+  # Garbage-collect DNS cache in the same daily rotate — otherwise
+  # /tmp/xkeen-dns-cache/ grows unbounded on tmpfs across subscription
+  # churn and typos.
+  type xkeen_dns_cache_gc >/dev/null 2>&1 && xkeen_dns_cache_gc
+
   printf '%s\n' "$NOW_TS" > "$LOG_ROTATE_STAMP_FILE"
 }
 
@@ -410,7 +444,11 @@ trim_backups() {
 }
 
 flush_vpn_conntrack() {
-  get_xray_remote_endpoint
+  # Reuse the values already captured by capture_health_metrics; avoid a
+  # second synchronous nslookup while holding the selfheal lock.
+  if [ -z "$XRAY_REMOTE_IP" ] || [ "${XRAY_REMOTE_PORT:-0}" -le 0 ]; then
+    get_xray_remote_endpoint
+  fi
   [ -n "$XRAY_REMOTE_IP" ] || return 0
   [ "${XRAY_REMOTE_PORT:-0}" -gt 0 ] || return 0
 
@@ -458,7 +496,7 @@ check_runtime() {
   if has_rule ipset list "$UDP_ROUTE_SET" && udp_route_has_entries; then
     [ -n "$XKEEN_MARK" ] && has_rule iptables -t mangle -C PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -p udp -m set --match-set "$UDP_ROUTE_SET" dst -j xkeen_udp_route || needs_repair=1
     iptables -t mangle -S PREROUTING 2>/dev/null | tail -n 1 | grep -q 'xkeen_udp_route' || needs_repair=1
-    ip rule show | grep -qE 'fwmark 0x111/0x111 (lookup|table) 111' || needs_repair=1
+    ip rule show | grep -qE "fwmark ${XKEEN_UDP_MARK:-0x111}(/${XKEEN_UDP_MARK:-0x111})? (lookup|table) ${XKEEN_UDP_TABLE:-111}" || needs_repair=1
     xray_relay_ready || needs_repair=1
     tproxy_ready || needs_repair=1
   fi
@@ -487,8 +525,14 @@ check_runtime() {
 repair_hooks() {
   if type xkeen_repair_hooks >/dev/null 2>&1; then
     xkeen_repair_hooks
+    # Capture the real return code BEFORE the command substitution
+    # below — an assignment resets $?, and the `|| printf` clause always
+    # succeeds, so `return $?` at the end would silently be 0 even when
+    # xkeen_repair_hooks failed. That masked repair failures from
+    # `repair_runtime`, which then reported "repair done".
+    HOOKS_RC=$?
     XKEEN_MARK="$(xkeen_get_mark 2>/dev/null || printf '%s' "$XKEEN_MARK")"
-    return $?
+    return $HOOKS_RC
   fi
 
   log "repair failed: xkeen-runtime.sh is not loaded"
@@ -513,15 +557,17 @@ dump_xray_diagnostics() {
       "${XRAY_REMOTE_ORPHAN_FIN_WAIT_COUNT:-0}" \
       "${XRAY_REMOTE_TOTAL_COUNT:-0}"
     printf '\n=== TCP socket states for xray (per state count) ===\n'
-    netstat -anp 2>/dev/null | grep "${XRAY_PID}/xray" | /opt/bin/awk '$1 == "tcp" || $1 == "tcp6" { print $6 }' | sort | uniq -c | sort -rn
+    netstat -anp 2>/dev/null | /opt/bin/awk -v pid="$XRAY_PID" '$NF == pid "/xray" && ($1 == "tcp" || $1 == "tcp6") { print $6 }' | sort | uniq -c | sort -rn
     printf '\n=== TCP sockets to VPN remote (full) ===\n'
     if [ -n "$XRAY_REMOTE_IP" ]; then
-      netstat -anp 2>/dev/null | grep "${XRAY_PID}/xray" | grep "${XRAY_REMOTE_IP}:${XRAY_REMOTE_PORT}" | head -200
+      netstat -anp 2>/dev/null | /opt/bin/awk -v pid="$XRAY_PID" -v ep="${XRAY_REMOTE_IP}:${XRAY_REMOTE_PORT}" '
+        $NF == pid "/xray" && ($4 == ep || $5 == ep) { print }
+      ' | head -200
     else
       printf '(vpn remote ip unknown)\n'
     fi
     printf '\n=== All xray TCP sockets (top 200 by recency) ===\n'
-    netstat -anp 2>/dev/null | grep "${XRAY_PID}/xray" | head -200
+    netstat -anp 2>/dev/null | /opt/bin/awk -v pid="$XRAY_PID" '$NF == pid "/xray" { print }' | head -200
     printf '\n=== Last 40 xray-manual.log lines ===\n'
     tail -n 40 "$LOG_PATH" 2>/dev/null
   } > "$DUMP_FILE" 2>&1
@@ -539,14 +585,80 @@ restart_xray() {
       ;;
   esac
 
+  # LAN IP may have changed (DHCP renew on WAN doesn't move LAN, but a
+  # bridge rename or a fresh /opt does). If xray restarts without this, the
+  # socks-in UDP-ASSOCIATE reply keeps pointing at a stale IP and every
+  # SOCKS5 UDP client on the LAN starts talking to nowhere.
+  type xkeen_ensure_socks_inbound_ip >/dev/null 2>&1 && xkeen_ensure_socks_inbound_ip
+
+  # Graceful stop: wait for the old xray process to exit before starting
+  # a new one. Fixed `sleep 2` occasionally lost :61219 to a still-alive
+  # previous xray at high fd count.
+  OLD_XRAY_PID="$XRAY_PID"
   killall xray 2>/dev/null || true
+  if [ -n "$OLD_XRAY_PID" ]; then
+    j=0
+    while [ $j -lt 8 ] && kill -0 "$OLD_XRAY_PID" 2>/dev/null; do
+      sleep 1
+      j=$((j + 1))
+    done
+    # PID may have been recycled during the poll window (small BusyBox PID
+    # space, churny sh scripts). Verify /proc/<pid>/cmdline still says xray
+    # before SIGKILL so we don't shoot an unrelated process.
+    if kill -0 "$OLD_XRAY_PID" 2>/dev/null; then
+      CMDLINE="$(tr '\0' ' ' < "/proc/$OLD_XRAY_PID/cmdline" 2>/dev/null || true)"
+      case "$CMDLINE" in
+        *xray*) kill -9 "$OLD_XRAY_PID" 2>/dev/null || true ;;
+      esac
+    fi
+  else
+    sleep 2
+  fi
   rm -f /opt/var/run/xray-ui.pid /opt/var/run/xray.pid 2>/dev/null || true
-  sleep 2
   flush_vpn_conntrack
   XRAY_LOCATION_ASSET="$XRAY_ASSET_DIR" XRAY_LOCATION_CONFDIR="$XRAY_CONF_DIR" \
     /opt/sbin/start-stop-daemon -S -b -m -p /opt/var/run/xray-ui.pid -x "$XRAY_BIN" -- run >>"$LOG_PATH" 2>&1
   mark_xray_restarted
-  sleep 3
+  # Poll for :61219 instead of a fixed sleep. On slow flash xray sometimes
+  # needs 4-6s to bind, and a fixed sleep 3 caused false "not ready"
+  # verdicts → repeated restarts → restart storm below the fd_critical
+  # cooldown (which is scoped to fd/vpn_fin, not to "xray didn't bind").
+  i=0
+  while [ $i -lt 12 ]; do
+    netstat -lnpt 2>/dev/null | grep -q ':61219 ' && {
+      # Clear BOTH streak and backoff-stamp on success. Streak-only reset
+      # left the backoff timestamp alive: `xray_start_backoff_active` kept
+      # returning true, and the next real xray fault would be silently
+      # skipped by repair_runtime for up to 30 minutes.
+      rm -f "$XRAY_START_FAIL_STREAK_FILE" "$XRAY_START_BACKOFF_STAMP_FILE" 2>/dev/null || true
+      return 0
+    }
+    sleep 1
+    i=$((i + 1))
+  done
+  # xray never came up. Track the streak and apply exponential backoff so
+  # a persistently broken config doesn't turn selfheal into a restart storm.
+  streak="$(cat "$XRAY_START_FAIL_STREAK_FILE" 2>/dev/null || echo 0)"
+  case "$streak" in ''|*[!0-9]*) streak=0 ;; esac
+  streak=$((streak + 1))
+  printf '%s\n' "$streak" > "$XRAY_START_FAIL_STREAK_FILE"
+  # Backoff: 60 → 300 → 900 → 1800s max.
+  if [ "$streak" -ge 4 ]; then backoff=1800
+  elif [ "$streak" -ge 3 ]; then backoff=900
+  elif [ "$streak" -ge 2 ]; then backoff=300
+  else backoff=60
+  fi
+  next_ts=$(( $(date +%s) + backoff ))
+  printf '%s\n' "$next_ts" > "$XRAY_START_BACKOFF_STAMP_FILE"
+  health_log "action=xray_start_backoff streak=$streak backoff_sec=$backoff"
+  return 1
+}
+
+xray_start_backoff_active() {
+  [ -f "$XRAY_START_BACKOFF_STAMP_FILE" ] || return 1
+  ts="$(cat "$XRAY_START_BACKOFF_STAMP_FILE" 2>/dev/null || echo 0)"
+  case "$ts" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$(date +%s)" -lt "$ts" ]
 }
 
 restart_singbox() {
@@ -560,7 +672,15 @@ restart_singbox() {
     [ -x "$SING_BOX_BIN" ] && [ -f "$SING_BOX_CONF" ] && \
       /opt/sbin/start-stop-daemon -S -b -m -p /opt/var/run/sing-box.pid -x "$SING_BOX_BIN" -- run -c "$SING_BOX_CONF" >>"$LOG_PATH" 2>&1 || true
   fi
-  sleep 2
+  # Poll for :61221 bind instead of a flat sleep 2. On slow flash sing-box
+  # sometimes needs 3-4s; a fixed sleep let selfheal see !tproxy_ready
+  # right after and immediately schedule another restart_singbox → storm.
+  i=0
+  while [ $i -lt 8 ]; do
+    netstat -lnpu 2>/dev/null | grep -q ':61221 ' && return 0
+    sleep 1
+    i=$((i + 1))
+  done
 }
 
 repair_runtime() {
@@ -580,9 +700,28 @@ repair_runtime() {
   capture_health_metrics
   maybe_log_health
 
+  # If the socks-in inbound settings.ip changed (fresh install, LAN
+  # renumber), sentinel below tells us xray must restart to pick it up.
+  # Only obey it when xray is currently up — if it's down, the normal
+  # xray_ready branch below handles both cases.
+  if [ -f /tmp/xkeen-needs-xray-restart ] && xray_ready; then
+    if xray_start_backoff_active; then
+      health_log "action=xray_restart_skipped reason=start_backoff_active_sentinel"
+    else
+      log "xray restart needed (socks-in ip changed)"
+      restart_xray
+    fi
+    rm -f /tmp/xkeen-needs-xray-restart 2>/dev/null || true
+  fi
+
   if ! xray_ready || (has_rule ipset list "$UDP_ROUTE_SET" && udp_route_has_entries && ! xray_relay_ready); then
-    log "xray restart needed"
-    restart_xray
+    if xray_start_backoff_active; then
+      health_log "action=xray_restart_skipped reason=start_backoff_active"
+    else
+      log "xray restart needed"
+      restart_xray
+    fi
+    rm -f /tmp/xkeen-needs-xray-restart 2>/dev/null || true
   elif has_rule ipset list "$UDP_ROUTE_SET" && udp_route_has_entries && ! tproxy_ready; then
     log "sing-box tproxy restart needed"
     restart_singbox
@@ -607,31 +746,13 @@ repair_runtime() {
   return 1
 }
 
-acquire_lock() {
-  if mkdir "$LOCK_DIR" 2>/dev/null; then
-    printf '%s\n' "$$" > "$LOCK_PID_FILE"
-    return 0
-  fi
-
-  if [ -f "$LOCK_PID_FILE" ]; then
-    OLD_PID="$(cat "$LOCK_PID_FILE" 2>/dev/null)"
-    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-      exit 0
-    fi
-  fi
-
-  rm -rf "$LOCK_DIR" 2>/dev/null || true
-  if mkdir "$LOCK_DIR" 2>/dev/null; then
-    printf '%s\n' "$$" > "$LOCK_PID_FILE"
-    return 0
-  fi
-
+# Use the shared lock from xkeen-runtime.sh. If someone else holds it —
+# selfheal-loop tick will retry in 15 seconds, no need to force.
+if ! xkeen_lock_acquire; then
   exit 0
-}
+fi
 
-acquire_lock
-
-trap 'rm -f "$LOCK_PID_FILE" 2>/dev/null || true; rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+trap 'xkeen_lock_release' EXIT INT TERM
 
 maybe_rotate_logs
 

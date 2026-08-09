@@ -26,6 +26,18 @@ if (-not $?) {
   throw "deploy_xkeen_manager_backend_to_router.ps1 failed"
 }
 
+Write-Output "Persisting UI port to /opt/etc/antigoblin.conf..."
+# S26antigoblin (init.d) reads PORT from this file at boot. Without the
+# write, `deploy_stack ... -Port N` only affects the running uhttpd
+# instance; after a reboot the init script falls back to the previous
+# value (or the default 8899) — silent drift between dev and prod port.
+$writeConfCmd = "printf 'PORT=%s`n' '$Port' > /opt/etc/antigoblin.conf && chmod 644 /opt/etc/antigoblin.conf"
+& python (Join-Path $PSScriptRoot 'router_ssh.py') `
+    --host $RouterHost --user $RouterUser run --command $writeConfCmd
+if (-not $?) {
+  Write-Warning "Failed to write /opt/etc/antigoblin.conf on router (non-fatal; boot may fall back to old port)."
+}
+
 Write-Output "Starting router-hosted UI..."
 & (Join-Path $PSScriptRoot 'start_xkeen_manager_ui_router.ps1') -RouterHost $RouterHost -Port $Port -RouterUser $RouterUser
 if (-not $?) {
