@@ -5,10 +5,16 @@ PATH="/opt/bin:/opt/sbin:/sbin:/usr/sbin:/bin:/usr/bin:$PATH"
 ROUTING_PATH="/opt/etc/xray/configs/05_routing.json"
 OUTBOUNDS_PATH="/opt/etc/xray/configs/04_outbounds.json"
 STATE_PATH="/opt/share/xkeen-manager/xkeen-ui-state.json"
-TMP_BODY="/tmp/xkeen-routing-body.json"
-TMP_NEW="/tmp/xkeen-routing-new.json"
-TMP_STATE="/tmp/xkeen-state-new.json"
-TMP_AUTH_HEADERS="/tmp/xkeen-auth-headers.txt"
+# Per-PID scratch paths. Two concurrent CGI processes MUST NOT share
+# these — read_body writes to TMP_BODY BEFORE acquire_apply_lock, so if
+# both used a fixed path client B would overwrite client A's body, and
+# A (after taking the lock) would then `cp $TMP_BODY $STATE_PATH` and
+# persist B's data under A's response. Same class of race exists for
+# TMP_NEW/TMP_STATE. The $$ suffix makes each process self-contained.
+TMP_BODY="/tmp/xkeen-routing-body-$$.json"
+TMP_NEW="/tmp/xkeen-routing-new-$$.json"
+TMP_STATE="/tmp/xkeen-state-new-$$.json"
+TMP_AUTH_HEADERS="/tmp/xkeen-auth-headers-$$.txt"
 LOG_PATH="/opt/var/log/xray-manual.log"
 XRAY_BIN="/opt/sbin/xray"
 SELFHEAL_PATH="/opt/share/xkeen-manager/api/xkeen-selfheal.sh"
@@ -56,17 +62,145 @@ json_invalid_credentials() {
 }
 
 read_body() {
-  cat > "$TMP_BODY"
+  # Cap request bodies. uhttpd forwards CONTENT_LENGTH bytes into stdin,
+  # so an authenticated attacker sending CONTENT_LENGTH=500MB would fill
+  # /tmp (tmpfs) and OOM the router. Reject early on the declared header,
+  # and use `head -c` as a belt-and-suspenders limit if the header lied.
+  MAX_BODY=524288
+  DECLARED="${CONTENT_LENGTH:-0}"
+  case "$DECLARED" in ''|*[!0-9]*) DECLARED=0 ;; esac
+  if [ "$DECLARED" -gt "$MAX_BODY" ]; then
+    printf 'Status: 413 Payload Too Large\r\n'
+    printf 'Content-Type: application/json; charset=utf-8\r\n'
+    printf 'Cache-Control: no-store\r\n'
+    printf '\r\n'
+    printf '{"ok":false,"error":"body too large (%s > %s bytes)"}\n' "$DECLARED" "$MAX_BODY"
+    exit 0
+  fi
+  head -c "$MAX_BODY" > "$TMP_BODY"
+}
+
+# Parse HTTP Host header, stripping the port. Handles both plain hosts
+# (`192.168.1.1:8899`) and bracketed IPv6 literals (`[fdxx::1]:8899` →
+# `[fdxx::1]`). Plain `sed 's/:.*$//'` on the IPv6 form would leave `[`.
+strip_host_port() {
+  case "$1" in
+    '')           printf '%s' "192.168.1.1" ;;
+    '['*']:'*)    printf '%s' "${1%%]:*}]" ;;
+    '['*']')      printf '%s' "$1" ;;
+    *:*)          printf '%s' "${1%:*}" ;;
+    *)            printf '%s' "$1" ;;
+  esac
+}
+
+# Router auth endpoint (host used for wget http://…/auth calls).
+# NEVER derived from HTTP_HOST — the client controls that header, so an
+# attacker on LAN could set `Host: attacker.tld` and steer the session
+# check to a server they own that replies "HTTP/1.1 200 OK" to any
+# request, bypassing router auth entirely. Same channel also carries the
+# challenge/password-hash exchange during login → offline brute-force.
+# Resolution order:
+#   1. ROUTER_AUTH_HOST in /opt/etc/antigoblin.conf (operator override,
+#      hostname or bracketed IPv6; awk-validated, no `source`).
+#   2. xkeen_lan_ip — LAN-side address of this Keenetic (already excludes
+#      the WAN interface in double-NAT setups).
+#   3. Hard fallback 192.168.1.1 (Keenetic factory default).
+router_auth_endpoint() {
+  if [ -f /opt/etc/antigoblin.conf ]; then
+    OVERRIDE="$(/opt/bin/awk -F= '
+      $1 == "ROUTER_AUTH_HOST" && $2 ~ /^[A-Za-z0-9._:\[\]-]+$/ {
+        print $2; exit
+      }
+    ' /opt/etc/antigoblin.conf 2>/dev/null)"
+    if [ -n "$OVERRIDE" ]; then
+      printf '%s' "$OVERRIDE"
+      return 0
+    fi
+  fi
+  LAN="$(xkeen_lan_ip 2>/dev/null)"
+  if [ -n "$LAN" ]; then
+    printf '%s' "$LAN"
+    return 0
+  fi
+  printf '%s' "192.168.1.1"
+}
+
+# Cross-process apply lock shared with selfheal. Uses xkeen_lock_acquire
+# from xkeen-runtime.sh (PID-recycle-safe + race-window-safe). Wall-clock
+# capped at 60s — well below uhttpd's `-t 120` CGI timeout, so the client
+# gets a clean 503 instead of a 502 Bad Gateway from uhttpd cutting the
+# CGI process mid-flight.
+acquire_apply_lock() {
+  deadline=$(( $(date +%s) + 60 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if xkeen_lock_acquire; then
+      trap 'xkeen_lock_release' EXIT INT TERM
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+require_apply_lock() {
+  if ! acquire_apply_lock; then
+    printf 'Status: 503 Service Unavailable\r\n'
+    printf 'Content-Type: application/json; charset=utf-8\r\n'
+    printf 'Cache-Control: no-store\r\n'
+    printf '\r\n'
+    printf '{"ok":false,"error":"apply lock busy; another apply or selfheal cycle in progress"}\n'
+    rm -f "$TMP_BODY" 2>/dev/null || true
+    exit 0
+  fi
 }
 
 restart_xray() {
+  type xkeen_ensure_socks_inbound_ip >/dev/null 2>&1 && xkeen_ensure_socks_inbound_ip
+  # Graceful stop first: wait for the old xray to actually exit before
+  # starting a new one. Old code did `killall xray; sleep 2` which can
+  # leave the previous process still holding :61219 when a new one tries
+  # to bind, especially at high fd count (the very scenario UI-restart is
+  # meant to recover from).
+  OLD_XRAY_PID="$(get_xray_pid 2>/dev/null)"
   killall xray 2>/dev/null || true
+  if [ -n "$OLD_XRAY_PID" ]; then
+    j=0
+    while [ $j -lt 8 ] && kill -0 "$OLD_XRAY_PID" 2>/dev/null; do
+      sleep 1
+      j=$((j + 1))
+    done
+    # PID may have been recycled during the poll window (BusyBox has a
+    # small PID space and short-lived sh scripts churn PIDs fast). Only
+    # SIGKILL if the process still identifies as xray.
+    if kill -0 "$OLD_XRAY_PID" 2>/dev/null; then
+      CMDLINE="$(tr '\0' ' ' < "/proc/$OLD_XRAY_PID/cmdline" 2>/dev/null || true)"
+      case "$CMDLINE" in
+        *xray*) kill -9 "$OLD_XRAY_PID" 2>/dev/null || true ;;
+      esac
+    fi
+  else
+    sleep 2
+  fi
   rm -f /opt/var/run/xray-ui.pid /opt/var/run/xray.pid 2>/dev/null || true
-  sleep 2
   XRAY_LOCATION_ASSET=/opt/etc/xray/dat XRAY_LOCATION_CONFDIR=/opt/etc/xray/configs \
     /opt/sbin/start-stop-daemon -S -b -m -p /opt/var/run/xray-ui.pid -x "$XRAY_BIN" -- run >>"$LOG_PATH" 2>&1
-  sleep 3
-  netstat -lnptu 2>/dev/null | grep -q '61219'
+  # Poll for :61219 instead of a fixed sleep. Capped at ~12s for slow flash.
+  i=0
+  while [ $i -lt 12 ]; do
+    if netstat -lnpt 2>/dev/null | grep -q ':61219 '; then
+      # A UI-driven restart also counts as a real restart from selfheal's
+      # perspective: publish the stamp AND clear any streak/backoff state
+      # that selfheal was tracking for auto-restarts. Also clear the
+      # "please restart xray" sentinel so selfheal doesn't do a redundant
+      # second restart on its next tick.
+      date +%s > /tmp/xkeen-xray-restart-last.ts 2>/dev/null || true
+      rm -f /tmp/xkeen-xray-start-fail-streak /tmp/xkeen-xray-start-backoff.ts /tmp/xkeen-needs-xray-restart 2>/dev/null || true
+      return 0
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  return 1
 }
 
 validate_confdir() {
@@ -88,15 +222,24 @@ get_xray_pid() {
 }
 
 repair_runtime() {
-  if [ -x "$SELFHEAL_PATH" ]; then
-    "$SELFHEAL_PATH" --force >/dev/null 2>&1
-    return $?
-  fi
-
+  # We are called with acquire_apply_lock already held (POST branch).
+  # DO NOT fork selfheal --force here — it will try to grab the same
+  # shared lock, see our PID owning it (comm=`sh`), consider us alive,
+  # and quietly exit 0 without doing any repair. The UI would then get
+  # {"ok":true} while the runtime is untouched. Run the repair inline
+  # under our own lock instead.
   if type xkeen_repair_hooks >/dev/null 2>&1; then
     xkeen_repair_hooks || return 1
     restart_xray || return 1
     return 0
+  fi
+
+  # Fallback if xkeen-runtime.sh could not be sourced. This path is only
+  # reachable when the CGI itself isn't holding a lock (i.e. never today),
+  # so it's safe to fork the selfheal here.
+  if [ -x "$SELFHEAL_PATH" ]; then
+    "$SELFHEAL_PATH" --force >/dev/null 2>&1
+    return $?
   fi
 
   return 1
@@ -226,14 +369,26 @@ emit_health() {
   fi
   case "$VPN_PORT" in ''|*[!0-9]*) VPN_PORT=0 ;; esac
   if [ -n "$VPN_HOST" ] && [ "$VPN_PORT" -gt 0 ]; then
-    VPN_IP="$(nslookup "$VPN_HOST" 2>/dev/null | /opt/bin/awk '/^Name:/{seen=1;next} seen&&/^Address [0-9]+:/{print $3;exit} seen&&/^Address:/{print $2;exit}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)"
+    if type xkeen_resolve_ipv4 >/dev/null 2>&1; then
+      VPN_IP="$(xkeen_resolve_ipv4 "$VPN_HOST" | head -1)"
+    else
+      VPN_IP="$(nslookup "$VPN_HOST" 2>/dev/null | /opt/bin/awk '/^Name:/{seen=1;next} seen&&/^Address [0-9]+:/{print $3;exit} seen&&/^Address:/{print $2;exit}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)"
+    fi
   fi
   if [ -n "$XRAY_PID" ] && [ -n "$VPN_IP" ] && [ "$VPN_PORT" -gt 0 ]; then
-    SOCK_LINES="$(netstat -anp 2>/dev/null | grep "${XRAY_PID}/xray" | grep "${VPN_IP}:${VPN_PORT}")"
+    # Match PID/xray exactly on the last netstat field — grep "$PID/xray"
+    # would substring-match e.g. 4567/xray inside 14567/xray-something,
+    # inflating counts once a similar PID appears on another socket.
+    SOCK_LINES="$(netstat -anp 2>/dev/null | /opt/bin/awk -v pid="$XRAY_PID" -v ep="${VPN_IP}:${VPN_PORT}" '
+      $NF == pid "/xray" && ($4 == ep || $5 == ep) { print }
+    ')"
     VPN_TOTAL="$(printf '%s\n' "$SOCK_LINES" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
     VPN_ESTABLISHED="$(printf '%s\n' "$SOCK_LINES" | grep -c 'ESTABLISHED' || true)"
     VPN_FIN_WAIT="$(printf '%s\n' "$SOCK_LINES" | grep -cE 'FIN_WAIT1|FIN_WAIT2' || true)"
-    VPN_ORPHAN_FIN="$(netstat -anp 2>/dev/null | grep "${VPN_IP}:${VPN_PORT}" | grep -E 'FIN_WAIT1|FIN_WAIT2' | grep -c '[[:space:]]-[[:space:]]*$' || true)"
+    VPN_ORPHAN_FIN="$(netstat -anp 2>/dev/null | /opt/bin/awk -v ep="${VPN_IP}:${VPN_PORT}" '
+      ($4 == ep || $5 == ep) && ($6 == "FIN_WAIT1" || $6 == "FIN_WAIT2") && $NF == "-" { c++ }
+      END { print c+0 }
+    ')"
   fi
   case "$VPN_ESTABLISHED" in ''|*[!0-9]*) VPN_ESTABLISHED=0 ;; esac
   case "$VPN_FIN_WAIT"    in ''|*[!0-9]*) VPN_FIN_WAIT=0 ;; esac
@@ -389,11 +544,15 @@ emit_stack_info() {
   case "$VPN_PORT" in ''|*[!0-9]*) VPN_PORT=0 ;; esac
   VPN_IP=""
   if [ -n "$VPN_HOST" ]; then
-    VPN_IP="$(nslookup "$VPN_HOST" 2>/dev/null | /opt/bin/awk '
-      /^Name:/ { seen=1; next }
-      seen && /^Address [0-9]+: / { print $3; exit }
-      seen && /^Address: / { print $2; exit }
-    ' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)"
+    if type xkeen_resolve_ipv4 >/dev/null 2>&1; then
+      VPN_IP="$(xkeen_resolve_ipv4 "$VPN_HOST" | head -1)"
+    else
+      VPN_IP="$(nslookup "$VPN_HOST" 2>/dev/null | /opt/bin/awk '
+        /^Name:/ { seen=1; next }
+        seen && /^Address [0-9]+: / { print $3; exit }
+        seen && /^Address: / { print $2; exit }
+      ' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)"
+    fi
   fi
 
   WAN_IFACE="$(ip route show default 2>/dev/null | /opt/bin/awk '/^default/{print $5; exit}')"
@@ -407,19 +566,29 @@ emit_stack_info() {
   POLICY_BLOCK="$(ndmc -c 'show ip policy' 2>/dev/null)"
   # Format A (newer): one-line "policy, name = Policy42, description = xkeen:Home"
   # Format B (older): multi-line with separate "name: Policy42" / "description: xkeen:Home"
-  POLICY_LINE="$(printf '%s\n' "$POLICY_BLOCK" | grep 'description.*xkeen' | head -n 1)"
+  # Use the single source of truth from xkeen-runtime.sh to guarantee that
+  # CGI (this) and runtime (xkeen_get_mark/xkeen_ensure_policy) agree on
+  # which policy the health UI shows vs which one selfheal actually manages.
+  DESC_MATCH="${XKEEN_POLICY_DESC_RE:-description[[:space:]]*[=:][[:space:]]*\"?xkeen(\$|[\":,[:space:]])}"
+  POLICY_LINE="$(printf '%s\n' "$POLICY_BLOCK" | grep -E "$DESC_MATCH" | head -n 1)"
   POLICY_NAME="$(printf '%s' "$POLICY_LINE" | sed -n 's/.*name *= *\([^,]*\).*/\1/p' | sed 's/[[:space:]]*$//')"
   POLICY_DESC="$(printf '%s' "$POLICY_LINE" | sed -n 's/.*description *= *\([^,]*\).*/\1/p' | sed 's/[[:space:]]*$//' | sed 's/:[[:space:]]*$//' | sed 's/^xkeen:[[:space:]]*//' | sed 's/^xkeen$//')"
   if [ -z "$POLICY_NAME" ]; then
-    POLICY_NAME="$(printf '%s\n' "$POLICY_BLOCK" | /opt/bin/awk '/^[[:space:]]*name:/{n=$2} /description.*xkeen/{print n; exit}')"
+    POLICY_NAME="$(printf '%s\n' "$POLICY_BLOCK" | /opt/bin/awk -v pat="$DESC_MATCH" '/^[[:space:]]*name:/{n=$2} $0 ~ pat {print n; exit}')"
   fi
   if [ -z "$POLICY_DESC" ]; then
-    POLICY_DESC="$(printf '%s\n' "$POLICY_BLOCK" | /opt/bin/awk -F ': ' '/description.*xkeen/{gsub(/^[[:space:]]+/,"",$2); print $2; exit}')"
+    POLICY_DESC="$(printf '%s\n' "$POLICY_BLOCK" | /opt/bin/awk -F ': ' -v pat="$DESC_MATCH" '$0 ~ pat {gsub(/^[[:space:]]+/,"",$2); print $2; exit}')"
   fi
-  XKEEN_MARK_VAL="$(printf '%s\n' "$POLICY_BLOCK" | /opt/bin/awk '
-    /description.*xkeen/ { want=1; next }
-    want && /mark/ { gsub(/[[:space:]]/,"",$0); split($0,a,":"); print a[2]; exit }
-  ')"
+  # Use the runtime helper — it already handles Format A (mark on the same
+  # line as description) and Format B (mark on a later line), and reset on
+  # new `policy,`. Local awk here had the same `next` bug that iter 2
+  # fixed in xkeen_get_mark, so keeping a private copy re-introduced the
+  # UI-vs-runtime split-brain.
+  if type xkeen_get_mark >/dev/null 2>&1; then
+    XKEEN_MARK_VAL="$(xkeen_get_mark 2>/dev/null)"
+  else
+    XKEEN_MARK_VAL=""
+  fi
 
   MEM_AVAIL_KB="$(grep '^MemAvailable:' /proc/meminfo 2>/dev/null | /opt/bin/awk '{print $2}')"
   MEM_TOTAL_KB="$(grep '^MemTotal:' /proc/meminfo 2>/dev/null | /opt/bin/awk '{print $2}')"
@@ -505,11 +674,22 @@ restart_service() {
     singbox)
       if [ -x /opt/etc/init.d/S24antigoblin-singbox ]; then
         /opt/etc/init.d/S24antigoblin-singbox restart >/dev/null 2>&1
-        sleep 1
-        if pidof sing-box >/dev/null 2>&1; then
+        # Poll for :61221 (TPROXY UDP) — pidof alone reports running
+        # before the socket is actually bound.
+        i=0
+        SB_BOUND=0
+        while [ $i -lt 8 ]; do
+          if pidof sing-box >/dev/null 2>&1 && netstat -lnpu 2>/dev/null | grep -q ':61221 '; then
+            SB_BOUND=1
+            break
+          fi
+          sleep 1
+          i=$((i + 1))
+        done
+        if [ "$SB_BOUND" = "1" ]; then
           json_ok "{\"ok\":true,\"service\":\"singbox\"}"
         else
-          json_err "singbox not running after restart"
+          json_err "singbox not listening on :61221 after restart"
         fi
       else
         json_err "singbox init script missing"
@@ -599,6 +779,43 @@ fetch_subscription() {
     exit 0
   fi
 
+  # SSRF guard: refuse hosts on private / loopback / link-local space.
+  # An authenticated UI operator otherwise gets a fetch-through-router
+  # primitive to probe internal services (`https://192.168.1.1/rci/…`,
+  # `https://127.0.0.1/…`). Uses a substring match on the URL host part —
+  # skips resolve-and-recheck (an extra DNS round-trip we'd have to
+  # timeout-cap for a marginal gain against active DNS-rebinding attacks
+  # which are already limited to a single 10s fetch here).
+  HOST_PART="${URL#https://}"
+  HOST_PART="${HOST_PART%%/*}"
+  HOST_PART="${HOST_PART%%\?*}"
+  HOST_PART="${HOST_PART%%\#*}"
+  HOST_PART="${HOST_PART##*@}"
+  case "$HOST_PART" in
+    '['*']:'*) HOST_ONLY="${HOST_PART%%]:*}]" ;;
+    '['*']')   HOST_ONLY="$HOST_PART" ;;
+    *:*)       HOST_ONLY="${HOST_PART%:*}" ;;
+    *)         HOST_ONLY="$HOST_PART" ;;
+  esac
+  case "$HOST_ONLY" in
+    127.*|10.*|192.168.*|169.254.*|0.0.0.0|::1|'[::1]'|localhost|localhost.*|*.localhost|'[fc'*|'[fd'*|'[fe8'*|'[fe9'*|'[fea'*|'[feb'*)
+      json_err "subscription url points to a private / loopback address"
+      rm -f "$TMP_BODY"
+      exit 0
+      ;;
+    172.*)
+      SECOND="${HOST_ONLY#172.}"
+      SECOND="${SECOND%%.*}"
+      case "$SECOND" in
+        16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31)
+          json_err "subscription url points to a private address"
+          rm -f "$TMP_BODY"
+          exit 0
+          ;;
+      esac
+      ;;
+  esac
+
   FETCHER=""
   if [ -x /opt/bin/curl ]; then
     FETCHER="curl"
@@ -610,8 +827,13 @@ fetch_subscription() {
     exit 0
   fi
 
-  TMP_FETCH="/tmp/xkeen-sub-fetch.raw"
-  TMP_FETCH_ERR="/tmp/xkeen-sub-fetch.err"
+  # Per-PID scratch — subscription-fetch runs WITHOUT the apply lock, so
+  # two concurrent refreshes on a fixed path would swap their bodies:
+  # process A's `base64 -w 0 < TMP_FETCH` could encode B's contents and
+  # return VLESS-UUIDs / vmess-passwords from subscription B in the
+  # response to A.
+  TMP_FETCH="/tmp/xkeen-sub-fetch-$$.raw"
+  TMP_FETCH_ERR="/tmp/xkeen-sub-fetch-$$.err"
   rm -f "$TMP_FETCH" "$TMP_FETCH_ERR"
 
   if [ "$FETCHER" = "curl" ]; then
@@ -639,6 +861,17 @@ fetch_subscription() {
   fi
 
   SIZE="$(wc -c < "$TMP_FETCH" 2>/dev/null || echo 0)"
+
+  # wget has no --max-filesize equivalent; enforce the cap after the fact
+  # so a hostile / compromised subscription endpoint can't stream tens of
+  # MB into /tmp within the 10s timeout window and OOM tmpfs. curl was
+  # already capped via --max-filesize 262144.
+  if [ "$FETCHER" = "wget" ] && [ "$SIZE" -gt 262144 ]; then
+    json_err "subscription response too large ($SIZE > 262144 bytes)"
+    rm -f "$TMP_BODY" "$TMP_FETCH" "$TMP_FETCH_ERR"
+    exit 0
+  fi
+
   ENCODED="$(/opt/bin/base64 -w 0 < "$TMP_FETCH" 2>/dev/null || /opt/bin/base64 < "$TMP_FETCH" | tr -d '\n\r ')"
 
   if [ -z "$ENCODED" ]; then
@@ -653,7 +886,7 @@ fetch_subscription() {
 }
 
 router_auth_login() {
-  REQUEST_HOST="$(printf '%s' "${HTTP_HOST:-192.168.1.1}" | sed 's/:.*$//')"
+  REQUEST_HOST="$(router_auth_endpoint)"
   REQUEST_UA="${HTTP_USER_AGENT:-xkeen-manager}"
 
   LOGIN_B64="$(json_field 'loginB64')"
@@ -674,10 +907,10 @@ router_auth_login() {
     exit 0
   fi
 
-  AUTH_GET_HEADERS="$(wget -S -O - \
+  AUTH_GET_HEADERS="$(wget -S -O - --timeout=5 --tries=1 \
     --header="Host: $REQUEST_HOST" \
     --header="User-Agent: $REQUEST_UA" \
-    "http://$REQUEST_HOST/auth" 2>&1)"
+    "http://$REQUEST_HOST/auth" 2>&1 | head -c 8192)"
 
   REALM="$(printf '%s' "$AUTH_GET_HEADERS" | sed -n 's/.*realm="\([^"]*\)".*/\1/p' | head -n 1)"
   CHALLENGE="$(printf '%s' "$AUTH_GET_HEADERS" | sed -n 's/.*challenge="\([^"]*\)".*/\1/p' | head -n 1)"
@@ -692,15 +925,15 @@ router_auth_login() {
 
   LOGIN_MD5="$(printf '%s' "${LOGIN}:${REALM}:${PASSWORD}" | /opt/bin/md5sum | /opt/bin/awk '{print $1}')"
   LOGIN_SHA256="$(printf '%s' "${CHALLENGE}${LOGIN_MD5}" | /opt/bin/sha256sum | /opt/bin/awk '{print $1}')"
-  AUTH_PAYLOAD="$(printf '{"login":"%s","password":"%s"}' "$LOGIN" "$LOGIN_SHA256")"
+  AUTH_PAYLOAD="$(/opt/bin/jq -cn --arg login "$LOGIN" --arg password "$LOGIN_SHA256" '{login:$login, password:$password}')"
 
-  AUTH_POST_HEADERS="$(wget -S -O - \
+  AUTH_POST_HEADERS="$(wget -S -O - --timeout=5 --tries=1 \
     --header="Host: $REQUEST_HOST" \
     --header="Cookie: ${SESSION_COOKIE}=${SESSION_ID}" \
     --header="User-Agent: $REQUEST_UA" \
     --header="Content-Type: application/json; charset=utf-8" \
     --post-data="$AUTH_PAYLOAD" \
-    "http://$REQUEST_HOST/auth" 2>&1)"
+    "http://$REQUEST_HOST/auth" 2>&1 | head -c 8192)"
 
   printf '%s' "$AUTH_POST_HEADERS" | grep -q 'HTTP/1\.[01] 200' || {
     json_invalid_credentials
@@ -713,13 +946,13 @@ router_auth_login() {
   printf 'Cache-Control: no-store\r\n'
   printf 'Set-Cookie: %s=%s; Path=/; SameSite=Strict; Max-Age=300\r\n' "$SESSION_COOKIE" "$SESSION_ID"
   printf '\r\n'
-  printf '{"ok":true,"login":"%s"}\n' "$LOGIN"
+  /opt/bin/jq -cn --arg login "$LOGIN" '{ok:true, login:$login}'
   rm -f "$TMP_BODY" "$TMP_AUTH_HEADERS"
   exit 0
 }
 
 router_auth_logout() {
-  REQUEST_HOST="$(printf '%s' "${HTTP_HOST:-192.168.1.1}" | sed 's/:.*$//')"
+  REQUEST_HOST="$(router_auth_endpoint)"
   REQUEST_COOKIE="${HTTP_COOKIE:-}"
   SESSION_COOKIE_NAME="$(printf '%s' "$REQUEST_COOKIE" | sed -n 's/^\([^=;[:space:]]*\)=.*/\1/p' | head -n 1)"
 
@@ -730,13 +963,13 @@ router_auth_logout() {
     printf 'Set-Cookie: %s=; Path=/; SameSite=Strict; Max-Age=0\r\n' "$SESSION_COOKIE_NAME"
   fi
   printf '\r\n'
-  printf '{"ok":true,"host":"%s"}\n' "$REQUEST_HOST"
+  /opt/bin/jq -cn --arg host "$REQUEST_HOST" '{ok:true, host:$host}'
   rm -f "$TMP_BODY" "$TMP_AUTH_HEADERS"
   exit 0
 }
 
 require_router_session() {
-  REQUEST_HOST="$(printf '%s' "${HTTP_HOST:-192.168.1.1}" | sed 's/:.*$//')"
+  REQUEST_HOST="$(router_auth_endpoint)"
   REQUEST_COOKIE="${HTTP_COOKIE:-}"
   REQUEST_UA="${HTTP_USER_AGENT:-xkeen-manager}"
 
@@ -745,11 +978,11 @@ require_router_session() {
     exit 0
   fi
 
-  AUTH_RESPONSE="$(wget -S -O - \
+  AUTH_RESPONSE="$(wget -S -O - --timeout=5 --tries=1 \
     --header="Host: $REQUEST_HOST" \
     --header="Cookie: $REQUEST_COOKIE" \
     --header="User-Agent: $REQUEST_UA" \
-    "http://$REQUEST_HOST/auth" 2>&1)"
+    "http://$REQUEST_HOST/auth" 2>&1 | head -c 8192)"
 
   printf '%s' "$AUTH_RESPONSE" | grep -q 'HTTP/1\.[01] 200' || {
     json_unauthorized
@@ -780,7 +1013,19 @@ case "$REQUEST_METHOD" in
     ;;
   POST)
     KIND="$(get_kind)"
-    read_body
+    # Auth before body for anything that isn't login/logout — otherwise an
+    # unauthenticated client can waste CGI processes uploading a 512KB body
+    # only to fail the session check afterward. Login/logout themselves
+    # legitimately need the body before their own auth logic.
+    case "$KIND" in
+      login|logout)
+        read_body
+        ;;
+      *)
+        require_router_session
+        read_body
+        ;;
+    esac
     BODY_SIZE="$(wc -c < "$TMP_BODY" 2>/dev/null)"
 
     if [ "$KIND" = "login" ]; then
@@ -791,10 +1036,16 @@ case "$REQUEST_METHOD" in
       router_auth_logout
     fi
 
-    require_router_session
+    case "$KIND" in
+      probe|subscription-fetch)
+        ;;
+      *)
+        require_apply_lock
+        ;;
+    esac
 
     if [ "$KIND" = "state" ]; then
-      if ! grep -q '"profiles"' "$TMP_BODY"; then
+      if ! /opt/bin/jq -e 'type == "object" and has("profiles")' "$TMP_BODY" >/dev/null 2>&1; then
         cp "$TMP_BODY" /tmp/xkeen-routing-invalid.json 2>/dev/null || true
         json_err "invalid state payload (size=${BODY_SIZE:-0}, content_length=${CONTENT_LENGTH:-unset})"
         rm -f "$TMP_BODY"
@@ -803,11 +1054,20 @@ case "$REQUEST_METHOD" in
 
       STATE_BAK="${STATE_PATH}.bak-ui-$(date +%Y%m%d-%H%M%S)"
       cp "$STATE_PATH" "$STATE_BAK" 2>/dev/null || true
-      cp "$TMP_BODY" "$STATE_PATH" || {
+      # Atomic write: stage on the SAME filesystem as the destination so the
+      # final mv is a rename(2) — no chance of a truncated JSON if uhttpd
+      # kills us at -t 120 mid-write or the box loses power. A direct
+      # `cp $TMPFS $OPT` copies chunk-by-chunk across the FS boundary,
+      # leaves a half-written file, and the next selfheal `jq` read fails
+      # silently → xkeen_bypass empties → every bypass group breaks until
+      # the user restores a .bak-ui-*.
+      STATE_STAGE="${STATE_PATH}.new-$$"
+      if ! cp "$TMP_BODY" "$STATE_STAGE" || ! mv "$STATE_STAGE" "$STATE_PATH"; then
+        rm -f "$STATE_STAGE"
         json_err "failed to write state"
         rm -f "$TMP_BODY"
         exit 0
-      }
+      fi
 
       json_ok "{\"ok\":true,\"state\":\"$STATE_PATH\"}"
       rm -f "$TMP_BODY"
@@ -815,7 +1075,7 @@ case "$REQUEST_METHOD" in
     fi
 
     if [ "$KIND" = "outbounds" ]; then
-      if ! grep -q '"outbounds"' "$TMP_BODY" || ! grep -q '"vless-reality"' "$TMP_BODY"; then
+      if ! /opt/bin/jq -e '.outbounds | type == "array" and (map(.tag) | index("vless-reality") != null)' "$TMP_BODY" >/dev/null 2>&1; then
         cp "$TMP_BODY" /tmp/xkeen-outbounds-invalid.json 2>/dev/null || true
         json_err "invalid outbounds payload (size=${BODY_SIZE:-0}, content_length=${CONTENT_LENGTH:-unset})"
         rm -f "$TMP_BODY"
@@ -824,11 +1084,14 @@ case "$REQUEST_METHOD" in
 
       OUT_BAK="${OUTBOUNDS_PATH}.bak-ui-$(date +%Y%m%d-%H%M%S)"
       cp "$OUTBOUNDS_PATH" "$OUT_BAK" 2>/dev/null || true
-      cp "$TMP_BODY" "$OUTBOUNDS_PATH" || {
+      # Atomic same-FS stage + rename (see state branch above for rationale).
+      OUT_STAGE="${OUTBOUNDS_PATH}.new-$$"
+      if ! cp "$TMP_BODY" "$OUT_STAGE" || ! mv "$OUT_STAGE" "$OUTBOUNDS_PATH"; then
+        rm -f "$OUT_STAGE"
         json_err "failed to write outbounds"
         rm -f "$TMP_BODY"
         exit 0
-      }
+      fi
 
       json_ok "{\"ok\":true,\"outbounds\":\"$OUTBOUNDS_PATH\"}"
       rm -f "$TMP_BODY"
@@ -869,7 +1132,8 @@ case "$REQUEST_METHOD" in
     fi
 
     if [ "$KIND" = "singbox" ]; then
-      if ! grep -q '"outbounds"' "$TMP_BODY" || ! grep -q '"inbounds"' "$TMP_BODY"; then
+      if ! /opt/bin/jq -e '.outbounds | type == "array"' "$TMP_BODY" >/dev/null 2>&1 \
+         || ! /opt/bin/jq -e '.inbounds  | type == "array"' "$TMP_BODY" >/dev/null 2>&1; then
         cp "$TMP_BODY" /tmp/xkeen-singbox-invalid.json 2>/dev/null || true
         json_err "invalid singbox payload (size=${BODY_SIZE:-0})"
         rm -f "$TMP_BODY"
@@ -879,11 +1143,14 @@ case "$REQUEST_METHOD" in
       SINGBOX_PATH="/opt/etc/sing-box/xkeen.json"
       SB_BAK="${SINGBOX_PATH}.bak-ui-$(date +%Y%m%d-%H%M%S)"
       cp "$SINGBOX_PATH" "$SB_BAK" 2>/dev/null || true
-      cp "$TMP_BODY" "$SINGBOX_PATH" || {
+      # Atomic same-FS stage + rename (see state branch above).
+      SB_STAGE="${SINGBOX_PATH}.new-$$"
+      if ! cp "$TMP_BODY" "$SB_STAGE" || ! mv "$SB_STAGE" "$SINGBOX_PATH"; then
+        rm -f "$SB_STAGE"
         json_err "failed to write sing-box config"
         rm -f "$TMP_BODY"
         exit 0
-      }
+      fi
 
       # sing-box validates its own config at start; failure leaves the
       # service down and the next selfheal cycle will notice. We accept the
@@ -906,38 +1173,52 @@ case "$REQUEST_METHOD" in
       exit 0
     fi
 
-    cp "$TMP_BODY" "$TMP_NEW" || {
-      json_err "failed to stage new routing"
-      rm -f "$TMP_BODY" "$TMP_NEW"
-      exit 0
-    }
-
     TS="$(date +%Y%m%d-%H%M%S)"
     BACKUP="${ROUTING_PATH}.bak-ui-${TS}"
     cp "$ROUTING_PATH" "$BACKUP" 2>/dev/null || true
-    cp "$TMP_NEW" "$ROUTING_PATH" || {
+    # Atomic same-FS stage + rename. TMP_BODY lives on tmpfs (/tmp); a direct
+    # `cp` to /opt would leave a truncated file if uhttpd kills us at -t 120
+    # mid-copy — xray then boots on the next restart with a corrupt routing
+    # config, selfheal watches it fail, and backoff kicks in for 1800s. The
+    # same rationale for state / outbounds / singbox writes above.
+    ROUTING_STAGE="${ROUTING_PATH}.new-$$"
+    if ! cp "$TMP_BODY" "$ROUTING_STAGE" || ! mv "$ROUTING_STAGE" "$ROUTING_PATH"; then
+      rm -f "$ROUTING_STAGE"
       json_err "failed to write routing"
-      rm -f "$TMP_BODY" "$TMP_NEW"
+      rm -f "$TMP_BODY"
       exit 0
+    fi
+    # rollback_routing: restore from $BACKUP atomically. Same-FS mv again.
+    rollback_routing() {
+      [ -f "$BACKUP" ] || return 0
+      ROLLBACK_STAGE="${ROUTING_PATH}.rollback-$$"
+      if cp "$BACKUP" "$ROLLBACK_STAGE" && mv "$ROLLBACK_STAGE" "$ROUTING_PATH"; then
+        return 0
+      fi
+      rm -f "$ROLLBACK_STAGE"
+      return 1
     }
     if validate_confdir; then
       if restart_xray; then
-        repair_runtime >/dev/null 2>&1 || true
+        # Deliberately NOT calling repair_runtime here. It runs xkeen_repair_hooks
+        # (which rebuilds xkeen_bypass ipset by resolving every domain in state
+        # — 60+ nslookups when the DNS cache is cold) AND a second restart_xray
+        # right after we already restarted. Both together push the apply call
+        # past 60s and the browser's 20s fetch timeout aborts the request while
+        # xray IS getting restarted. The selfheal tick (every 15s) refreshes
+        # the ipset on its own; the small window where bypass-set has yesterday's
+        # domains until the next tick is acceptable.
         json_ok "{\"ok\":true,\"backup\":\"$BACKUP\",\"restarted\":true}"
       else
-        if [ -f "$BACKUP" ]; then
-          cp "$BACKUP" "$ROUTING_PATH"
-        fi
+        rollback_routing
         json_err "xray restart failed, rollback applied"
       fi
     else
-      if [ -f "$BACKUP" ]; then
-        cp "$BACKUP" "$ROUTING_PATH"
-      fi
+      rollback_routing
       json_err "xray config validation failed, rollback applied"
     fi
 
-    rm -f "$TMP_BODY" "$TMP_NEW" "$TMP_STATE" "$TMP_NEW.body"
+    rm -f "$TMP_BODY"
     exit 0
     ;;
   *)

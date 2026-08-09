@@ -64,7 +64,12 @@ function Send-RemoteFile {
     [string]$Mode = '644'
   )
 
-  & $python $sshHelper --host $RouterHost --user $RouterUser upload --local $LocalPath --remote $RemotePath --mode $Mode
+  $binaryExts = @('.png', '.jpg', '.jpeg', '.gif', '.ico', '.woff', '.woff2', '.zip', '.tar', '.gz')
+  $ext = [System.IO.Path]::GetExtension($LocalPath).ToLower()
+  $extraArgs = @()
+  if ($binaryExts -contains $ext) { $extraArgs += '--binary' }
+
+  & $python $sshHelper --host $RouterHost --user $RouterUser upload --local $LocalPath --remote $RemotePath --mode $Mode @extraArgs
   if ($LASTEXITCODE -ne 0) {
     throw "Failed to upload $RemotePath"
   }
@@ -88,23 +93,57 @@ mkdir -p /opt/var/log
 mkdir -p /opt/var/run
 
 /opt/bin/opkg update >/dev/null 2>&1 || true
-for pkg in jq gawk coreutils-base64 net-tools-netstat cron uhttpd_kn xray iptables ipset conntrack tar gzip wget ca-bundle; do
-  /opt/bin/opkg install "$pkg" >/dev/null 2>&1 || true
+# Essentials — stack won't run without them; fail hard so a broken
+# opkg / no-network situation is caught here, not silently later.
+# Mirrors install.sh install_packages().
+ESSENTIAL_PKGS="xray uhttpd_kn iptables ipset conntrack jq gawk ca-bundle"
+OPTIONAL_PKGS="cron curl wget tar gzip coreutils-base64 coreutils-timeout net-tools-netstat"
+
+MISSING=""
+for pkg in $ESSENTIAL_PKGS; do
+  if ! /opt/bin/opkg list-installed | grep -q "^${pkg} "; then
+    /opt/bin/opkg install "$pkg" >/dev/null 2>&1 || MISSING="$MISSING $pkg"
+  fi
+done
+if [ -n "$MISSING" ]; then
+  echo "ERROR: failed to install essential packages:$MISSING" >&2
+  exit 12
+fi
+for pkg in $OPTIONAL_PKGS; do
+  if ! /opt/bin/opkg list-installed | grep -q "^${pkg} "; then
+    /opt/bin/opkg install "$pkg" >/dev/null 2>&1 || true
+  fi
 done
 
 if ! command -v sing-box >/dev/null 2>&1; then
   SING_BOX_VERSION="${SING_BOX_VERSION:-1.13.8}"
+  # Match install.sh: try multiple asset names per arch since sing-box
+  # release naming has changed across versions.
   case "$(uname -m)" in
-    aarch64|arm64) SING_BOX_ARCH=arm64-musl ;;
-    armv7l|armv7*) SING_BOX_ARCH=armv7 ;;
-    mipsel*) SING_BOX_ARCH=mipsle ;;
-    mips*) SING_BOX_ARCH=mips ;;
-    *) SING_BOX_ARCH="$(uname -m)" ;;
+    aarch64|arm64)   ARCH_CANDIDATES="arm64-musl arm64" ;;
+    armv7l|armv7*)   ARCH_CANDIDATES="armv7-musl armv7" ;;
+    armv6l|armv6*)   ARCH_CANDIDATES="armv7-musl armv7" ;;
+    mipsel*)         ARCH_CANDIDATES="mipsle-softfloat mipsle" ;;
+    mips*)           ARCH_CANDIDATES="mips-softfloat mips" ;;
+    x86_64|amd64)    ARCH_CANDIDATES="amd64-musl amd64" ;;
+    *)               ARCH_CANDIDATES="$(uname -m)" ;;
   esac
-  SING_BOX_URL="${SING_BOX_URL:-https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-${SING_BOX_ARCH}.tar.gz}"
+  # Entware wget is wget-nossl by default — HTTPS through it does not work.
+  # Prefer curl; opkg install it above should have covered this.
+  FETCH="curl"
+  [ -x /opt/bin/curl ] || FETCH="wget"
   rm -rf /tmp/antigoblin-sing-box /tmp/antigoblin-sing-box.tar.gz
   mkdir -p /tmp/antigoblin-sing-box
-  if wget --no-check-certificate -O /tmp/antigoblin-sing-box.tar.gz "$SING_BOX_URL" >/dev/null 2>&1; then
+  ok=0
+  for arch_try in $ARCH_CANDIDATES; do
+    url="https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-${arch_try}.tar.gz"
+    if [ "$FETCH" = "curl" ]; then
+      /opt/bin/curl -fsSL -o /tmp/antigoblin-sing-box.tar.gz "$url" 2>/dev/null && { ok=1; break; }
+    else
+      wget -q -O /tmp/antigoblin-sing-box.tar.gz "$url" 2>/dev/null && { ok=1; break; }
+    fi
+  done
+  if [ "$ok" = "1" ]; then
     tar -xzf /tmp/antigoblin-sing-box.tar.gz -C /tmp/antigoblin-sing-box
     SING_BOX_BIN="$(find /tmp/antigoblin-sing-box -type f -name sing-box | head -n 1)"
     if [ -n "$SING_BOX_BIN" ]; then
@@ -130,7 +169,8 @@ touch /opt/var/log/xray/error.log
 touch /opt/var/log/xkeen-selfheal.log
 touch /opt/var/log/xkeen-health.log
 
-if ! ndmc -c 'show ip policy' 2>/dev/null | grep -q 'description = xkeen:'; then
+XKEEN_DESC_RE='description(([[:space:]]*[=:])|([[:space:]]+))[[:space:]]*"?xkeen($|[":,[:space:]])'
+if ! ndmc -c 'show ip policy' 2>/dev/null | grep -Eq "$XKEEN_DESC_RE"; then
   WAN_IFACE="$(ndmc -c 'show interface' | /opt/bin/awk '
     /^Interface, name = / {
       iface=$4
@@ -174,7 +214,12 @@ if ! ndmc -c 'show ip policy' 2>/dev/null | grep -q 'description = xkeen:'; then
   ndmc -c "ip policy $POLICY_NAME"
   ndmc -c "ip policy $POLICY_NAME description xkeen"
   ndmc -c "ip policy $POLICY_NAME permit global $WAN_IFACE"
-  ndmc -c "system configuration save" >/dev/null 2>&1 || true
+  saved=0
+  for _try in 1 2 3; do
+    if ndmc -c "system configuration save" >/dev/null 2>&1; then saved=1; break; fi
+    sleep 1
+  done
+  [ "$saved" = "1" ] || echo 'WARN: system configuration save failed after 3 tries; policy may not survive reboot.'
 fi
 '@
 Invoke-RouterCommand -Command $bootstrapScript
@@ -184,7 +229,14 @@ foreach ($item in $seedFiles) {
   if ($LASTEXITCODE -ne 0) {
     throw "Failed to inspect seed file on router: $($item.Remote)"
   }
-  $shouldUpload = $ForceSeedConfigs.IsPresent -or ($exists -notmatch 'EXISTS')
+  # 04_outbounds / 05_routing are runtime-owned: backend regenerates them
+  # from the UI state on every apply, and sample files intentionally omit
+  # the vless-reality outbound. Overwriting an existing installation with
+  # samples would strip the working outbound until the user hits Save+Apply
+  # again. Even under -ForceSeedConfigs we keep them if they exist.
+  $isRuntimeOwned = ($item.Remote -eq '/opt/etc/xray/configs/04_outbounds.json') -or `
+                    ($item.Remote -eq '/opt/etc/xray/configs/05_routing.json')
+  $shouldUpload = ($exists -notmatch 'EXISTS') -or ($ForceSeedConfigs.IsPresent -and -not $isRuntimeOwned)
   if (-not $shouldUpload) {
     Write-Output "Keeping existing file: $($item.Remote)"
     continue
@@ -198,6 +250,9 @@ Write-Output "Deploying AntiGoblin UI..."
 
 Write-Output "Deploying AntiGoblin backend..."
 & (Join-Path $PSScriptRoot 'deploy_xkeen_manager_backend_to_router.ps1') -RouterHost $RouterHost -RouterUser $RouterUser
+
+Write-Output "Writing UI port config /opt/etc/antigoblin.conf..."
+Invoke-RouterCommand -Command "printf 'PORT=%s\n' '$Port' > /opt/etc/antigoblin.conf && chmod 644 /opt/etc/antigoblin.conf"
 
 Write-Output "Starting router-hosted UI..."
 & (Join-Path $PSScriptRoot 'start_xkeen_manager_ui_router.ps1') -RouterHost $RouterHost -Port $Port -RouterUser $RouterUser

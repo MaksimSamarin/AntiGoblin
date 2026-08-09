@@ -28,7 +28,8 @@
 - группы с outbound `bypass` обходят `xray` полностью через `RETURN`;
 - группы с outbound `direct` входят в `xray`, но уходят напрямую без VPN;
 - общий `UDP` устройств вне VPN-групп идёт напрямую;
-- локалка и discovery обходят `xray` через `RETURN`.
+- локалка и discovery обходят `xray` через `RETURN`;
+- дополнительно на LAN-IP роутера поднят **SOCKS5-inbound (порт 61080, TCP+UDP)** — для точечного per-process туннеля с PC ([подробнее](#точечный-туннель-для-приложений-с-pc-socks5-inbound)).
 
 ## Поддерживаемые протоколы и транспорты
 
@@ -55,17 +56,34 @@
 - обновляется по кнопке ↻ в UI (auto-refresh пока не реализован);
 - при refresh добавляет новые ключи, помечает удалённые, оставляет неизменные на месте; активный ключ сохраняется, если он всё ещё в подписке.
 
+### Точечный туннель для приложений с PC (SOCKS5-inbound)
+
+Помимо device-based политики (весь трафик PC через VPN), на LAN-IP роутера поднят **SOCKS5-inbound** на порту `61080` (TCP+UDP). Он позволяет из Windows заворачивать через VPN **только выбранные приложения по имени процесса** — через любой Windows-клиент с process-based SOCKS5-перехватом. Полезно когда IP серверов приложения непредсказуемые (динамические / anycast) и добавлять их в CIDR-группы вручную неудобно.
+
+Настройка на клиенте:
+
+- SOCKS5-сервер: LAN-IP роутера, порт `61080`, без auth.
+- Handle-list: имена целевых `.exe` (для приложений с дочерними процессами полезно включить опцию «handle child processes»).
+- LAN-трафик клиент **не должен** захватывать (иначе получится петля на сам SOCKS-сервер).
+
+Трафик по цепочке: `App → SOCKS5-клиент → LAN-IP:61080 → xray socks-in → routing (socks-in → vless-reality) → активный ключ VPN`. TCP и UDP приложения идут одним путём с одного exit-IP — исключает split-horizon-разрывы.
+
+LAN-IP роутера подставляется в inbound-конфиг **динамически** — функция `xkeen_ensure_socks_inbound_ip` в `xkeen-runtime.sh` при каждом apply/restart определяет адрес через интерфейс `br0`. Схема работает на любом LAN-IP без правки конфига.
+
 ## Оглавление
 
 - [Поддерживаемые протоколы и транспорты](#поддерживаемые-протоколы-и-транспорты)
+  - [Подписки](#подписки)
+  - [Точечный туннель для приложений с PC (SOCKS5-inbound)](#точечный-туннель-для-приложений-с-pc-socks5-inbound)
 - [Подготовка Keenetic (один раз руками)](#подготовка-keenetic-один-раз-руками)
   - [Совместимые модели](#совместимые-модели)
   - [Шаг 1. Установить компоненты KeeneticOS](#шаг-1-установить-компоненты-keeneticos)
   - [Шаг 2. Подготовить флешку с Entware на PC](#шаг-2-подготовить-флешку-с-entware-на-pc)
-  - [Шаг 3. Подключить Entware к OPKG-менеджеру и перезагрузить](#шаг-3-подключить-entware-к-опкг-менеджеру-и-перезагрузить)
+  - [Шаг 3. Подключить Entware к OPKG-менеджеру и перезагрузить](#шаг-3-подключить-entware-к-opkg-менеджеру-и-перезагрузить)
 - [Установка одной командой](#установка-одной-командой)
   - [Вариант без SSH: через Keenetic Web CLI](#вариант-без-ssh-через-keenetic-web-cli)
   - [Вариант через SSH](#вариант-через-ssh)
+  - [Вариант «всё-на-флешке» (без SSH и без web CLI)](#вариант-всё-на-флешке-без-ssh-и-без-web-cli)
 - [Что делать после установки](#что-делать-после-установки)
 - [Где брать списки IP / CIDR / доменов для популярных сервисов](#где-брать-списки-ip--cidr--доменов-для-популярных-сервисов)
 - [Структура проекта](#структура-проекта)
@@ -83,7 +101,7 @@
 
 ### Совместимые модели
 
-Подходит любой Keenetic c USB-портом и поддержкой Entware. Live-инсталляция, на которой проект разрабатывался и проверялся — **Netcraze Giga** (ARM-сборка KeeneticOS). На других ARM-роутерах Keenetic должно работать без изменений. MIPS-модели (Lite/4G/Air) формально совместимы, но `xray + sing-box` под MIPS ставить тяжелее и performance скромнее.
+Подходит любой Keenetic c USB-портом и поддержкой Entware. Live-инсталляция, на которой проект разрабатывался и проверялся — **Netcraze Giga** (это Keenetic Giga KN-1010 под пост-2024 брендом РФ-рынка, ARM-сборка KeeneticOS). На других ARM-роутерах Keenetic должно работать без изменений. MIPS-модели (Lite/4G/Air) формально совместимы, но `xray + sing-box` под MIPS ставить тяжелее и performance скромнее.
 
 Минимальные требования:
 
@@ -167,6 +185,7 @@ Windows нативно ext-разделы не создаёт, нужен сто
 
 ```sh
 ssh admin@192.168.1.1
+exec sh                    # выйти из NDM CLI в обычный shell
 /opt/bin/opkg --version
 ```
 
@@ -187,13 +206,14 @@ http://192.168.1.1/a
 Ввести команду:
 
 ```sh
-exec sh -c "/opt/bin/wget -O - https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/scripts/xkeen/antigoblin-web-cli-install.sh | /opt/bin/sh"
+exec sh -c "opkg install curl >/dev/null 2>&1; /opt/bin/curl -fsSL https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/scripts/xkeen/antigoblin-web-cli-install.sh | /opt/bin/sh"
 ```
 
 Что происходит:
 
 - Keenetic Web CLI запускает shell-команду через `exec sh -c`;
-- Entware-овский `/opt/bin/wget` скачивает `scripts/xkeen/antigoblin-web-cli-install.sh`;
+- `opkg install curl` тихо доставит `curl`, если его ещё нет (базовый Entware ставит только `wget-nossl`, без HTTPS — своим `wget` этот bootstrap не скачать);
+- Entware-овский `/opt/bin/curl` скачивает `scripts/xkeen/antigoblin-web-cli-install.sh`;
 - этот bootstrap-скрипт скачивает обычный `install.sh` из репозитория и запускает его через `/opt/bin/sh`.
 
 Такой вариант удобен, когда не хочется открывать SSH/PuTTY/Terminal только ради запуска установщика.
@@ -203,13 +223,22 @@ exec sh -c "/opt/bin/wget -O - https://raw.githubusercontent.com/MaksimSamarin/A
 SSH на роутер и выполнить:
 
 ```sh
-wget -O - https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/install.sh | sh
+ssh admin@192.168.1.1
+exec sh
+curl -fsSL https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/install.sh | sh
 ```
 
-или, если хочется сначала посмотреть скрипт:
+> **`exec sh` обязателен**. После `ssh admin@…` Keenetic пускает в свой NDM CLI (промпт `(config)>`), а не в обычный shell. Если ввести `curl …` сразу — увидишь `unknown command`. `exec sh` переключает сессию в BusyBox-shell, где работают `curl`, `opkg`, `install.sh` и всё остальное.
+
+> На дефолтном Entware стоит `wget-nossl` (без HTTPS), поэтому `wget https://...` не сработает. Если `curl` ещё не установлен — сначала `opkg install curl`, потом команду выше.
+
+Если `curl` ещё не установлен, а хочется сначала посмотреть скрипт:
 
 ```sh
-wget -O install.sh https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/install.sh
+ssh admin@192.168.1.1
+exec sh
+opkg install curl
+curl -fsSL -o install.sh https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/install.sh
 sh install.sh
 ```
 
@@ -223,7 +252,7 @@ sh install.sh
 - раскладывает sample-конфиги `xray` и `sing-box` (существующие конфиги не трогаются — для перезаписи использовать `ANTIGOBLIN_FORCE=1`);
 - кладет UI и backend в `/opt/share/xkeen-manager/`;
 - ставит init-скрипты `S20antigoblin-sysctl`, `S24antigoblin-singbox`, `S25antigoblin-selfheal`, `S26antigoblin`;
-- ставит cron и `ndm/fs.d`/`ndm/usb.d` хуки для авто-восстановления после reboot и USB-событий;
+- ставит cron и `ndm/usb.d`/`ndm/netfilter.d` хуки для авто-восстановления после reboot, USB-событий и reload netfilter;
 - запускает первый цикл `xkeen-selfheal.sh --force` и поднимает UI на `:8899`.
 
 Скрипт идемпотентный: повторный запуск обновит исходники без затирания пользовательской конфигурации. Чтобы пересеять и sample-конфиги:
@@ -233,6 +262,62 @@ ANTIGOBLIN_FORCE=1 sh install.sh
 ```
 
 После установки скрипт сам напишет URL для UI. Логин и пароль — от web UI Keenetic.
+
+### Вариант «всё-на-флешке» (без SSH и без web CLI)
+
+Схема для тех, кто вообще не хочет открывать SSH или Keenetic Web CLI. Работает поверх обычной подготовки Entware через флешку — только вместо чистого `<arch>-installer.tar.gz` мы кладём готовый zip с папкой `install/`, где внутри лежит наш USB-installer (в котором уже есть Entware **плюс** предустановленный AntiGoblin и `sing-box`). При первом монтировании флешки Keenetic развернёт Entware, и запустится наш `S99antigoblin-firstboot`, который сам вызовет `install.sh` с локальной копией — без интернета для скачивания репозитория.
+
+**Шаги:**
+
+1. Скачать `antigoblin-usb-<arch>.zip` из [GitHub Releases](https://github.com/MaksimSamarin/AntiGoblin/releases):
+
+   - `antigoblin-usb-aarch64.zip` — большинство современных Keenetic: Giga, Ultra, Hero, Peak, Speedster, Runner, Hopper, Skipper.
+   - `antigoblin-usb-armv7.zip` — старые: Extra, Giga II/III, Duo, Air, Omni.
+
+   > Внутри zip лежит папка `install/` с правильно названным `<arch>-installer.tar.gz` — папку и файл создавать вручную не нужно.
+
+2. Флешку подготовить как обычно ([Шаг 2](#шаг-2-подготовить-флешку-с-entware-на-pc)) — отформатировать в ext4.
+
+3. **Распаковать zip прямо в корень флешки.** На Windows — правой кнопкой по zip → «Извлечь всё…» → указать буквы флешки (например `E:\`). На Linux/macOS — `unzip antigoblin-usb-aarch64.zip -d /mnt/usb/`. Должна получиться такая структура:
+
+   ```text
+   <буква флешки>/
+     └── install/
+         └── aarch64-installer.tar.gz
+   ```
+
+4. Вставить флешку в роутер, в web UI Keenetic зайти в `Приложения → Менеджер пакетов OPKG` и указать эту флешку — [Шаг 3](#шаг-3-подключить-entware-к-opkg-менеджеру-и-перезагрузить). Роутер один раз перезагрузится (разворачивает Entware).
+
+5. После перезагрузки подождать ещё ~1-2 минуты — идёт `S99antigoblin-firstboot`. Прогресс можно смотреть по адресу `http://192.168.1.1:8899/` (страница появится, как только UI поднимется). Если нужен подробный лог — SSH и `cat /opt/var/log/antigoblin-firstboot.log`.
+
+6. Открыть `http://192.168.1.1:8899/`, залогиниться через Keenetic-креды, добавить ключ / подписку, Save & Apply. Дальше как в разделе [Что делать после установки](#что-делать-после-установки).
+
+> Если предпочитаешь класть tarball руками — в том же Release лежит `<arch>-installer.tar.gz` рядом с zip'ом. Скачал → сам создал `install/` на флешке → положил.
+
+> Проверить версию установленной сборки на роутере: `ssh admin@192.168.1.1` → `exec sh` → `cat /opt/share/antigoblin-staged/VERSION`.
+
+**Как это устроено под капотом.** Наш USB-tarball — это исходный `<arch>-installer.tar.gz` от Entware плюс:
+
+- `/opt/sbin/sing-box` (уже нужного arch);
+- `/opt/share/antigoblin-staged/` — полная копия репозитория;
+- `/opt/etc/init.d/S99antigoblin-firstboot` — one-shot init-скрипт, который ждёт готовности NDM, запускает `install.sh` с флагом `ANTIGOBLIN_SRC_DIR=/opt/share/antigoblin-staged` (без похода в GitHub), после успеха `touch /opt/etc/antigoblin.done` и `rm` себя из init.d — второй раз при следующем boot не сработает.
+
+**Собрать свой USB-installer** (например, если хочешь пропатчить репозиторий перед раскаткой):
+
+```bash
+./scripts/xkeen/build-usb-installer.sh --arch aarch64 --version my-build
+# → dist/antigoblin-usb-aarch64.zip   (рекомендуется — юзер распаковывает в корень флешки)
+# → dist/aarch64-installer.tar.gz     (сырой tarball, кладётся руками в install/)
+# Версия зашивается внутрь как /opt/share/antigoblin-staged/VERSION.
+```
+
+Билд-скрипт запускается на Linux или WSL (Ubuntu/Debian хватает), требует `bash`, `curl`, `tar`, `gzip`, `awk`. Ничего не кросс-компилирует — только скачивает готовые бинарники и репаковывает. На голом Windows Git-Bash **не работает** — не умеет создавать symlink'и, которых полно в Entware installer; используй WSL. Автоматическая сборка на GitHub Actions описана в `.github/workflows/release-usb-installer.yml` — при пуше тега `v*` собираются aarch64 и armv7, публикуются в Release.
+
+**Ограничения:**
+
+- Поддерживаемые архитектуры — `aarch64` и `armv7`. Для `mipsel`/`mips`/`x86_64` используй классический путь через SSH / Web CLI.
+- `S99antigoblin-firstboot` при запуске выполняет `opkg install` для обязательных пакетов (`xray`, `uhttpd_kn`, `iptables`, `ipset`, `conntrack`, `jq`, `gawk`, `ca-bundle`). Для этого нужен работающий WAN. Если WAN недоступен на первом boot — flash-install зафейлится, лог в `/opt/var/log/antigoblin-firstboot.log`.
+- Если хочется прогнать firstboot ещё раз (например, после сброса) — удалить `/opt/etc/antigoblin.done` и перезагрузить роутер.
 
 ## Что делать после установки
 
@@ -295,7 +380,7 @@ UI и backend:
 - `/opt/share/xkeen-manager/api/xkeen-selfheal.sh`
 - `/opt/share/xkeen-manager/api/xkeen-runtime.sh`
 
-Bypass собирается только из UI-групп с типом трафика `Bypass`. Их домены и CIDR попадают в runtime `xkeen_bypass` и обходят `xray` через `RETURN`.
+Bypass собирается только из UI-групп с outbound `bypass`. Их домены и CIDR попадают в runtime `xkeen_bypass` и обходят `xray` через `RETURN`.
 
 UDP-маршрутизация привязана к outbound группы автоматически: для любой включенной группы с outbound `vless-reality` ее домены/CIDR попадают в `xkeen_udp_route`, и совпавший UDP уходит через `TPROXY → sing-box (61221) → xray SS-relay (127.0.0.1:62640) → xray VLESS Reality`. Группы с outbound `direct` или `bypass` UDP не трогают.
 
@@ -306,27 +391,64 @@ UDP-маршрутизация привязана к outbound группы ав�
 Повторный прогон установщика подтянет последнюю версию из main:
 
 ```sh
-wget -O - https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/install.sh | sh
 ```
 
 UI state и существующие `xray`/`sing-box` конфиги **не пересеваются**: новые версии backend/UI просто заменяются. При первом запуске нового UI старая схема state (`proxyConfig` одной штукой) автоматически мигрирует в новую (`proxies[]` + `subscriptions[]` + `activeProxyId`) при чтении — пользовательский ключ становится первой записью в `proxies[]` и сразу активным. Откатиться легко: бэкап state делается каждый Save+Apply (`.bak-ui-<timestamp>`).
 
-Чтобы пересеять sample-конфиги к версии из репозитория, добавь `ANTIGOBLIN_FORCE=1`.
+Что ещё делает upgrade:
+
+- **Essential-пакеты** (`xray`, `uhttpd_kn`, `iptables`, `ipset`, `conntrack`, `jq`, `gawk`, `ca-bundle`) теперь `fail-hard`: если `opkg` недоступен или сеть упала, установка падает с явной ошибкой (а не молча продолжает с broken-stack).
+- **SOCKS5-inbound** на порту 61080 автоматически merge-ится в `03_inbounds.json` если его там ещё нет (без `ANTIGOBLIN_FORCE=1`). Пропускается, если у пользователя уже занят порт 61080 или тег `socks-in`.
+- **`/opt/etc/antigoblin.conf`** каждый прогон перезаписывается с `PORT=$ANTIGOBLIN_UI_PORT` (по умолчанию 8899). Если раньше запускался с нестандартным портом, задай `ANTIGOBLIN_UI_PORT=...` перед новым upgrade.
+- **`ndm/fs.d/50-antigoblin.sh`** снимается (дублировал `usb.d/`, стрелял дважды на USB-remount).
+
+Чтобы пересеять sample-конфиги к версии из репозитория, добавь `ANTIGOBLIN_FORCE=1`. **04_outbounds.json и 05_routing.json** намеренно исключены из force-reseed — sample-версии не содержат `vless-reality` outbound, и xray после force-reseed упал бы до первого Save+Apply.
 
 ## Удаление
 
 ```sh
+# 1. Остановить сервисы
 /opt/etc/init.d/S26antigoblin stop
 /opt/etc/init.d/S25antigoblin-selfheal stop
 /opt/etc/init.d/S24antigoblin-singbox stop
+
+# 2. Удалить init/cron/ndm-хуки
 rm -f /opt/etc/init.d/S20antigoblin-sysctl /opt/etc/init.d/S24antigoblin-singbox \
       /opt/etc/init.d/S25antigoblin-selfheal /opt/etc/init.d/S26antigoblin
 rm -f /opt/etc/cron.1min/50-antigoblin-selfheal
-rm -f /opt/etc/ndm/fs.d/50-antigoblin.sh /opt/etc/ndm/usb.d/50-antigoblin.sh
+rm -f /opt/etc/ndm/usb.d/50-antigoblin.sh /opt/etc/ndm/netfilter.d/50-antigoblin.sh \
+      /opt/etc/ndm/fs.d/50-antigoblin.sh
+# ^^ fs.d/50-antigoblin.sh больше не устанавливается (starting v1.1.x), но
+#    строка выше снимет его, если он остался от старой версии.
+
+# 3. Снести iptables-цепочки и ipset-ы (S26antigoblin stop UI-часть, но не netfilter).
+#    MARK политики xkeen у каждого роутера свой (0xffffaaX). Читаем из
+#    /tmp/xkeen-mark (кэш пишется selfheal/apply при каждом успешном ndmc-запросе).
+#    Если файла нет — fallback на дефолтное значение первой политики Keenetic.
+MARK="0x$(cat /tmp/xkeen-mark 2>/dev/null)"
+case "$MARK" in 0x) MARK=0xffffaab ;; esac
+iptables -t nat -D PREROUTING -m connmark --mark "$MARK" -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || true
+iptables -t mangle -D PREROUTING -p udp -m connmark --mark "$MARK" -m conntrack ! --ctstate INVALID -m set --match-set xkeen_udp_route dst -j xkeen_udp_route 2>/dev/null || true
+iptables -t nat -F xkeen 2>/dev/null; iptables -t nat -X xkeen 2>/dev/null
+iptables -t mangle -F xkeen_udp_route 2>/dev/null; iptables -t mangle -X xkeen_udp_route 2>/dev/null
+ipset destroy xkeen_udp_route 2>/dev/null; ipset destroy xkeen_bypass 2>/dev/null
+
+# 4. Удалить UI, backend, конфиг порта и логи
 rm -rf /opt/share/xkeen-manager
+rm -f  /opt/etc/antigoblin.conf
+rm -f  /opt/var/log/xkeen-*.log /opt/var/log/sing-box-xkeen.log
+rm -f  /opt/var/run/antigoblin-selfheal-loop.pid
+rm -rf /opt/etc/xray/configs/*.bak-ui-* 2>/dev/null || true
 ```
 
-Политика Keenetic `xkeen`, конфиги в `/opt/etc/xray/configs/` и `/opt/etc/sing-box/` не удаляются автоматически.
+**Не удаляется автоматически:**
+
+- Политика Keenetic `xkeen` в Keenetic UI («Приоритеты подключений»).
+- Конфиги в `/opt/etc/xray/configs/` и `/opt/etc/sing-box/` (полезны как бэкап; можно снести вручную `rm -rf`).
+- Бинарь `/opt/sbin/sing-box` (installer его ставил).
+- sysctl-твики от `S20antigoblin-sysctl` — сохраняются в памяти до перезагрузки роутера, безопасно.
+- Cache DNS-резолвера `/tmp/xkeen-dns-cache/` — очистится сама при перезагрузке.
 
 ## Разработка
 
@@ -334,12 +456,31 @@ rm -rf /opt/share/xkeen-manager
 
 ```text
 .env (gitignored)
-ROUTER_HOST=192.168.1.1
-ROUTER_SSH_USER=root
-ROUTER_SSH_PASSWORD=ssh-пароль-роутера
-ROUTER_SSH_PORT=22
-ANTIGOBLIN_UI_PORT=8899
+ROUTER_SSH_PASSWORD=ssh-пароль-роутера   # required
+ROUTER_HOST=192.168.1.1                  # optional, default 192.168.1.1
+ROUTER_SSH_USER=root                     # optional, default root
+ROUTER_SSH_PORT=22                       # optional, default 22
+ANTIGOBLIN_UI_PORT=8899                  # optional, default 8899
 ```
+
+Требования на dev-машине (Windows):
+
+```powershell
+# Python 3 + paramiko для router_ssh.py, которым пользуются все deploy_*.ps1
+pip install paramiko
+
+# Опционально: PowerShell-модуль Posh-SSH нужен только для xkeen_backup_state.ps1
+# (остальные dev-скрипты — через router_ssh.py, только paramiko).
+Install-Module Posh-SSH -Scope CurrentUser -Force
+```
+
+**Первый прогон на чистом роутере** — `bootstrap_antigoblin_router.ps1`. Он ставит essential-пакеты через opkg, создаёт политику `xkeen` в NDMS, скачивает `sing-box` по нужной архитектуре, пишет `/opt/etc/antigoblin.conf` и разворачивает init-скрипты. Без него `deploy_xkeen_manager_stack_to_router.ps1` упрётся в отсутствие `uhttpd`, политики или sing-box.
+
+```powershell
+.\scripts\xkeen\bootstrap_antigoblin_router.ps1     # first-time setup, идемпотентен
+```
+
+**Итеративный push** во время разработки — `deploy_xkeen_manager_stack_to_router.ps1`. Только заливает файлы UI/backend и рестартит uhttpd, ничего не устанавливает.
 
 ```powershell
 .\scripts\xkeen\deploy_xkeen_manager_stack_to_router.ps1

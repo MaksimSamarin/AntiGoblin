@@ -4,12 +4,17 @@
 # Usage on the router (after Entware/OPKG is enabled in Keenetic and
 # the USB stick is mounted at /opt):
 #
-#   wget -O - https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/install.sh | sh
 #
-# Or:
+# Or (if curl is not yet installed):
 #
-#   wget -O install.sh https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/install.sh
+#   opkg install curl
+#   curl -fsSL -o install.sh https://raw.githubusercontent.com/MaksimSamarin/AntiGoblin/main/install.sh
 #   sh install.sh
+#
+# Note: Entware ships wget-nossl by default (no HTTPS support), so
+# `wget https://...` will not work. The installer itself pulls curl via
+# opkg if it isn't there yet.
 #
 # The script is idempotent: re-running it upgrades sources without
 # touching existing UI state or xray configs unless ANTIGOBLIN_FORCE=1.
@@ -112,16 +117,44 @@ install_packages() {
   log "Updating Entware package index"
   /opt/bin/opkg update >/dev/null 2>&1 || true
 
-  PKGS="ca-bundle curl wget tar gzip jq gawk coreutils-base64 net-tools-netstat cron uhttpd_kn xray iptables ipset conntrack"
-  for pkg in $PKGS; do
+  # Essentials — the stack literally can't run without them; fail hard.
+  # Optionals — nice-to-have (rich netstat, coreutils base64, standalone
+  # curl/wget for user shell); warn and continue.
+  ESSENTIAL_PKGS="xray uhttpd_kn iptables ipset conntrack jq gawk ca-bundle"
+  OPTIONAL_PKGS="cron curl wget tar gzip coreutils-base64 coreutils-timeout net-tools-netstat"
+
+  MISSING_ESSENTIAL=""
+  for pkg in $ESSENTIAL_PKGS; do
     if ! /opt/bin/opkg list-installed | grep -q "^${pkg} "; then
-      log "Installing $pkg"
-      /opt/bin/opkg install "$pkg" >/dev/null 2>&1 || log "WARN: failed to install $pkg (continuing)"
+      log "Installing (essential) $pkg"
+      if ! /opt/bin/opkg install "$pkg" >/dev/null 2>&1; then
+        MISSING_ESSENTIAL="$MISSING_ESSENTIAL $pkg"
+      fi
+    fi
+  done
+  if [ -n "$MISSING_ESSENTIAL" ]; then
+    die "Failed to install essential packages:$MISSING_ESSENTIAL. Fix opkg/network and re-run install.sh."
+  fi
+
+  for pkg in $OPTIONAL_PKGS; do
+    if ! /opt/bin/opkg list-installed | grep -q "^${pkg} "; then
+      log "Installing (optional) $pkg"
+      /opt/bin/opkg install "$pkg" >/dev/null 2>&1 || log "WARN: failed to install optional $pkg (continuing)"
     fi
   done
 }
 
 fetch_sources() {
+  # Offline / staged mode: firstboot script (S99antigoblin-firstboot) sets
+  # ANTIGOBLIN_SRC_DIR to a pre-unpacked source tree bundled into the USB
+  # installer tarball. Skip the GitHub download entirely — /opt is a fresh
+  # Entware with no ca-bundle guaranteed and possibly no WAN.
+  if [ -n "${ANTIGOBLIN_SRC_DIR:-}" ] && [ -d "$ANTIGOBLIN_SRC_DIR/ui/xkeen-manager" ]; then
+    log "Using pre-staged sources from ANTIGOBLIN_SRC_DIR=$ANTIGOBLIN_SRC_DIR"
+    SRC_DIR="$ANTIGOBLIN_SRC_DIR"
+    return 0
+  fi
+
   ensure_https_fetcher
   rm -rf "$WORK_DIR"
   mkdir -p "$WORK_DIR"
@@ -139,7 +172,15 @@ fetch_sources() {
 }
 
 ensure_xkeen_policy() {
-  if ndmc -c 'show ip policy' 2>/dev/null | grep -q 'description = xkeen:'; then
+  # Accept any of the NDMC description formats seen in the wild:
+  #   `description = xkeen:Home`  (Format A one-liner)
+  #   `description: xkeen`        (Format B multiline, no space before `:`)
+  #   `description xkeen`         (Format C bare)
+  # This regex is the SAME one xkeen-runtime.sh exports as
+  # XKEEN_POLICY_DESC_RE — keep them in sync (an earlier install.sh copy
+  # required a mandatory space and silently missed Format B).
+  DESC_MATCH='description(([[:space:]]*[=:])|([[:space:]]+))[[:space:]]*"?xkeen($|[":,[:space:]])'
+  if ndmc -c 'show ip policy' 2>/dev/null | grep -Eq "$DESC_MATCH"; then
     log "Keenetic policy 'xkeen' already exists"
     return 0
   fi
@@ -186,7 +227,18 @@ ensure_xkeen_policy() {
   ndmc -c "ip policy $POLICY_NAME"
   ndmc -c "ip policy $POLICY_NAME description xkeen"
   ndmc -c "ip policy $POLICY_NAME permit global $WAN_IFACE"
-  ndmc -c "system configuration save" >/dev/null 2>&1 || true
+  # Persist to startup-config. Retry a few times: if another process is
+  # writing config, first save can fail transiently and we'd silently lose
+  # the policy after reboot.
+  saved=0
+  for _try in 1 2 3; do
+    if ndmc -c "system configuration save" >/dev/null 2>&1; then
+      saved=1
+      break
+    fi
+    sleep 1
+  done
+  [ "$saved" = "1" ] || log "WARN: 'system configuration save' failed after 3 tries; policy may not survive reboot."
   log "Created policy $POLICY_NAME with description 'xkeen' over $WAN_IFACE"
 }
 
@@ -202,11 +254,14 @@ mkdirs() {
     /opt/var/log/xray \
     /opt/var/run \
     /opt/etc/cron.1min \
-    /opt/etc/ndm/fs.d \
-    /opt/etc/ndm/usb.d
-  : > /opt/var/log/xray/access.log
-  : > /opt/var/log/xray/error.log
-  touch /opt/var/log/xkeen-selfheal.log /opt/var/log/xkeen-health.log
+    /opt/etc/ndm/usb.d \
+    /opt/etc/ndm/netfilter.d
+  # touch, not `:>`. A reinstall over an existing box (typical when the
+  # user re-fetches install.sh after a bug) must not truncate xray logs
+  # — the error.log entry that reproduces their crash is often the whole
+  # reason they're re-running install.sh.
+  touch /opt/var/log/xray/access.log /opt/var/log/xray/error.log \
+        /opt/var/log/xkeen-selfheal.log /opt/var/log/xkeen-health.log
 }
 
 seed_file() {
@@ -246,10 +301,50 @@ deploy_sources() {
   seed_file "$CONFIGS/01_log.sample.json"        /opt/etc/xray/configs/01_log.json
   seed_file "$CONFIGS/02_relay.sample.json"      /opt/etc/xray/configs/02_relay.json
   seed_file "$CONFIGS/03_inbounds.sample.json"   /opt/etc/xray/configs/03_inbounds.json
-  seed_file "$CONFIGS/04_outbounds.sample.json"  /opt/etc/xray/configs/04_outbounds.json
-  seed_file "$CONFIGS/05_routing.sample.json"    /opt/etc/xray/configs/05_routing.json
+  # 04_outbounds and 05_routing are runtime-generated by backend on every
+  # apply. Force-reseed replaces them with samples that don't declare a
+  # vless-reality outbound, breaking xray until user saves from UI. Keep
+  # them out of FORCE_SEED path.
+  if [ ! -f /opt/etc/xray/configs/04_outbounds.json ]; then
+    seed_file "$CONFIGS/04_outbounds.sample.json" /opt/etc/xray/configs/04_outbounds.json
+  fi
+  if [ ! -f /opt/etc/xray/configs/05_routing.json ]; then
+    seed_file "$CONFIGS/05_routing.sample.json" /opt/etc/xray/configs/05_routing.json
+  fi
   seed_file "$CONFIGS/sing-box-xkeen.sample.json" /opt/etc/sing-box/xkeen.json
   seed_file "$CONFIGS/xkeen-ui-state.sample.json" /opt/share/xkeen-manager/xkeen-ui-state.json
+
+  # Upgrade path: existing 03_inbounds.json from a pre-SOCKS5-inbound
+  # install lacks the `socks-in` block. seed_file above keeps the file as
+  # is; here we merge in the socks-in inbound from the sample so the
+  # feature works without requiring ANTIGOBLIN_FORCE=1 (which would blow
+  # away every user-tuned inbound).
+  if command -v jq >/dev/null 2>&1 && [ -f /opt/etc/xray/configs/03_inbounds.json ] \
+      && [ -f "$CONFIGS/03_inbounds.sample.json" ]; then
+    # Merge only if neither the tag nor the port 61080 is already claimed
+    # by an existing inbound — otherwise xray fails to start on
+    # "address in use" after upgrade, and the user has no obvious diagnosis.
+    if ! jq -e '.inbounds[]? | select(.tag == "socks-in" or .port == 61080)' \
+        /opt/etc/xray/configs/03_inbounds.json >/dev/null 2>&1; then
+      TMP_INB="/opt/etc/xray/configs/03_inbounds.json.tmp-socks-merge"
+      if jq --slurpfile sample "$CONFIGS/03_inbounds.sample.json" \
+          '.inbounds += ($sample[0].inbounds | map(select(.tag == "socks-in")))' \
+          /opt/etc/xray/configs/03_inbounds.json > "$TMP_INB" 2>/dev/null \
+          && jq -e '.' "$TMP_INB" >/dev/null 2>&1; then
+        mv "$TMP_INB" /opt/etc/xray/configs/03_inbounds.json
+        chmod 644 /opt/etc/xray/configs/03_inbounds.json
+        log "Merged socks-in inbound into existing 03_inbounds.json"
+      else
+        rm -f "$TMP_INB"
+      fi
+    else
+      log "Skipped socks-in merge: 03_inbounds.json already declares tag=socks-in or port=61080"
+    fi
+  fi
+
+  # Persist UI port for the init script (source of truth for :$UI_PORT).
+  printf 'PORT=%s\n' "$UI_PORT" > /opt/etc/antigoblin.conf
+  chmod 644 /opt/etc/antigoblin.conf
 
   log "Deploying UI"
   cp "$UI/index.html"   /opt/share/xkeen-manager/index.html
@@ -272,8 +367,12 @@ deploy_sources() {
   deploy_file "$SCRIPTS/antigoblin-selfheal.initd.sh" /opt/etc/init.d/S25antigoblin-selfheal
   deploy_file "$SCRIPTS/antigoblin.initd.sh"          /opt/etc/init.d/S26antigoblin
   deploy_file "$SCRIPTS/antigoblin-selfheal.cron.sh"  /opt/etc/cron.1min/50-antigoblin-selfheal
-  deploy_file "$SCRIPTS/antigoblin-remount-hook.sh"   /opt/etc/ndm/fs.d/50-antigoblin.sh
+  # remount-hook: install into usb.d only. Historically also in fs.d,
+  # which double-fired the hook on USB Entware mounts. Remove legacy copy
+  # from fs.d on upgrade.
   deploy_file "$SCRIPTS/antigoblin-remount-hook.sh"   /opt/etc/ndm/usb.d/50-antigoblin.sh
+  rm -f /opt/etc/ndm/fs.d/50-antigoblin.sh 2>/dev/null || true
+  deploy_file "$SCRIPTS/antigoblin-netfilter-hook.sh" /opt/etc/ndm/netfilter.d/50-antigoblin.sh
 }
 
 install_singbox() {
@@ -282,22 +381,42 @@ install_singbox() {
     return 0
   fi
 
+  # sing-box release asset naming has changed across versions. Rather than
+  # bet on one string, list candidates in order of preference for the CPU
+  # arch and try them until one downloads. Fallback covers older naming
+  # ("-musl" suffix), newer naming (unsuffixed), and the softfloat MIPS
+  # variant.
   case "$(uname -m)" in
-    aarch64|arm64) ARCH=arm64-musl ;;
-    armv7l|armv7*) ARCH=armv7 ;;
-    mipsel*)       ARCH=mipsle ;;
-    mips*)         ARCH=mips ;;
-    *)             ARCH="$(uname -m)" ;;
+    aarch64|arm64)   ARCH_CANDIDATES="arm64-musl arm64" ;;
+    armv7l|armv7*)   ARCH_CANDIDATES="armv7-musl armv7" ;;
+    # Old sing-box builds ship no armv6 asset. Try armv7 — some armv6 chips
+    # run armv7 binaries; if not, the user gets a clear warn and lives without
+    # hy2 (VLESS TCP still works).
+    armv6l|armv6*)   ARCH_CANDIDATES="armv7-musl armv7" ;;
+    mipsel*)         ARCH_CANDIDATES="mipsle-softfloat mipsle" ;;
+    mips*)           ARCH_CANDIDATES="mips-softfloat mips" ;;
+    x86_64|amd64)    ARCH_CANDIDATES="amd64-musl amd64" ;;
+    *)               ARCH_CANDIDATES="$(uname -m)" ;;
   esac
-
-  URL="https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-${ARCH}.tar.gz"
-  log "Downloading sing-box ${SING_BOX_VERSION} (${ARCH})"
 
   rm -rf /tmp/antigoblin-sing-box /tmp/antigoblin-sing-box.tar.gz
   mkdir -p /tmp/antigoblin-sing-box
 
-  if ! fetch_to "$URL" /tmp/antigoblin-sing-box.tar.gz; then
-    log "WARN: failed to download sing-box. UDP-VPN groups will not work until you install /opt/sbin/sing-box manually."
+  DOWNLOADED=0
+  for arch_try in $ARCH_CANDIDATES; do
+    URL="https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-${arch_try}.tar.gz"
+    log "Downloading sing-box ${SING_BOX_VERSION} (${arch_try})"
+    if fetch_to "$URL" /tmp/antigoblin-sing-box.tar.gz 2>/dev/null; then
+      DOWNLOADED=1
+      break
+    fi
+    log "  ...asset not found for arch=${arch_try}, trying next"
+  done
+
+  if [ "$DOWNLOADED" != "1" ]; then
+    log "WARN: failed to download sing-box for any of the archs ($ARCH_CANDIDATES)."
+    log "      UDP-VPN groups will not work until you install /opt/sbin/sing-box manually."
+    log "      Check https://github.com/SagerNet/sing-box/releases/tag/v${SING_BOX_VERSION} for the correct asset name."
     return 0
   fi
 
@@ -334,7 +453,19 @@ start_services() {
 
   log "Starting AntiGoblin UI on :$UI_PORT"
   /opt/etc/init.d/S26antigoblin restart >/dev/null 2>&1 || true
-  sleep 2
+  # Wait for uhttpd to bind. Fixed 2s races on slower flash; poll for the
+  # port and only report success once it's actually listening.
+  UI_UP=0
+  for _try in 1 2 3 4 5 6; do
+    if netstat -lnpt 2>/dev/null | grep -q ":$UI_PORT "; then
+      UI_UP=1
+      break
+    fi
+    sleep 1
+  done
+  if [ "$UI_UP" != "1" ]; then
+    log "WARN: UI did not bind :$UI_PORT within 6s. Check tail /opt/var/log/xkeen-manager-uhttpd.log"
+  fi
 }
 
 print_summary() {
@@ -354,9 +485,12 @@ print_summary() {
   printf 'UI auth uses your Keenetic web UI login and password.\n'
   printf '\n'
   printf 'Next steps in the UI:\n'
-  printf '  1. Fill in VLESS Reality credentials.\n'
-  printf '  2. Configure routing groups (each with outbound: vless-reality / direct / bypass).\n'
-  printf '  3. Click "Save and apply".\n'
+  printf '  1. Add a proxy key: paste vless:// / vmess:// / hysteria2://\n'
+  printf '     URI, or add a subscription URL.\n'
+  printf '  2. Select the active key (radio in the keys panel).\n'
+  printf '  3. Configure routing groups (each with outbound:\n'
+  printf '     vless-reality [via active key] / bypass).\n'
+  printf '  4. Click "Save and apply".\n'
   printf '\n'
   printf 'Then in the Keenetic web UI assign devices to policy "xkeen"\n'
   printf 'in "Приоритеты подключений".\n'

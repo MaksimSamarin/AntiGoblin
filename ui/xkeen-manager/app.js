@@ -1,4 +1,53 @@
 const STORAGE_KEY = "xkeen-manager-state-v7";
+
+// Default timeout for router-side fetches. Without this, a stuck CGI
+// (waiting on lock, dead nslookup, etc) freezes Save/Apply/Restart
+// buttons in "disabled" state forever because `await response.json()`
+// never resolves. Wraps fetch with AbortController — polyfills the
+// browsers that don't support AbortSignal.timeout yet.
+const ROUTER_FETCH_TIMEOUT_MS = 20000;
+
+// Try to parse the response body as JSON. If the response is not-OK, throw
+// a "HTTP N" error BEFORE attempting to parse — a 500 with an empty body
+// otherwise produces the confusing "Unexpected end of JSON input" instead
+// of the useful HTTP status. If the body parses to `{ok:false, error}`,
+// honour that too.
+async function parseResponseOrThrow(response) {
+  if (!response.ok) {
+    // Try to read the body for extra context, but don't rely on it being JSON.
+    let extra = "";
+    try {
+      const raw = await response.text();
+      if (raw) extra = ": " + raw.slice(0, 200);
+    } catch { /* ignore */ }
+    throw new Error(response.status === 401 ? AUTH_REQUIRED_MESSAGE : `HTTP ${response.status}${extra}`);
+  }
+  const text = await response.text();
+  if (!text) throw new Error("empty response body");
+  let payload;
+  try { payload = JSON.parse(text); } catch (err) {
+    throw new Error(`invalid JSON response: ${err.message}`);
+  }
+  if (payload && payload.ok === false) {
+    throw new Error(payload.error || "backend returned ok:false");
+  }
+  return payload;
+}
+
+function fetchWithTimeout(url, init, timeoutMs) {
+  const ms = typeof timeoutMs === "number" ? timeoutMs : ROUTER_FETCH_TIMEOUT_MS;
+  const opts = init ? { ...init } : {};
+  // Respect a caller-provided signal by racing; otherwise create our own.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  if (opts.signal) {
+    const outer = opts.signal;
+    if (outer.aborted) controller.abort();
+    else outer.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+  opts.signal = controller.signal;
+  return fetch(url, opts).finally(() => clearTimeout(timer));
+}
 const LANGUAGE_KEY = "xkeen-manager-lang-v1";
 const STATE_URL = "./api/routing.cgi?kind=state";
 const OUTBOUNDS_URL = "./api/routing.cgi?kind=outbounds";
@@ -87,6 +136,84 @@ const LOCALES = {
     profileCopySuffix: " \u043a\u043e\u043f\u0438\u044f",
     saveApplyDone: "\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043e \u0438 \u043f\u0440\u0438\u043c\u0435\u043d\u0435\u043d\u043e",
     saveStateDone: "\u041f\u0440\u043e\u0444\u0438\u043b\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d",
+    // Subscription form / list / actions
+    subUrlEmpty: "URL \u043d\u0435 \u0437\u0430\u043f\u043e\u043b\u043d\u0435\u043d",
+    subUrlNeedHttps: "URL \u0434\u043e\u043b\u0436\u0435\u043d \u043d\u0430\u0447\u0438\u043d\u0430\u0442\u044c\u0441\u044f \u0441 https://",
+    subRefreshingFmt: "\u041e\u0431\u043d\u043e\u0432\u043b\u044f\u044e \u00ab{name}\u00bb\u2026",
+    subEmpty: "\u043f\u043e\u0434\u043f\u0438\u0441\u043a\u0430 \u043f\u0443\u0441\u0442\u0430",
+    subCancelled: "\u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 \u043e\u0442\u043c\u0435\u043d\u0435\u043d\u043e (\u043f\u043e\u0434\u043f\u0438\u0441\u043a\u0430 \u0441\u043d\u044f\u0442\u0430)",
+    noSubscriptions: "\u041d\u0435\u0442 \u043f\u043e\u0434\u043f\u0438\u0441\u043e\u043a",
+    noManualKeys: "\u041d\u0435\u0442 \u0440\u0443\u0447\u043d\u044b\u0445 \u043a\u043b\u044e\u0447\u0435\u0439",
+    confirmDeleteKey: "\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u044d\u0442\u043e\u0442 \u043a\u043b\u044e\u0447?",
+    confirmDeleteSubFmt: "\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u043f\u043e\u0434\u043f\u0438\u0441\u043a\u0443 \u00ab{name}\u00bb \u0438 \u0432\u0441\u0435 \u0435\u0451 \u043a\u043b\u044e\u0447\u0438?",
+    subRevealHint: "\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c URL \u2014 \u043a\u043d\u043e\u043f\u043a\u0430 \ud83d\udc41",
+    // UX helpers
+    panelCollapseAria: "\u0421\u0432\u0435\u0440\u043d\u0443\u0442\u044c/\u0440\u0430\u0437\u0432\u0435\u0440\u043d\u0443\u0442\u044c",
+    cidrPlaceholder: "# 0.0.0.0/0 \u2014 \u0432\u0435\u0441\u044c IPv4 (\u043f\u043e\u043b\u043d\u043e\u0435 \u043f\u043e\u043a\u0440\u044b\u0442\u0438\u0435)",
+    // Exit-IP
+    exitDirect: "\u043f\u0440\u044f\u043c\u043e\u0439 ({ip}) \u2014 \u0434\u043e\u0431\u0430\u0432\u044c api.ipify.org \u0432 VPN-\u0433\u0440\u0443\u043f\u043f\u0443",
+    exitError: "\u043e\u0448\u0438\u0431\u043a\u0430",
+    exitVpnPrefix: "VPN:",
+    // Persist
+    persistQuotaError: "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c state \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435 ({name}). \u042d\u043a\u0441\u043f\u043e\u0440\u0442\u0438\u0440\u0443\u0439 state \u0438 \u043e\u0447\u0438\u0441\u0442\u0438 \u0441\u0442\u0430\u0440\u044b\u0435 \u0431\u044d\u043a\u0430\u043f\u044b.",
+    // Save & apply stepwise error
+    saveApplyFailedStepFmt: "{msg} \u043d\u0430 \u0448\u0430\u0433\u0435 {step}: {err}",
+    // Multi-key panel (HTML + JS)
+    proxyPanelTitle: "\u041f\u043e\u0434\u043f\u0438\u0441\u043a\u0438 \u0438 \u043a\u043b\u044e\u0447\u0438",
+    subsHeading: "\u041f\u043e\u0434\u043f\u0438\u0441\u043a\u0438",
+    manualKeysHeading: "\u0420\u0443\u0447\u043d\u044b\u0435 \u043a\u043b\u044e\u0447\u0438",
+    activeKeyHeading: "\u0410\u043a\u0442\u0438\u0432\u043d\u044b\u0439 \u043a\u043b\u044e\u0447",
+    addManualKeyBtn: "+ \u0420\u0443\u0447\u043d\u043e\u0439 \u043a\u043b\u044e\u0447",
+    addSubscriptionBtn: "+ \u041f\u043e\u0434\u043f\u0438\u0441\u043a\u0430",
+    probeActiveBtn: "\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0430\u043a\u0442\u0438\u0432\u043d\u044b\u0439",
+    manualKeyFormTitleNew: "\u041d\u043e\u0432\u044b\u0439 \u043a\u043b\u044e\u0447",
+    manualKeyFormTitleEdit: "\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u043a\u043b\u044e\u0447",
+    parseUriBtn: "\u0420\u0430\u0441\u043f\u0430\u0440\u0441\u0438\u0442\u044c URI \u0432 \u043f\u043e\u043b\u044f",
+    keyNameLabel: "\u0418\u043c\u044f \u043a\u043b\u044e\u0447\u0430",
+    keyNamePlaceholder: "My VPN",
+    advancedFieldsSummary: "\u0420\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u043d\u044b\u0435 \u043f\u043e\u043b\u044f (\u0437\u0430\u043f\u043e\u043b\u043d\u044f\u044e\u0442\u0441\u044f \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438)",
+    saveBtn: "\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c",
+    cancelBtn: "\u041e\u0442\u043c\u0435\u043d\u0430",
+    newSubTitle: "\u041d\u043e\u0432\u0430\u044f \u043f\u043e\u0434\u043f\u0438\u0441\u043a\u0430",
+    subNameLabel: "\u0418\u043c\u044f",
+    subNamePlaceholder: "My subscription",
+    subUrlLabel: "URL (\u0442\u043e\u043b\u044c\u043a\u043e https://)",
+    saveSubscriptionBtn: "\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0438 \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c",
+    // Cards / status
+    manualKeySrc: "\u0440\u0443\u0447\u043d\u043e\u0439",
+    keyEditBtn: "\u0418\u0437\u043c.",
+    urlHideTitle: "\u0421\u043a\u0440\u044b\u0442\u044c URL",
+    urlShowTitle: "\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c URL",
+    urlCopyTitle: "\u0421\u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u0442\u044c URL",
+    subCopiedFmt: "URL \u00ab{name}\u00bb \u0441\u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u043d",
+    subCopyManual: "\u0421\u043a\u043e\u043f\u0438\u0440\u0443\u0439 URL \u0432\u0440\u0443\u0447\u043d\u0443\u044e:",
+    subNoConfigs: "\u041f\u043e\u0434\u043f\u0438\u0441\u043a\u0430 \u043d\u0435 \u0441\u043e\u0434\u0435\u0440\u0436\u0438\u0442 \u0440\u0430\u0441\u043f\u043e\u0437\u043d\u0430\u043d\u043d\u044b\u0445 \u043a\u043b\u044e\u0447\u0435\u0439",
+    subLoading: "\u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044e\u2026",
+    subLoadedFmt: "\u0417\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u043e {n} \u043a\u043b\u044e\u0447(\u0435\u0439){errPart}",
+    subLoadedErrPart: ", \u043e\u0448\u0438\u0431\u043e\u043a: {n}",
+    subKeysNoneAddFirst: "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0434\u043e\u0431\u0430\u0432\u044c \u0445\u043e\u0442\u044f \u0431\u044b \u043e\u0434\u0438\u043d \u043a\u043b\u044e\u0447.",
+    keysPluralForms: { one: "\u043a\u043b\u044e\u0447", few: "\u043a\u043b\u044e\u0447\u0430", many: "\u043a\u043b\u044e\u0447\u0435\u0439", other: "\u043a\u043b\u044e\u0447\u0435\u0439" },
+    subRefreshBtn: "\u21bb \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c",
+    subRefreshAddedFmt: "+{n} \u043d\u043e\u0432\u044b\u0445",
+    subRefreshKeptFmt: "~{n} \u0431\u0435\u0437 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0439",
+    subRefreshRemovedFmt: "\u2212{n} \u0443\u0434\u0430\u043b\u0451\u043d\u043e",
+    subRefreshNoChanges: "\u0431\u0435\u0437 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0439",
+    manualKeyMissingFmt: "\u041d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442: {fields}. \u0417\u0430\u043f\u043e\u043b\u043d\u0438 \u043f\u043e\u043b\u044f \u0438\u043b\u0438 \u0432\u0441\u0442\u0430\u0432\u044c vless:// / vmess:// / hysteria2:// URI.",
+    fieldAddress: "\u0430\u0434\u0440\u0435\u0441",
+    fieldUUID: "UUID",
+    fieldPassword: "\u043f\u0430\u0440\u043e\u043b\u044c",
+    fieldPortRange: "\u043f\u043e\u0440\u0442 (1..65535)",
+    stackSecondsFmt: "{n} \u0441\u0435\u043a",
+    subActiveResetToFmt: " \u00b7 \u0430\u043a\u0442\u0438\u0432\u043d\u044b\u0439 \u0441\u0431\u0440\u043e\u0448\u0435\u043d \u043d\u0430 \u00ab{name}\u00bb",
+    subActiveResetPlain: " \u00b7 \u0430\u043a\u0442\u0438\u0432\u043d\u044b\u0439 \u0441\u0431\u0440\u043e\u0448\u0435\u043d",
+    // last-fetched relative time
+    fetchJustNow: "\u0442\u043e\u043b\u044c\u043a\u043e \u0447\u0442\u043e",
+    fetchMinAgoFmt: "{n} \u043c\u0438\u043d \u043d\u0430\u0437\u0430\u0434",
+    fetchHourAgoFmt: "{n} \u0447 \u043d\u0430\u0437\u0430\u0434",
+    fetchDayAgoFmt: "{n} \u0434 \u043d\u0430\u0437\u0430\u0434",
+    fetchNever: "\u043d\u0435 \u0437\u0430\u0433\u0440\u0443\u0436\u0430\u043b\u0430\u0441\u044c",
+    // login validation
+    loginRequiredFill: "\u0417\u0430\u043f\u043e\u043b\u043d\u0438 \u043b\u043e\u0433\u0438\u043d \u0438 \u043f\u0430\u0440\u043e\u043b\u044c",
     repairDone: "\u0420\u0435\u0441\u0442\u0430\u0440\u0442 \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d",
     importStateTitle: "\u0417\u0430\u0433\u0440\u0443\u0436\u0430\u0435\u0442 state-\u0444\u0430\u0439\u043b \u0441 \u043f\u0440\u043e\u0444\u0438\u043b\u044f\u043c\u0438 \u0438 \u0433\u0440\u0443\u043f\u043f\u0430\u043c\u0438.",
     exportStateTitle: "\u0421\u043a\u0430\u0447\u0438\u0432\u0430\u0435\u0442 state-\u0444\u0430\u0439\u043b \u0441 \u0442\u0435\u043a\u0443\u0449\u0438\u043c\u0438 \u043f\u0440\u043e\u0444\u0438\u043b\u044f\u043c\u0438 \u0438 \u0433\u0440\u0443\u043f\u043f\u0430\u043c\u0438.",
@@ -238,6 +365,81 @@ const LOCALES = {
     profileCopySuffix: " copy",
     saveApplyDone: "Saved and applied",
     saveStateDone: "Profile saved",
+    // Subscription form / list / actions
+    subUrlEmpty: "URL is empty",
+    subUrlNeedHttps: "URL must start with https://",
+    subRefreshingFmt: "Refreshing \"{name}\"…",
+    subEmpty: "subscription is empty",
+    subCancelled: "refresh cancelled (subscription removed)",
+    noSubscriptions: "No subscriptions",
+    noManualKeys: "No manual keys",
+    confirmDeleteKey: "Delete this key?",
+    confirmDeleteSubFmt: "Delete subscription \"{name}\" and all its keys?",
+    subRevealHint: "Reveal URL — button 👁",
+    // UX helpers
+    panelCollapseAria: "Collapse/expand",
+    cidrPlaceholder: "# 0.0.0.0/0 — entire IPv4 (full coverage)",
+    // Exit-IP
+    exitDirect: "direct ({ip}) — add api.ipify.org to a VPN group",
+    exitError: "error",
+    exitVpnPrefix: "VPN:",
+    // Persist
+    persistQuotaError: "Could not save state in browser ({name}). Export state and clean old backups.",
+    // Save & apply stepwise error
+    saveApplyFailedStepFmt: "{msg} at step {step}: {err}",
+    // Multi-key panel
+    proxyPanelTitle: "Subscriptions & keys",
+    subsHeading: "Subscriptions",
+    manualKeysHeading: "Manual keys",
+    activeKeyHeading: "Active key",
+    addManualKeyBtn: "+ Manual key",
+    addSubscriptionBtn: "+ Subscription",
+    probeActiveBtn: "Probe active",
+    manualKeyFormTitleNew: "New key",
+    manualKeyFormTitleEdit: "Edit key",
+    parseUriBtn: "Parse URI into fields",
+    keyNameLabel: "Key name",
+    keyNamePlaceholder: "My VPN",
+    advancedFieldsSummary: "Advanced fields (auto-filled)",
+    saveBtn: "Save",
+    cancelBtn: "Cancel",
+    newSubTitle: "New subscription",
+    subNameLabel: "Name",
+    subNamePlaceholder: "My subscription",
+    subUrlLabel: "URL (https:// only)",
+    saveSubscriptionBtn: "Fetch and save",
+    manualKeySrc: "manual",
+    keyEditBtn: "Edit",
+    urlHideTitle: "Hide URL",
+    urlShowTitle: "Show URL",
+    urlCopyTitle: "Copy URL",
+    subCopiedFmt: "URL \"{name}\" copied",
+    subCopyManual: "Copy the URL manually:",
+    subNoConfigs: "Subscription has no recognisable keys",
+    subLoading: "Loading…",
+    subLoadedFmt: "Loaded {n} key(s){errPart}",
+    subLoadedErrPart: ", errors: {n}",
+    subKeysNoneAddFirst: "Add at least one key first.",
+    keysPluralForms: { one: "key", other: "keys" },
+    subRefreshBtn: "↻ Refresh",
+    subRefreshAddedFmt: "+{n} new",
+    subRefreshKeptFmt: "~{n} unchanged",
+    subRefreshRemovedFmt: "−{n} removed",
+    subRefreshNoChanges: "no changes",
+    manualKeyMissingFmt: "Missing: {fields}. Fill the fields or paste a vless:// / vmess:// / hysteria2:// URI.",
+    fieldAddress: "address",
+    fieldUUID: "UUID",
+    fieldPassword: "password",
+    fieldPortRange: "port (1..65535)",
+    stackSecondsFmt: "{n} sec",
+    subActiveResetToFmt: " · active reset to \"{name}\"",
+    subActiveResetPlain: " · active reset",
+    fetchJustNow: "just now",
+    fetchMinAgoFmt: "{n} min ago",
+    fetchHourAgoFmt: "{n} h ago",
+    fetchDayAgoFmt: "{n} d ago",
+    fetchNever: "never fetched",
+    loginRequiredFill: "Enter both login and password",
     repairDone: "Restart completed",
     importStateTitle: "Load a saved state file with profiles and groups.",
     exportStateTitle: "Download the current state file with profiles and groups.",
@@ -429,6 +631,16 @@ const els = {
   subscriptionFormStatus: document.getElementById("subscriptionFormStatus"),
   saveSubscriptionBtn: document.getElementById("saveSubscriptionBtn"),
   cancelSubscriptionBtn: document.getElementById("cancelSubscriptionBtn"),
+  subsHeading: document.getElementById("subsHeading"),
+  manualKeysHeading: document.getElementById("manualKeysHeading"),
+  activeKeyHeading: document.getElementById("activeKeyHeading"),
+  keyNameLabelSpan: document.getElementById("keyNameLabelSpan"),
+  advancedFieldsSummary: document.getElementById("advancedFieldsSummary"),
+  newSubTitle: document.getElementById("newSubTitle"),
+  subNameLabelSpan: document.getElementById("subNameLabelSpan"),
+  subUrlLabelSpan: document.getElementById("subUrlLabelSpan"),
+  addManualKeyBtn: document.getElementById("addManualKeyBtn"),
+  addSubscriptionBtn: document.getElementById("addSubscriptionBtn"),
   previewKicker: document.getElementById("previewKicker"),
   previewTitle: document.getElementById("previewTitle"),
   groups: document.getElementById("groups"),
@@ -492,7 +704,7 @@ function setupPanelCollapse() {
     btn.setAttribute("aria-expanded", "true");
     header.insertBefore(btn, header.firstChild);
     const saved = localStorage.getItem(`panel-collapsed-${id}`);
-    btn.setAttribute("aria-label", "Свернуть/развернуть");
+    btn.setAttribute("aria-label", T.panelCollapseAria);
     const apply = (collapsed) => {
       panel.classList.toggle("collapsed", collapsed);
       btn.setAttribute("aria-expanded", String(!collapsed));
@@ -549,6 +761,13 @@ function bindTopLevel() {
       AUTH_REQUIRED_MESSAGE = T.authRequiredMessage;
       AUTH_LOGIN_HINT = T.authLoginHint;
       render();
+      // render() re-renders profile/proxies/groups/preview but not the
+      // health and stack-info panels — those pull from the router and
+      // are refreshed on their own cadence. Kick a redraw so the running
+      // /stopped badges, section titles and value labels flip languages
+      // instead of showing yesterday's locale until the next probe.
+      renderHealth().catch(() => {});
+      renderStackInfo().catch(() => {});
     });
   }
 
@@ -556,15 +775,14 @@ function bindTopLevel() {
     const previous = els.authSubmitBtn.textContent;
     els.authSubmitBtn.disabled = true;
     els.authSubmitBtn.textContent = T.authSubmitting;
-    els.authSubmitBtn.textContent = "Вход...";
-    els.authSubmitBtn.textContent = T.authSubmitting;
     setAuthStatus("info", "");
     try {
       await loginToRouter(els.authLogin.value, els.authPassword.value);
       els.authPassword.value = "";
       await bootstrap();
     } catch (error) {
-      showAuthOverlay(error.message || T.invalidLogin);
+      // Only the status-badge — showAuthOverlay would overwrite the
+      // authLead hint with the same error, showing the text twice.
       setAuthStatus("error", error.message || T.invalidLogin);
     } finally {
       els.authSubmitBtn.disabled = false;
@@ -601,6 +819,12 @@ function bindTopLevel() {
     } catch (error) {
       pushDebug(`logout failed: ${error.message}`);
     }
+    // Stop background polling — after logout every CGI call will 401,
+    // and the visibilitychange listener would keep re-triggering it.
+    if (exitIpTimer) { clearInterval(exitIpTimer); exitIpTimer = null; }
+    lastKnownVpnIp = null;
+    EXIT_IP_LOG.length = 0;
+    if (els.exitIpRow) els.exitIpRow.innerHTML = "";
     state = cloneFallback();
     render();
     showAuthOverlay(T.logoutDone);
@@ -637,10 +861,7 @@ function bindTopLevel() {
   });
 
   bindProxyField(els.proxyAddress, "address");
-  bindProxyField(els.proxyPort, "port", (value) => {
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) ? parsed : "";
-  });
+  bindProxyField(els.proxyPort, "port", (value) => sanitizeProxyPort(value));
   bindProxyField(els.proxyUuid, "uuid");
   bindProxyField(els.proxyFlow, "flow");
   bindProxyField(els.proxyPublicKey, "publicKey");
@@ -649,7 +870,10 @@ function bindTopLevel() {
   bindProxyField(els.proxyFingerprint, "fingerprint");
   bindMuxField(els.muxMode, "mode");
   bindMuxField(els.muxUdp443, "xudpProxyUDP443");
-  bindMuxField(els.muxXudpConcurrency, "xudpConcurrency", (value) => clampInt(value, 8, 1, 1024));
+  // Concurrency: validate on `change` (blur / commit), not on every keystroke.
+  // Otherwise clampInt turns "70000" into "1024" mid-typing and the cursor
+  // jumps to the end. Same reason we can't clear the field to retype it.
+  bindMuxField(els.muxXudpConcurrency, "xudpConcurrency", (value) => clampInt(value, 8, 1, 1024), "change");
 
   els.importProxyBtn.addEventListener("click", () => {
     const raw = (els.proxyImportUrl.value || "").trim();
@@ -665,44 +889,60 @@ function bindTopLevel() {
 
     if (parsed) {
       if (!parsed.ok) {
-        setProbeStatus("error", `Ошибка импорта: ${parsed.error}`);
+        setProbeStatus("error", `${T.importError || "Import error"}: ${parsed.error}`);
         return;
       }
-      const newProxy = {
-        id: `proxy-${newId()}`,
-        name: (els.manualKeyName?.value || "").trim() || parsed.config.name || parsed.config.address,
-        source: "manual",
-        config: parsed.config
-      };
+      const name = (els.manualKeyName?.value || "").trim() || parsed.config.name || parsed.config.address;
       profile.proxies = profile.proxies || [];
-      profile.proxies.push(newProxy);
-      if (!profile.activeProxyId) profile.activeProxyId = newProxy.id;
+      if (editingProxyId) {
+        // Edit-mode: patch the existing key instead of pushing a duplicate.
+        // Symmetric with the vless flow below (which fills form fields
+        // that saveManualKey then commits to the existing entry).
+        const existing = profile.proxies.find((p) => p.id === editingProxyId);
+        if (existing) {
+          existing.name = name;
+          existing.config = parsed.config;
+        }
+      } else {
+        const newProxy = {
+          id: `proxy-${newId()}`,
+          name,
+          source: "manual",
+          config: parsed.config
+        };
+        profile.proxies.push(newProxy);
+        if (!profile.activeProxyId) profile.activeProxyId = newProxy.id;
+      }
+      // Import committed the buffer — don't let closeManualKeyForm revert.
+      manualKeyFormSnapshot = null;
       closeManualKeyForm();
       persistState();
       renderProxiesPanel(profile);
       return;
     }
 
-    // Legacy vless flow: populate the form fields so the user can review.
-    try {
-      const fromForm = parseVlessUrl(raw);
-      profile.proxyConfig = {
-        ...normalizeProxyConfig(profile.proxyConfig),
-        ...fromForm
-      };
-      persistState();
-      renderProxyConfig(profile);
-      queueMicrotask(() => setProbeStatus("success", T.loginImported));
-      setProbeStatus("success", "VLESS URL импортирован");
-    } catch (error) {
-      setProbeStatus("error", `Ошибка импорта: ${error.message}`);
+    // Vless URL that didn't hit the multi-key path above: use the same
+    // wider parser (parseVlessUri) so vless-tls / vless-none also work
+    // from the manual form, not only through subscription.
+    const vlessParsed = parseVlessUri(raw);
+    if (!vlessParsed.ok) {
+      setProbeStatus("error", `${T.importError || "Ошибка импорта"}: ${vlessParsed.error}`);
+      return;
     }
+    profile.proxyConfig = {
+      ...normalizeProxyConfig(profile.proxyConfig),
+      ...vlessParsed.config
+    };
+    persistState();
+    renderProxyConfig(profile);
+    setProbeStatus("success", T.loginImported);
   });
 
   els.probeProxyBtn.addEventListener("click", async () => {
     const profile = getActiveProfile();
     if (!profile) return;
     const config = getActiveProxyConfig(profile);
+    els.probeProxyBtn.disabled = true;
     const toast = showToast(formatMessage(T.toastProbing || "Проверка {addr}:{port}...", { addr: config.address, port: config.port }), { kind: "progress" });
     try {
       const probe = await probeProxy(config);
@@ -714,6 +954,8 @@ function bindTopLevel() {
       }
     } catch (error) {
       toast.update(`${T.probeError}: ${error.message}`, "error");
+    } finally {
+      els.probeProxyBtn.disabled = false;
     }
   });
 
@@ -769,6 +1011,16 @@ function bindTopLevel() {
       const proxyId = row.dataset.proxyId;
       if (proxyId) setActiveProxy(proxyId);
     });
+    // Keyboard nav on the radios (Tab + arrow keys) fires `change` but
+    // not `click`, so without this handler a keyboard-only user could
+    // never switch the active key — the next re-render would reset the
+    // visual selection back to the persisted activeProxyId.
+    els.activeProxyList.addEventListener("change", (event) => {
+      const target = event.target;
+      if (target && target.matches && target.matches('input[type="radio"][name="activeProxy"]')) {
+        setActiveProxy(target.value);
+      }
+    });
   }
 
   els.addGroupBtn.addEventListener("click", () => {
@@ -813,9 +1065,16 @@ function bindTopLevel() {
   });
 
   if (els.refreshHealthBtn) {
-    els.refreshHealthBtn.addEventListener("click", () => {
-      renderHealth().catch(() => {});
-      renderStackInfo().catch(() => {});
+    els.refreshHealthBtn.addEventListener("click", async () => {
+      els.refreshHealthBtn.disabled = true;
+      try {
+        await Promise.all([
+          renderHealth().catch(() => {}),
+          renderStackInfo().catch(() => {})
+        ]);
+      } finally {
+        els.refreshHealthBtn.disabled = false;
+      }
     });
   }
   for (const [btn, svc, label] of [
@@ -831,8 +1090,14 @@ function bindTopLevel() {
       try {
         await restartService(svc);
         toast.update(formatMessage(T.toastSvcRestarted || "{svc} перезапущен", { svc: label }), "success");
-        await renderHealth().catch(() => {});
-        await renderStackInfo().catch(() => {});
+        // Same anti-pattern as saveApply had: awaiting health+stack refresh
+        // in the try keeps the button greyed-out for up to ~40s after the
+        // success toast if either CGI stalls to its timeout. Re-enable now
+        // and refresh the panels fire-and-forget.
+        btn.disabled = false;
+        renderHealth().catch(() => {});
+        renderStackInfo().catch(() => {});
+        return;
       } catch (error) {
         toast.update(formatMessage(T.toastSvcRestartFailed || "Ошибка перезапуска {svc}: {error}", { svc: label, error: error.message }), "error");
       } finally {
@@ -897,8 +1162,10 @@ function bindTopLevel() {
     try {
       await repairRemoteRuntime();
       toast.update(T.repairDone, "success");
-      await renderHealth().catch(() => {});
-      await renderStackInfo().catch(() => {});
+      els.repairRuntimeBtn.disabled = false;
+      renderHealth().catch(() => {});
+      renderStackInfo().catch(() => {});
+      return;
     } catch (error) {
       if (isAuthError(error)) showAuthOverlay(AUTH_LOGIN_HINT);
       toast.update(`${T.repairFailed}: ${error.message}`, "error");
@@ -937,26 +1204,50 @@ function bindTopLevel() {
   els.saveApplyBtn.addEventListener("click", async () => {
     els.saveApplyBtn.disabled = true;
     const toast = showToast(T.toastSavingApplying || "Сохранение и применение...", { kind: "progress" });
+    // Save is a 4-step pipeline. Each step can partially succeed on the
+    // router; if step 3 fails, step 1+2 already committed. Tag the current
+    // step so the user sees WHICH one failed, not a generic "Save failed".
+    let step = "state";
     try {
-      await saveRemoteState();
-      await saveRemoteOutbounds();
-      await saveRemoteSingbox();
-      const routingResponse = await fetch(LIVE_ROUTING_URL, {
+      step = "state";       await saveRemoteState();
+      step = "outbounds";   await saveRemoteOutbounds();
+      step = "sing-box";    await saveRemoteSingbox();
+      step = "routing";
+      // Routing apply is the heaviest CGI call in the pipeline: validate the
+      // whole confdir with `xray -test`, then a graceful xray restart (up to
+      // ~8s waiting for the old PID + ~12s polling :61219 to come back up).
+      // Under a busy apply lock or slow flash it can push past the 20s
+      // default. 45s comfortably covers a real restart while still cutting
+      // in well before uhttpd's own `-t 120` timeout.
+      const routingResponse = await fetchWithTimeout(LIVE_ROUTING_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json; charset=utf-8" },
         body: JSON.stringify(buildRoutingDocument(getActiveProfile()))
-      });
-      const routingPayload = await routingResponse.json();
-      if (!routingResponse.ok || routingPayload.ok === false) {
-        throw new Error(routingResponse.status === 401 ? AUTH_REQUIRED_MESSAGE : (routingPayload.error || `HTTP ${routingResponse.status}`));
-      }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      }, 45000);
+      await parseResponseOrThrow(routingResponse);
+      step = "done";
+      persistState();
+      // Active key / VPN host might have changed by this apply; drop
+      // cached exit-IP so the next tick can re-detect.
+      lastKnownVpnIp = null;
+      EXIT_IP_LOG.length = 0;
       toast.update(T.saveApplyDone, "success");
-      await renderHealth().catch(() => {});
-      await renderStackInfo().catch(() => {});
+      // Re-enable Save & Apply BEFORE health/stack refreshes — otherwise
+      // if both /health and /stack-info stall on their 20s timeouts the
+      // user sits with a greyed-out button for ~40s after the toast
+      // already said success, and thinks the apply is still in flight.
+      els.saveApplyBtn.disabled = false;
+      renderHealth().catch(() => {});
+      renderStackInfo().catch(() => {});
+      return;
     } catch (error) {
       if (isAuthError(error)) showAuthOverlay(AUTH_LOGIN_HINT);
-      toast.update(`${T.saveApplyFailed}: ${error.message}`, "error");
+      const stepLabel = step === "state" ? "state" :
+                        step === "outbounds" ? "outbounds" :
+                        step === "sing-box" ? "sing-box" :
+                        "routing";
+      toast.update(formatMessage(T.saveApplyFailedStepFmt, { msg: T.saveApplyFailed, step: stepLabel, err: error.message }), "error");
+      pushDebug(`saveApply failed at step=${step}: ${error.message}`);
     } finally {
       els.saveApplyBtn.disabled = false;
     }
@@ -964,63 +1255,51 @@ function bindTopLevel() {
 }
 
 async function saveRemoteState() {
-  const stateResponse = await fetch(STATE_URL, {
+  const stateResponse = await fetchWithTimeout(STATE_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json; charset=utf-8"
     },
     body: JSON.stringify(state)
   });
-  const statePayload = await stateResponse.json();
-  if (!stateResponse.ok || statePayload.ok === false) {
-    throw new Error(stateResponse.status === 401 ? AUTH_REQUIRED_MESSAGE : (statePayload.error || `HTTP ${stateResponse.status}`));
-  }
+  await parseResponseOrThrow(stateResponse);
 }
 
 async function saveRemoteOutbounds() {
   const profile = getActiveProfile();
   if (!profile) throw new Error("active profile missing");
-  const outboundsResponse = await fetch(OUTBOUNDS_URL, {
+  const outboundsResponse = await fetchWithTimeout(OUTBOUNDS_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json; charset=utf-8"
     },
     body: JSON.stringify(buildOutboundsDocument(profile))
   });
-  const outboundsPayload = await outboundsResponse.json();
-  if (!outboundsResponse.ok || outboundsPayload.ok === false) {
-    throw new Error(outboundsResponse.status === 401 ? AUTH_REQUIRED_MESSAGE : (outboundsPayload.error || `HTTP ${outboundsResponse.status}`));
-  }
+  await parseResponseOrThrow(outboundsResponse);
 }
 
 async function saveRemoteSingbox() {
   const profile = getActiveProfile();
   if (!profile) throw new Error("active profile missing");
-  const response = await fetch(SINGBOX_URL, {
+  const response = await fetchWithTimeout(SINGBOX_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json; charset=utf-8"
     },
     body: JSON.stringify(buildSingboxDocument(profile))
   });
-  const payload = await response.json();
-  if (!response.ok || payload.ok === false) {
-    throw new Error(response.status === 401 ? AUTH_REQUIRED_MESSAGE : (payload.error || `HTTP ${response.status}`));
-  }
+  await parseResponseOrThrow(response);
 }
 
 async function repairRemoteRuntime() {
-  const response = await fetch(REPAIR_URL, {
+  const response = await fetchWithTimeout(REPAIR_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json; charset=utf-8"
     },
     body: "{}"
   });
-  const payload = await response.json();
-  if (!response.ok || payload.ok === false) {
-    throw new Error(response.status === 401 ? AUTH_REQUIRED_MESSAGE : (payload.error || `HTTP ${response.status}`));
-  }
+  await parseResponseOrThrow(response);
 }
 
 function healthSeverity(status) {
@@ -1175,7 +1454,7 @@ async function checkExitIp() {
   let ip = null;
   let err = null;
   try {
-    const res = await fetch("https://api.ipify.org?format=json", { cache: "no-cache", signal: AbortSignal.timeout(8000) });
+    const res = await fetchWithTimeout("https://api.ipify.org?format=json", { cache: "no-cache" }, 8000);
     const json = await res.json();
     ip = json.ip || null;
   } catch (e) {
@@ -1185,7 +1464,7 @@ async function checkExitIp() {
   // Resolve VPN server IP from stack-info cache if available
   if (!lastKnownVpnIp) {
     try {
-      const si = await fetch(STACK_INFO_URL, { cache: "no-store" }).then(r => r.json());
+      const si = await fetchWithTimeout(STACK_INFO_URL, { cache: "no-store" }, 8000).then(r => r.json());
       lastKnownVpnIp = si?.vpn?.exitIp || null;
     } catch (_) {}
   }
@@ -1208,7 +1487,7 @@ function renderExitIpRow() {
 
   const statusCls = isErr ? "exit-ip-err" : isVpn ? "exit-ip-vpn" : isDirect ? "exit-ip-direct" : "exit-ip-unknown";
   const statusIcon = isErr ? "✗" : isVpn ? "✓" : isDirect ? "!" : "?";
-  const statusText = isErr ? `ошибка: ${latest.err}` : isVpn ? `VPN (${latest.ip})` : isDirect ? `прямой (${latest.ip}) — добавь api.ipify.org в VPN-группу` : (latest.ip || "—");
+  const statusText = isErr ? `${T.exitError}: ${latest.err}` : isVpn ? `${T.exitVpnPrefix.replace(/:$/, "")} (${latest.ip})` : isDirect ? formatMessage(T.exitDirect, { ip: latest.ip }) : (latest.ip || "—");
 
   const logRows = EXIT_IP_LOG.map((e, i) => {
     const cls = e.err ? "exit-log-err" : (lastKnownVpnIp && e.ip === lastKnownVpnIp) ? "exit-log-vpn" : (lastKnownVpnIp && e.ip) ? "exit-log-direct" : "";
@@ -1224,19 +1503,42 @@ function renderExitIpRow() {
         <span class="exit-ip-value">${escapeHtml(statusText)}</span>
         <span class="exit-ip-time">${escapeHtml(latest.ts)}</span>
       </div>
-      ${lastKnownVpnIp ? `<span class="exit-ip-expected">VPN: ${escapeHtml(lastKnownVpnIp)}</span>` : ""}
+      ${lastKnownVpnIp ? `<span class="exit-ip-expected">${escapeHtml(T.exitVpnPrefix)} ${escapeHtml(lastKnownVpnIp)}</span>` : ""}
     </div>
     ${EXIT_IP_LOG.length > 1 ? `<div class="exit-ip-log">${logRows}</div>` : ""}
   `;
 }
 
+let exitIpVisibilityBound = false;
 function startExitIpCheck() {
+  // bootstrap() runs on every fresh load AND every re-login. Without clearing
+  // the previous interval, each re-login adds another checkExitIp() timer —
+  // the request rate grows over time and health-check pressure on the CGI
+  // increases each cycle.
+  if (exitIpTimer) clearInterval(exitIpTimer);
+  // Reset cached VPN exit-IP so a profile switch / re-login doesn't keep
+  // the previous session's IP as "known" and mislabel new checks.
+  lastKnownVpnIp = null;
+  EXIT_IP_LOG.length = 0;
   checkExitIp();
-  exitIpTimer = setInterval(checkExitIp, 60000);
+  exitIpTimer = setInterval(() => {
+    // Skip while the tab is hidden — no point burning a third-party fetch
+    // and a CGI health-check every minute for a panel nobody's looking at.
+    if (document.hidden) return;
+    checkExitIp();
+  }, 60000);
+  // When the user returns to the tab, refresh immediately instead of
+  // waiting up to a minute for the next tick.
+  if (!exitIpVisibilityBound) {
+    exitIpVisibilityBound = true;
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) checkExitIp();
+    });
+  }
 }
 
 async function fetchStackInfo() {
-  const response = await fetch(STACK_INFO_URL, { cache: "no-store" });
+  const response = await fetchWithTimeout(STACK_INFO_URL, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(response.status === 401 ? AUTH_REQUIRED_MESSAGE : `HTTP ${response.status}`);
   }
@@ -1388,7 +1690,7 @@ async function renderStackInfo() {
     {
       title: T.stackRuntimeSection || "Runtime",
       rows: [
-        [T.stackSelfhealInterval || "self-heal интервал", `${rt.selfhealIntervalSec || 0} сек`],
+        [T.stackSelfhealInterval || "self-heal интервал", formatMessage(T.stackSecondsFmt || "{n} sec", { n: rt.selfhealIntervalSec || 0 })],
         [T.stackLogRotate || "ротация логов", T.stackLogRotateValue || "раз в сутки"],
         [T.stackBackupRetention || "хранение бэкапов", formatMessage(T.stackBackupRetentionValue || "{n} последних копий", { n: rt.backupRetention || 0 })],
         [T.stackFdThresh || "FD warn / critical", `${rt.fdWarn || 0} / ${rt.fdCritical || 0}`]
@@ -1441,7 +1743,7 @@ async function renderStackInfo() {
 }
 
 async function fetchHealth() {
-  const response = await fetch(HEALTH_URL, { cache: "no-store" });
+  const response = await fetchWithTimeout(HEALTH_URL, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(response.status === 401 ? AUTH_REQUIRED_MESSAGE : `HTTP ${response.status}`);
   }
@@ -1450,7 +1752,7 @@ async function fetchHealth() {
 
 async function fetchLogs(svc, lines) {
   const url = `${LOGS_URL}&svc=${encodeURIComponent(svc)}&n=${encodeURIComponent(lines)}`;
-  const response = await fetch(url, { cache: "no-store" });
+  const response = await fetchWithTimeout(url, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(response.status === 401 ? AUTH_REQUIRED_MESSAGE : `HTTP ${response.status}`);
   }
@@ -1458,20 +1760,16 @@ async function fetchLogs(svc, lines) {
 }
 
 async function restartService(svc) {
-  const response = await fetch(RESTART_SVC_URL, {
+  const response = await fetchWithTimeout(RESTART_SVC_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json; charset=utf-8" },
     body: JSON.stringify({ svc })
   });
-  const payload = await response.json();
-  if (!response.ok || payload.ok === false) {
-    throw new Error(response.status === 401 ? AUTH_REQUIRED_MESSAGE : (payload.error || `HTTP ${response.status}`));
-  }
-  return payload;
+  return await parseResponseOrThrow(response);
 }
 
 async function probeProxy(config) {
-  const response = await fetch(PROBE_URL, {
+  const response = await fetchWithTimeout(PROBE_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json; charset=utf-8"
@@ -1481,21 +1779,17 @@ async function probeProxy(config) {
       port: Number(config.port)
     })
   });
-  const payload = await response.json();
-  if (!response.ok || payload.ok === false) {
-    throw new Error(response.status === 401 ? AUTH_REQUIRED_MESSAGE : (payload.error || `HTTP ${response.status}`));
-  }
-  return payload;
+  return await parseResponseOrThrow(response);
 }
 
 async function loginToRouter(login, password) {
   const safeLogin = String(login || "").trim();
   const safePassword = String(password || "");
   if (!safeLogin || !safePassword) {
-    throw new Error("Заполни логин и пароль");
+    throw new Error(T.loginRequiredFill || "Enter both login and password");
   }
 
-  const response = await fetch(LOGIN_URL, {
+  const response = await fetchWithTimeout(LOGIN_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json; charset=utf-8"
@@ -1505,28 +1799,18 @@ async function loginToRouter(login, password) {
       passwordB64: encodeBase64Unicode(safePassword)
     })
   });
-
-  const payload = await response.json();
-  if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error || `HTTP ${response.status}`);
-  }
-  return payload;
+  return await parseResponseOrThrow(response);
 }
 
 async function logoutFromRouter() {
-  const response = await fetch(LOGOUT_URL, {
+  const response = await fetchWithTimeout(LOGOUT_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json; charset=utf-8"
     },
     body: "{}"
   });
-
-  const payload = await response.json();
-  if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error || `HTTP ${response.status}`);
-  }
-  return payload;
+  return await parseResponseOrThrow(response);
 }
 
 function render() {
@@ -1560,6 +1844,11 @@ function renderProfiles() {
   }
   els.activeProfile.value = state.activeProfileId || "";
 }
+
+// UI-only state: which group cards the user has expanded. Not persisted
+// in state.json — kept in a module-level Map so add/remove/duplicate a
+// group doesn't collapse all previously-expanded cards.
+const groupExpanded = new Map();
 
 function renderGroups() {
   const profile = getActiveProfile();
@@ -1609,7 +1898,7 @@ function renderGroups() {
           </label>
           <label>
             <span>${escapeHtml(T.cidr)}</span>
-            <textarea class="group-cidrs" rows="9" placeholder="140.82.112.0/20&#10;20.199.39.0/24"></textarea>
+            <textarea class="group-cidrs" rows="9" placeholder="${escapeHtml("140.82.112.0/20\n20.199.39.0/24\n\n" + (T.cidrPlaceholder || "# 0.0.0.0/0 — full IPv4 catch-all"))}"></textarea>
           </label>
         </div>
       </div>
@@ -1625,9 +1914,12 @@ function renderGroups() {
     const cidrsEl = card.querySelector(".group-cidrs");
     const removeBtn = card.querySelector(".remove-group");
 
-    let collapsed = true;
+    // Restore expanded/collapsed state per group id so re-render (from
+    // add/remove/rename group) doesn't collapse everything again.
+    let collapsed = !groupExpanded.get(group.id);
     const setCollapsed = (value) => {
       collapsed = value;
+      groupExpanded.set(group.id, !collapsed);
       card.classList.toggle("collapsed", collapsed);
       bodyEl.hidden = collapsed;
       collapseBtn.textContent = collapsed ? "▸" : "▾";
@@ -1690,10 +1982,12 @@ function renderGroups() {
     });
     removeBtn.addEventListener("click", () => {
       profile.groups = profile.groups.filter((item) => item.id !== group.id);
+      groupExpanded.delete(group.id);
       persistAndRender();
     });
 
-    setCollapsed(true);
+    // Apply the persisted state (default collapsed for a brand-new group).
+    setCollapsed(collapsed);
 
     els.groups.appendChild(card);
   }
@@ -1730,10 +2024,29 @@ function buildRoutingDocument(inputState) {
     inboundTag: ["proxy-relay-ss"],
     outboundTag: "vless-reality"
   });
+  rules.push({
+    type: "field",
+    inboundTag: ["socks-in"],
+    outboundTag: "vless-reality"
+  });
 
   for (const group of inputState.groups.filter((item) => item.enabled && item.outboundTag !== "direct" && item.outboundTag !== "bypass")) {
     const domains = uniq(group.domains);
     const cidrs = uniq(group.cidrs);
+
+    // Catch-all: "0.0.0.0/0" (весь IPv4) или пустая группа означают
+    // "весь трафик через этот outbound". В xray это правило без ip/domain
+    // фильтра. Гарантирует что пустая группа vless-reality не превращается
+    // в тихий no-op.
+    const isCatchAll = cidrs.includes("0.0.0.0/0") || (!domains.length && !cidrs.length);
+    if (isCatchAll) {
+      rules.push({
+        type: "field",
+        inboundTag: inboundTags,
+        outboundTag: group.outboundTag
+      });
+      continue;
+    }
 
     if (domains.length) {
       rules.push({
@@ -1768,52 +2081,6 @@ function buildRoutingDocument(inputState) {
   };
 }
 
-function importFromRouting(doc) {
-  const rules = doc?.routing?.rules || [];
-  const inboundTags = uniq(rules.flatMap((rule) => Array.isArray(rule.inboundTag) ? rule.inboundTag : []));
-  const grouped = new Map();
-  const fallbackRule = rules.find((rule) => rule.outboundTag && !rule.domain && !rule.ip && !rule.network);
-
-  for (const rule of rules) {
-    if (!rule.outboundTag || (!rule.domain && !rule.ip)) continue;
-
-    const tag = rule.outboundTag === "direct" ? "bypass" : rule.outboundTag;
-    const key = `${tag}`;
-    if (!grouped.has(key)) {
-      grouped.set(key, {
-        id: newId(),
-        name: tag === "vless-reality" ? "VPN" : (tag === "bypass" ? T.bypassGroupName : tag),
-        note: T.imported,
-        enabled: true,
-        outboundTag: tag,
-        domains: [],
-        cidrs: []
-      });
-    }
-
-    const target = grouped.get(key);
-    if (Array.isArray(rule.domain)) target.domains.push(...rule.domain);
-    if (Array.isArray(rule.ip)) target.cidrs.push(...rule.ip);
-  }
-
-  const imported = {
-    profileName: T.currentState,
-    domainStrategy: doc?.routing?.domainStrategy || "IPIfNonMatch",
-    fallbackOutbound: fallbackRule?.outboundTag || "direct",
-    groups: Array.from(grouped.values()).map((group) => ({
-      ...group,
-      domains: uniq(group.domains),
-      cidrs: uniq(group.cidrs)
-    }))
-  };
-
-  if (!imported.groups.length) {
-    imported.groups = [createEmptyGroup()];
-  }
-
-  return normalizeState(imported);
-}
-
 function updateGroup(id, patch) {
   const profile = getActiveProfile();
   if (!profile) return;
@@ -1827,8 +2094,24 @@ function persistAndRender() {
   render();
 }
 
+let persistQuotaWarned = false;
 function persistState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    persistQuotaWarned = false;
+  } catch (error) {
+    // QuotaExceededError, SecurityError (Safari private mode), etc. Drop
+    // the write but keep in-memory state alive. Warn once so the user
+    // knows their state is not being persisted — otherwise a tab reload
+    // silently loses everything since last successful save.
+    if (!persistQuotaWarned) {
+      persistQuotaWarned = true;
+      try {
+        showToast(formatMessage(T.persistQuotaError, { name: (error && error.name) || "storage error" }), { kind: "error", ttl: 8000 });
+      } catch { /* toast may not be ready yet */ }
+      pushDebug(`persistState failed: ${error && error.message}`);
+    }
+  }
 }
 
 function loadState() {
@@ -1843,16 +2126,16 @@ function loadState() {
   }
 }
 
-async function loadRemoteState(force = false) {
-  const response = await fetch(STATE_URL, { cache: force ? "reload" : "no-store" });
+async function loadRemoteState() {
+  const response = await fetchWithTimeout(STATE_URL, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(response.status === 401 ? AUTH_REQUIRED_MESSAGE : `state fetch failed: ${response.status}`);
   }
   return normalizeState(parseJsonText(await response.text()));
 }
 
-async function loadRemoteOutbounds(force = false) {
-  const response = await fetch(OUTBOUNDS_URL, { cache: force ? "reload" : "no-store" });
+async function loadRemoteOutbounds() {
+  const response = await fetchWithTimeout(OUTBOUNDS_URL, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(response.status === 401 ? AUTH_REQUIRED_MESSAGE : `outbounds fetch failed: ${response.status}`);
   }
@@ -1864,27 +2147,67 @@ function isAuthError(error) {
   return /\b401\b/.test(message) || message.includes("router ui authorization required") || message.includes(AUTH_REQUIRED_MESSAGE);
 }
 
-function announceAuthRequired() {
-  els.preview.textContent = AUTH_REQUIRED_MESSAGE;
-  els.stats.textContent = AUTH_REQUIRED_MESSAGE;
-  setProbeStatus("error", AUTH_REQUIRED_MESSAGE);
+// Auth-overlay focus trap and Escape handling. Both listeners are scoped
+// to the overlay element itself (not the document) so they can't interfere
+// with future modals that might want their own Escape/Tab behaviour.
+let authKeydownHandler = null;
+
+function _authFocusables() {
+  const card = els.authOverlay && els.authOverlay.querySelector(".auth-card");
+  if (!card) return [];
+  return Array.from(card.querySelectorAll(
+    'input:not([disabled]):not([type="hidden"]), button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  ));
 }
 
 function showAuthOverlay(message = AUTH_LOGIN_HINT) {
   if (!els.authOverlay) return;
   els.authOverlay.hidden = false;
+  els.authOverlay.setAttribute("aria-modal", "true");
+  els.authOverlay.setAttribute("role", "dialog");
+  els.authOverlay.setAttribute("tabindex", "-1");
   els.authLead.textContent = message || AUTH_LOGIN_HINT;
   if (!els.authLogin.value) {
     els.authLogin.value = "admin";
   }
   setAuthStatus("info", "");
   setTimeout(() => els.authLogin.focus(), 0);
+  if (!authKeydownHandler) {
+    authKeydownHandler = (event) => {
+      if (event.key === "Escape") {
+        if (els.authPassword) els.authPassword.value = "";
+        setAuthStatus("info", "");
+        event.preventDefault();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusables = _authFocusables();
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        last.focus();
+        event.preventDefault();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        first.focus();
+        event.preventDefault();
+      }
+    };
+    els.authOverlay.addEventListener("keydown", authKeydownHandler);
+  }
 }
 
 function hideAuthOverlay() {
   if (!els.authOverlay) return;
   els.authOverlay.hidden = true;
+  els.authOverlay.removeAttribute("aria-modal");
+  els.authOverlay.removeAttribute("role");
+  els.authOverlay.removeAttribute("tabindex");
   setAuthStatus("info", "");
+  if (authKeydownHandler) {
+    els.authOverlay.removeEventListener("keydown", authKeydownHandler);
+    authKeydownHandler = null;
+  }
 }
 
 function setAuthStatus(kind, message) {
@@ -1906,14 +2229,41 @@ async function hydrateProxyConfigFromRemote() {
     const remoteConfig = extractProxyConfig(remoteOutbounds);
     const remoteMuxConfig = extractMuxConfig(remoteOutbounds);
     if (!remoteConfig && !remoteMuxConfig) return;
-    for (const profile of state.profiles || []) {
-      const current = normalizeProxyConfig(profile.proxyConfig);
-      if (remoteConfig && isProxyConfigEmpty(current)) {
-        profile.proxyConfig = { ...remoteConfig };
-      }
-      if (remoteMuxConfig && profile.id === state.activeProfileId) {
-        profile.muxConfig = { ...remoteMuxConfig };
-      }
+    // Only touch the active profile. Other profiles may be empty
+    // intentionally (drafts the user is preparing) and copying the same
+    // remote key into all of them destroys that intent — and, if the user
+    // then edits one, propagates the edits' opposite: they think each
+    // profile has its own key while they all still share proxyConfig.
+    const profile = getActiveProfile();
+    if (!profile) return;
+    const current = normalizeProxyConfig(profile.proxyConfig);
+    if (remoteConfig && isProxyConfigEmpty(current)) {
+      profile.proxyConfig = { ...remoteConfig };
+    }
+    // If proxies[] is still empty, promote the remote config as proxy[0]
+    // so the multi-key panel shows *something* (otherwise the UI says
+    // "Add at least one key first" while the router actually has a live
+    // outbound). Idempotent: only when proxies is empty AND remoteConfig
+    // has enough fields (address + uuid/password).
+    const remoteHasAuth = remoteConfig && remoteConfig.address
+      && (remoteConfig.uuid || remoteConfig.password);
+    if (remoteHasAuth && (!profile.proxies || profile.proxies.length === 0)) {
+      profile.proxies = profile.proxies || [];
+      const promoted = {
+        id: `proxy-${newId()}`,
+        name: remoteConfig.address || "Imported key",
+        source: "manual",
+        config: { ...remoteConfig }
+      };
+      profile.proxies.push(promoted);
+      if (!profile.activeProxyId) profile.activeProxyId = promoted.id;
+    }
+    // extractMuxConfig returns a normalised object even for empty input, so
+    // it's always truthy. Only overwrite when the local muxConfig hasn't
+    // been touched — otherwise a bootstrap after remote apply would silently
+    // reset the user's Mux/XUDP choices to the remote default.
+    if (remoteMuxConfig && (!profile.muxConfig || isMuxConfigEmpty(profile.muxConfig))) {
+      profile.muxConfig = { ...remoteMuxConfig };
     }
   } catch (error) {
     pushDebug(`hydrateProxyConfigFromRemote failed: ${error.message}`);
@@ -1922,30 +2272,6 @@ async function hydrateProxyConfigFromRemote() {
 
 function parseJsonText(text) {
   return JSON.parse(String(text).replace(/^\uFEFF/, ""));
-}
-
-function parseVlessUrl(input) {
-  const value = String(input || "").trim();
-  if (!value.startsWith("vless://")) {
-    throw new Error("нужна ссылка вида vless://...");
-  }
-
-  const url = new URL(value);
-  const params = url.searchParams;
-  if ((params.get("security") || "").toLowerCase() !== "reality") {
-    throw new Error("ожидался security=reality");
-  }
-
-  return normalizeProxyConfig({
-    address: url.hostname,
-    port: Number(url.port || 0) || "",
-    uuid: decodeURIComponent(url.username || ""),
-    flow: params.get("flow") || "xtls-rprx-vision",
-    publicKey: params.get("pbk") || "",
-    serverName: params.get("sni") || "",
-    shortId: params.get("sid") || "",
-    fingerprint: params.get("fp") || "random"
-  });
 }
 
 function bindProxyField(element, key, transform = (value) => value) {
@@ -1960,9 +2286,9 @@ function bindProxyField(element, key, transform = (value) => value) {
   });
 }
 
-function bindMuxField(element, key, transform = (value) => value) {
+function bindMuxField(element, key, transform = (value) => value, forcedEvent) {
   if (!element) return;
-  const eventName = element.tagName === "SELECT" ? "change" : "input";
+  const eventName = forcedEvent || (element.tagName === "SELECT" ? "change" : "input");
   element.addEventListener(eventName, () => {
     const profile = getActiveProfile();
     if (!profile) return;
@@ -2034,16 +2360,16 @@ function maskUrl(url) {
 }
 
 function formatLastFetched(ts) {
-  if (!ts) return "не загружалась";
+  if (!ts) return T.fetchNever || "never fetched";
   const diffMs = Date.now() - ts;
   const sec = Math.floor(diffMs / 1000);
-  if (sec < 60) return "только что";
+  if (sec < 60) return T.fetchJustNow || "just now";
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min} мин назад`;
+  if (min < 60) return formatMessage(T.fetchMinAgoFmt || "{n} min ago", { n: min });
   const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr} ч назад`;
+  if (hr < 24) return formatMessage(T.fetchHourAgoFmt || "{n} h ago", { n: hr });
   const days = Math.floor(hr / 24);
-  return `${days} д назад`;
+  return formatMessage(T.fetchDayAgoFmt || "{n} d ago", { n: days });
 }
 
 function securityBadge(config) {
@@ -2052,12 +2378,6 @@ function securityBadge(config) {
   const proto = (config.protocol || "vless").toLowerCase();
   if (proto === "hysteria2") return "hy2+tls+quic";
   return `${proto}+${sec}+${net}`;
-}
-
-// All parsed protocols are now activatable. Kept as a function so future
-// "preview only" transports can opt out without touching every call site.
-function isProxyActivatable(_config) {
-  return true;
 }
 
 function renderProxiesPanel(profile) {
@@ -2078,7 +2398,7 @@ function renderSubscriptionsList(profile) {
     if (hasAnyProxies) return;
     const li = document.createElement("li");
     li.className = "card-empty";
-    li.textContent = "Нет подписок. Жми «+ Подписка» чтобы добавить.";
+    li.textContent = T.noSubscriptions;
     els.subscriptionsList.appendChild(li);
     return;
   }
@@ -2097,17 +2417,17 @@ function renderSubscriptionsList(profile) {
       <div class="card-main">
         <div class="card-title">${escapeHtml(sub.name)}</div>
         <div class="card-meta">
-          <span>${keysCount} ${keysCount === 1 ? "ключ" : keysCount < 5 ? "ключа" : "ключей"}</span>
+          <span>${escapeHtml(pluralize(keysCount, "keysPluralForms"))}</span>
           <span>·</span>
           <span>${formatLastFetched(sub.lastFetched)}</span>
         </div>
-        <div class="card-url${isRevealed ? " revealed" : ""}" title="${escapeHtml(isRevealed ? sub.url : "Показать URL — кнопка 👁")}">${escapeHtml(urlDisplay)}</div>
+        <div class="card-url${isRevealed ? " revealed" : ""}" title="${escapeHtml(isRevealed ? sub.url : T.subRevealHint)}">${escapeHtml(urlDisplay)}</div>
         ${errorBlock}
       </div>
       <div class="card-actions">
-        <button type="button" data-act="reveal-sub" data-id="${sub.id}" title="${isRevealed ? "Скрыть URL" : "Показать URL"}">${isRevealed ? "🙈" : "👁"}</button>
-        <button type="button" data-act="copy-sub" data-id="${sub.id}" title="Скопировать URL">📋</button>
-        <button type="button" data-act="refresh-sub" data-id="${sub.id}"${isBusy ? " disabled" : ""}>${isBusy ? "⏳…" : "↻ Обновить"}</button>
+        <button type="button" data-act="reveal-sub" data-id="${sub.id}" title="${escapeHtml(isRevealed ? (T.urlHideTitle || "Hide URL") : (T.urlShowTitle || "Show URL"))}">${isRevealed ? "🙈" : "👁"}</button>
+        <button type="button" data-act="copy-sub" data-id="${sub.id}" title="${escapeHtml(T.urlCopyTitle || "Copy URL")}">📋</button>
+        <button type="button" data-act="refresh-sub" data-id="${sub.id}"${isBusy ? " disabled" : ""}>${isBusy ? "⏳…" : escapeHtml(T.subRefreshBtn || "↻ Refresh")}</button>
         <button type="button" data-act="delete-sub" data-id="${sub.id}" class="danger">✕</button>
       </div>
     `;
@@ -2148,10 +2468,10 @@ async function copySubUrl(subId) {
   if (!sub) return;
   try {
     await navigator.clipboard.writeText(sub.url);
-    showToast(`URL «${sub.name}» скопирован`, { kind: "success", ttl: 2000 });
+    showToast(formatMessage(T.subCopiedFmt, { name: sub.name }), { kind: "success", ttl: 2000 });
   } catch (err) {
     // Fallback for non-secure contexts: present in a prompt() so user can copy
-    window.prompt("Скопируй URL вручную:", sub.url);
+    window.prompt(T.subCopyManual || "Copy URL manually:", sub.url);
   }
 }
 
@@ -2166,7 +2486,7 @@ function renderManualKeysList(profile) {
     if (hasSubProxies || hasSubs) return;
     const li = document.createElement("li");
     li.className = "card-empty";
-    li.textContent = "Нет ручных ключей. Жми «+ Ручной ключ» чтобы добавить.";
+    li.textContent = T.noManualKeys;
     els.manualKeysList.appendChild(li);
     return;
   }
@@ -2183,7 +2503,7 @@ function renderManualKeysList(profile) {
         </div>
       </div>
       <div class="card-actions">
-        <button type="button" data-act="edit-proxy" data-id="${p.id}">Изм.</button>
+        <button type="button" data-act="edit-proxy" data-id="${p.id}">${escapeHtml(T.keyEditBtn || "Edit")}</button>
         <button type="button" data-act="delete-proxy" data-id="${p.id}" class="danger">✕</button>
       </div>
     `;
@@ -2198,23 +2518,19 @@ function renderActiveProxyList(profile) {
   if (proxies.length === 0) {
     const li = document.createElement("li");
     li.className = "card-empty";
-    li.textContent = "Сначала добавь хотя бы один ключ.";
+    li.textContent = T.subKeysNoneAddFirst || "Add at least one key first.";
     els.activeProxyList.appendChild(li);
     return;
   }
   const activeId = profile.activeProxyId;
   for (const p of proxies) {
     const sub = (profile.subscriptions || []).find((s) => s.id === p.source);
-    const srcLabel = sub ? sub.name : "ручной";
-    const activatable = isProxyActivatable(p.config);
+    const srcLabel = sub ? sub.name : (T.manualKeySrc || "manual");
     const li = document.createElement("li");
-    li.className = "active-row"
-      + (p.id === activeId ? " selected" : "")
-      + (activatable ? "" : " disabled");
+    li.className = "active-row" + (p.id === activeId ? " selected" : "");
     li.dataset.proxyId = p.id;
-    if (!activatable) li.title = "Hysteria2 ещё не интегрирован — Phase B/C";
     li.innerHTML = `
-      <input type="radio" name="activeProxy" value="${p.id}" ${p.id === activeId ? "checked" : ""} class="active-radio-input"${activatable ? "" : " disabled"}>
+      <input type="radio" name="activeProxy" value="${p.id}" ${p.id === activeId ? "checked" : ""} class="active-radio-input">
       <div class="active-info">
         <div class="active-name">${escapeHtml(p.name)}</div>
         <div class="active-meta">
@@ -2237,14 +2553,22 @@ function escapeHtml(s) {
 
 // Form open/close
 
+// Snapshot of profile.proxyConfig taken when the manual-key form opens,
+// so `closeManualKeyForm` can restore it on Cancel — otherwise the form
+// treats `profile.proxyConfig` as its edit buffer and `bindProxyField`
+// persists dirty state to localStorage on every keystroke.
+let manualKeyFormSnapshot = null;
+
 function openManualKeyForm(proxyId = null) {
   editingProxyId = proxyId;
-  els.manualKeyFormTitle.textContent = proxyId ? "Редактировать ключ" : "Новый ключ";
+  els.manualKeyFormTitle.textContent = proxyId ? (T.manualKeyFormTitleEdit || "Edit key") : (T.manualKeyFormTitleNew || "New key");
   els.manualKeyForm.hidden = false;
   els.subscriptionForm.hidden = true;
 
   const profile = getActiveProfile();
   if (!profile) return;
+
+  manualKeyFormSnapshot = profile.proxyConfig ? { ...profile.proxyConfig } : null;
 
   if (proxyId) {
     const p = (profile.proxies || []).find((x) => x.id === proxyId);
@@ -2264,6 +2588,14 @@ function closeManualKeyForm() {
   editingProxyId = null;
   els.manualKeyForm.hidden = true;
   els.proxyImportUrl.value = "";
+  // Restore the pre-edit snapshot so keystrokes into the form don't leak
+  // into localStorage as a "committed" state after Cancel.
+  const profile = getActiveProfile();
+  if (profile && manualKeyFormSnapshot !== null) {
+    profile.proxyConfig = manualKeyFormSnapshot;
+    persistState();
+  }
+  manualKeyFormSnapshot = null;
 }
 
 function openSubscriptionForm() {
@@ -2296,10 +2628,21 @@ function saveManualKey() {
   const profile = getActiveProfile();
   if (!profile) return;
   const config = normalizeProxyConfig(profile.proxyConfig);
-  if (!config.address || !config.uuid) {
-    setProbeStatus("error", "Не хватает адреса или UUID. Заполни поля или вставь vless:// URI.");
+  const proto = (config.protocol || "vless").toLowerCase();
+  const needsSecret = proto === "hysteria2" ? !!config.password : !!config.uuid;
+  const port = sanitizeProxyPort(config.port);
+  if (!config.address || !needsSecret || !port) {
+    const secretLabel = proto === "hysteria2" ? (T.fieldPassword || "password") : (T.fieldUUID || "UUID");
+    const what = !config.address ? (T.fieldAddress || "address")
+               : !needsSecret ? secretLabel
+               : (T.fieldPortRange || "port (1..65535)");
+    setProbeStatus("error", formatMessage(
+      T.manualKeyMissingFmt || "Missing: {fields}. Fill the fields or paste a vless:// / vmess:// / hysteria2:// URI.",
+      { fields: what }
+    ));
     return;
   }
+  config.port = port;
   const name = els.manualKeyName.value.trim() || config.address;
   if (editingProxyId) {
     const existing = profile.proxies.find((p) => p.id === editingProxyId);
@@ -2318,6 +2661,9 @@ function saveManualKey() {
       profile.activeProxyId = profile.proxies[profile.proxies.length - 1].id;
     }
   }
+  // Save committed the buffer, so don't let closeManualKeyForm revert to
+  // the pre-open snapshot.
+  manualKeyFormSnapshot = null;
   closeManualKeyForm();
   persistState();
   renderProxiesPanel(profile);
@@ -2326,7 +2672,7 @@ function saveManualKey() {
 function deleteProxy(proxyId) {
   const profile = getActiveProfile();
   if (!profile) return;
-  if (!confirm("Удалить этот ключ?")) return;
+  if (!confirm(T.confirmDeleteKey)) return;
   profile.proxies = (profile.proxies || []).filter((p) => p.id !== proxyId);
   if (profile.activeProxyId === proxyId) {
     profile.activeProxyId = profile.proxies.length ? profile.proxies[0].id : null;
@@ -2340,21 +2686,16 @@ function setActiveProxy(proxyId) {
   if (!profile) return;
   const proxy = (profile.proxies || []).find((p) => p.id === proxyId);
   if (!proxy) return;
-  if (!isProxyActivatable(proxy.config)) {
-    showToast(
-      "Hysteria2 ещё не интегрирован с sing-box. Парсер работает, выбрать активным пока нельзя.",
-      { variant: "warning", durationMs: 5000 }
-    );
-    renderActiveProxyList(profile); // restore visual selection
-    return;
-  }
+  // Any parsed protocol is activatable now (vless/vmess via xray,
+  // hy2 via sing-box bridge). Kept intentionally simple — bring back
+  // a check + toast when a future transport genuinely can't activate.
   profile.activeProxyId = proxyId;
   persistState();
   renderActiveProxyList(profile);
 }
 
 async function fetchSubscriptionViaBackend(url) {
-  const res = await fetch("/api/routing.cgi?kind=subscription-fetch", {
+  const res = await fetchWithTimeout("/api/routing.cgi?kind=subscription-fetch", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url })
@@ -2380,19 +2721,28 @@ async function saveSubscription() {
   const name = els.newSubscriptionName.value.trim();
   const url = els.newSubscriptionUrl.value.trim();
   if (!url) {
-    setSubscriptionFormStatus("error", "URL не заполнен");
+    setSubscriptionFormStatus("error", T.subUrlEmpty);
     return;
   }
   if (!url.toLowerCase().startsWith("https://")) {
-    setSubscriptionFormStatus("error", "URL должен начинаться с https://");
+    setSubscriptionFormStatus("error", T.subUrlNeedHttps);
     return;
   }
-  setSubscriptionFormStatus("info", "Загружаю…");
+  setSubscriptionFormStatus("info", T.subLoading || "Loading…");
   els.saveSubscriptionBtn.disabled = true;
   try {
     const result = await fetchSubscriptionViaBackend(url);
+    // The fetch may take seconds. If the user switched the active profile
+    // during that window, mutating the stale `profile` reference would
+    // stash this subscription into the wrong profile — silently — because
+    // persistState() writes the whole state and the current UI panel
+    // belongs to a different profile. Bail cleanly.
+    if (getActiveProfile() !== profile) {
+      setSubscriptionFormStatus("info", T.subCancelled || "cancelled — profile switched");
+      return;
+    }
     if (result.configs.length === 0) {
-      setSubscriptionFormStatus("error", "Подписка не содержит распознанных ключей");
+      setSubscriptionFormStatus("error", T.subNoConfigs || "Subscription has no recognisable keys");
       return;
     }
     const subId = `sub-${newId()}`;
@@ -2415,12 +2765,18 @@ async function saveSubscription() {
       });
     }
     if (!profile.activeProxyId && profile.proxies.length) {
-      profile.activeProxyId = profile.proxies.find((p) => p.source === subId).id;
+      // .find could return undefined if all cfgs failed normalisation
+      // — guard so .id doesn't crash the save.
+      const first = profile.proxies.find((p) => p.source === subId);
+      if (first) profile.activeProxyId = first.id;
     }
     closeSubscriptionForm();
     persistState();
     renderProxiesPanel(profile);
-    const msg = `Загружено ${result.configs.length} ключ(ей)` + (result.errors.length ? `, ошибок: ${result.errors.length}` : "");
+    const errPart = result.errors.length
+      ? formatMessage(T.subLoadedErrPart || ", errors: {n}", { n: result.errors.length })
+      : "";
+    const msg = formatMessage(T.subLoadedFmt || "Loaded {n} key(s){errPart}", { n: result.configs.length, errPart });
     setProbeStatus("success", msg);
   } catch (err) {
     setSubscriptionFormStatus("error", String(err.message || err).slice(0, 200));
@@ -2438,7 +2794,7 @@ async function refreshSubscription(subId) {
 
   refreshingSubs.add(subId);
   renderSubscriptionsList(profile); // show spinner state
-  const toast = showToast(`Обновляю «${sub.name}»…`, { kind: "progress" });
+  const toast = showToast(formatMessage(T.subRefreshingFmt, { name: sub.name }), { kind: "progress" });
 
   // Remember if the active proxy was from this sub — if the refresh removes
   // it we report that in the toast instead of silently falling back.
@@ -2452,22 +2808,36 @@ async function refreshSubscription(subId) {
 
   try {
     const result = await fetchSubscriptionViaBackend(sub.url);
+    // If the sub was deleted OR the user switched profiles while we were
+    // fetching, drop the result on the floor — otherwise we mutate an
+    // orphan `sub` and, worse, add new proxies with `source: subId` that
+    // point at a subscription that no longer exists. Those proxies can't
+    // be deleted through the sub-delete flow ever again.
+    const stillActive = getActiveProfile() === profile
+      && (profile.subscriptions || []).some((s) => s.id === subId);
+    if (!stillActive) {
+      toast.update(`«${sub.name}»: ${T.subCancelled}`, "info");
+      return;
+    }
     if (result.configs.length === 0) {
-      sub.lastError = "пустая подписка";
+      sub.lastError = T.subEmpty;
       persistState();
       renderProxiesPanel(profile);
-      toast.update(`«${sub.name}»: подписка пуста`, "error");
+      toast.update(`«${sub.name}»: ${T.subEmpty}`, "error");
       return;
     }
 
-    // Diff by (address:port/uuid) — same key across refreshes means same server.
+    // Diff by (protocol:address:port/uuid|password). Include protocol and
+    // secret so two hy2 keys sharing address:port aren't collapsed into
+    // "kept" — that would silently drop the second key on every refresh.
+    const keyOf = (c) => `${c.protocol || "vless"}:${c.address}:${c.port}/${c.uuid || c.password || ""}`;
     const oldProxies = (profile.proxies || []).filter((p) => p.source === subId);
-    const oldByKey = new Map(oldProxies.map((p) => [p.config.address + ":" + p.config.port + "/" + p.config.uuid, p]));
+    const oldByKey = new Map(oldProxies.map((p) => [keyOf(p.config), p]));
     const newProxies = [];
     const addedNames = [];
     let kept = 0;
     for (const cfg of result.configs) {
-      const key = cfg.address + ":" + cfg.port + "/" + cfg.uuid;
+      const key = keyOf(cfg);
       const existing = oldByKey.get(key);
       if (existing) {
         existing.config = cfg;
@@ -2498,8 +2868,8 @@ async function refreshSubscription(subId) {
       profile.activeProxyId = newProxies[0]?.id || profile.proxies[0]?.id || null;
       const fallbackName = profile.proxies.find((p) => p.id === profile.activeProxyId)?.name;
       activeLostMessage = activeKeyBefore && fallbackName
-        ? ` · активный сброшен на «${fallbackName}»`
-        : " · активный сброшен";
+        ? formatMessage(T.subActiveResetToFmt || " · active reset to {name}", { name: fallbackName })
+        : (T.subActiveResetPlain || " · active reset");
     }
 
     sub.lastFetched = Date.now();
@@ -2507,21 +2877,25 @@ async function refreshSubscription(subId) {
     persistState();
     renderProxiesPanel(profile);
 
-    // Build a compact summary: +N добавлено, ~N без изменений, -N удалено.
     const parts = [];
-    if (addedNames.length) parts.push(`+${addedNames.length} новых`);
-    if (kept) parts.push(`~${kept} без изменений`);
-    if (removedNames.length) parts.push(`−${removedNames.length} удалён${removedNames.length === 1 ? "" : "о"}`);
-    const summary = parts.length ? parts.join(", ") : "без изменений";
+    if (addedNames.length) parts.push(formatMessage(T.subRefreshAddedFmt || "+{n} new", { n: addedNames.length }));
+    if (kept) parts.push(formatMessage(T.subRefreshKeptFmt || "~{n} unchanged", { n: kept }));
+    if (removedNames.length) parts.push(formatMessage(T.subRefreshRemovedFmt || "−{n} removed", { n: removedNames.length }));
+    const summary = parts.length ? parts.join(", ") : (T.subRefreshNoChanges || "no changes");
     toast.update(`«${sub.name}»: ${summary}${activeLostMessage}`, "success");
   } catch (err) {
     sub.lastError = String(err.message || err).slice(0, 200);
     persistState();
-    renderProxiesPanel(profile);
+    // The user may have switched profiles while our fetch was in flight.
+    // If they did, the profile panel currently on screen belongs to a
+    // different profile — rendering profile A's subs into it would visibly
+    // corrupt profile B's UI until the next re-render. Toast still fires
+    // because the user asked for this action and should see the outcome.
+    if (getActiveProfile() === profile) renderProxiesPanel(profile);
     toast.update(`«${sub.name}»: ${sub.lastError}`, "error");
   } finally {
     refreshingSubs.delete(subId);
-    renderSubscriptionsList(profile);
+    if (getActiveProfile() === profile) renderSubscriptionsList(profile);
   }
 }
 
@@ -2530,12 +2904,15 @@ function deleteSubscription(subId) {
   if (!profile) return;
   const sub = (profile.subscriptions || []).find((s) => s.id === subId);
   if (!sub) return;
-  if (!confirm(`Удалить подписку «${sub.name}» и все её ${(profile.proxies || []).filter((p) => p.source === subId).length} ключ(ей)?`)) return;
+  if (!confirm(formatMessage(T.confirmDeleteSubFmt, { name: sub.name }))) return;
   profile.subscriptions = profile.subscriptions.filter((s) => s.id !== subId);
   profile.proxies = (profile.proxies || []).filter((p) => p.source !== subId);
   if (profile.activeProxyId && !profile.proxies.some((p) => p.id === profile.activeProxyId)) {
     profile.activeProxyId = profile.proxies.length ? profile.proxies[0].id : null;
   }
+  revealedSubs.delete(subId);
+  const revealTimer = revealedTimers.get(subId);
+  if (revealTimer) { clearTimeout(revealTimer); revealedTimers.delete(subId); }
   persistState();
   renderProxiesPanel(profile);
 }
@@ -2745,6 +3122,18 @@ function createDefaultMuxConfig() {
   };
 }
 
+// True if muxConfig matches the shipped default — safe to overwrite from
+// remote apply. Used by hydrateProxyConfigFromRemote to avoid clobbering
+// user-tuned Mux/XUDP choices.
+function isMuxConfigEmpty(config) {
+  if (!config || typeof config !== "object") return true;
+  const d = createDefaultMuxConfig();
+  return (config.mode || "off") === d.mode
+    && (config.tcpConcurrency == null || config.tcpConcurrency === d.tcpConcurrency)
+    && (config.xudpConcurrency == null || config.xudpConcurrency === d.xudpConcurrency)
+    && (config.xudpProxyUDP443 || d.xudpProxyUDP443) === d.xudpProxyUDP443;
+}
+
 function normalizeProxyConfig(config) {
   return {
     ...createDefaultProxyConfig(),
@@ -2778,7 +3167,10 @@ function parseVlessUri(uri) {
 
   const atIdx = body.indexOf("@");
   if (atIdx < 0) return { ok: false, error: "missing @ in vless URI" };
-  const uuid = body.slice(0, atIdx);
+  let uuid = body.slice(0, atIdx);
+  // Some providers URL-encode `%` and other special chars in the user-info
+  // portion. Symmetric with the hy2 parser below, which already decodes.
+  try { uuid = decodeURIComponent(uuid); } catch { /* leave raw */ }
   const hostPort = body.slice(atIdx + 1);
   if (!uuid || !hostPort) return { ok: false, error: "empty uuid or host" };
 
@@ -2874,8 +3266,8 @@ function parseVmessUri(uri) {
   }
 
   const port = parseInt(json.port, 10);
-  if (!json.add || !Number.isFinite(port)) {
-    return { ok: false, error: "vmess missing add or port" };
+  if (!json.add || !Number.isFinite(port) || port < 1 || port > 65535) {
+    return { ok: false, error: "vmess missing add or port out of range" };
   }
 
   // vmess "tls" field: "tls" | "reality" | "" | "none"
@@ -3146,10 +3538,17 @@ function clampInt(value, fallback, min, max) {
 }
 
 function isProxyConfigEmpty(config) {
-  return !config.address && !config.port && !config.uuid && !config.publicKey && !config.serverName && !config.shortId;
+  return !config.address && !config.port && !config.uuid && !config.password
+    && !config.publicKey && !config.serverName && !config.shortId;
 }
 
 function normalizeState(input) {
+  // Guard against null / arrays / primitives. Both loadState (localStorage)
+  // and remote fetch can return JSON literals other than a plain object;
+  // reading `.profiles` on null throws and crashes bootstrap.
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    input = {};
+  }
   if (Array.isArray(input.profiles)) {
     const profiles = input.profiles.map(normalizeProfile).filter(Boolean);
     const safeProfiles = profiles.length ? profiles : cloneFallback().profiles;
@@ -3214,14 +3613,37 @@ function cloneProfile(profile) {
   return JSON.parse(JSON.stringify(profile));
 }
 
+// Only allow characters that are safe as HTML attribute values without
+// escaping, and are stable across state.json round-trips. Rejects things
+// like `x"><script>` that would break out of `value="${id}"` templates
+// on import of a malicious state.json.
+function sanitizeId(raw, fallbackPrefix) {
+  const s = String(raw == null ? "" : raw).replace(/[^A-Za-z0-9_-]/g, "");
+  if (s && s.length <= 128) return s;
+  return `${fallbackPrefix}-${newId()}`;
+}
+
+// Coerce a proxy port to a valid integer 1..65535. Anything else (empty,
+// non-numeric, `<img onerror>`, out-of-range) collapses to empty string so
+// the UI can't render attacker-controlled markup around it.
+function sanitizeProxyPort(raw) {
+  if (raw === "" || raw == null) return "";
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return "";
+  const i = Math.trunc(n);
+  if (i < 1 || i > 65535) return "";
+  return i;
+}
+
 function normalizeProxyEntry(entry) {
   if (!entry || typeof entry !== "object") return null;
   const config = normalizeProxyConfig(entry.config);
+  config.port = sanitizeProxyPort(config.port);
   // vless/vmess authenticate by uuid; hysteria2 by password. Accept either.
   const hasAuth = config.uuid || config.password;
-  if (!config.address || !hasAuth) return null;
+  if (!config.address || !hasAuth || !config.port) return null;
   return {
-    id: entry.id || `proxy-${newId()}`,
+    id: sanitizeId(entry.id, "proxy"),
     name: String(entry.name || config.address || "Unnamed"),
     source: entry.source || "manual",
     config
@@ -3233,7 +3655,7 @@ function normalizeSubscriptionEntry(entry) {
   const url = String(entry.url || "").trim();
   if (!url) return null;
   return {
-    id: entry.id || `sub-${newId()}`,
+    id: sanitizeId(entry.id, "sub"),
     name: String(entry.name || url.replace(/^https?:\/\//, "").slice(0, 32)),
     url,
     lastFetched: Number.isFinite(entry.lastFetched) ? entry.lastFetched : null,
@@ -3362,13 +3784,6 @@ function downloadJson(fileName, data) {
   link.download = fileName;
   link.click();
   URL.revokeObjectURL(url);
-}
-
-function escapeHtml(value) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
 }
 
 // True if string looks like a valid domain (one or more labels, dots,
@@ -3511,6 +3926,19 @@ function formatMessage(template, values = {}) {
   return String(template || "").replace(/\{(\w+)\}/g, (_, key) => values[key] ?? "");
 }
 
+// Locale-aware pluralization. `formsKey` names a LOCALES entry like
+// `keysPluralForms` (an object keyed by Intl.PluralRules categories:
+// one/few/many/other for ru, one/other for en). Returns "{n} {form}".
+function pluralize(n, formsKey) {
+  const forms = (T && T[formsKey]) || {};
+  let category = "other";
+  try {
+    category = new Intl.PluralRules(currentLang === "en" ? "en" : "ru").select(n);
+  } catch (_) { /* older engines: keep "other" */ }
+  const form = forms[category] || forms.other || "";
+  return `${n} ${form}`;
+}
+
 function applyTranslations() {
   document.documentElement.lang = currentLang;
   document.title = T.documentTitle;
@@ -3533,7 +3961,25 @@ function applyTranslations() {
   if (els.profileNameLabel) els.profileNameLabel.textContent = T.profileNameLabel;
   if (els.domainStrategyLabel) els.domainStrategyLabel.textContent = T.domainStrategyLabel;
   if (els.fallbackLabel) els.fallbackLabel.textContent = T.fallbackLabel;
-  if (els.proxyTitle) els.proxyTitle.textContent = T.proxyTitle;
+  if (els.proxyTitle) els.proxyTitle.textContent = T.proxyPanelTitle || T.proxyTitle;
+  if (els.subsHeading) els.subsHeading.textContent = T.subsHeading;
+  if (els.manualKeysHeading) els.manualKeysHeading.textContent = T.manualKeysHeading;
+  if (els.activeKeyHeading) els.activeKeyHeading.textContent = T.activeKeyHeading;
+  if (els.addManualKeyBtn) els.addManualKeyBtn.textContent = T.addManualKeyBtn;
+  if (els.addSubscriptionBtn) els.addSubscriptionBtn.textContent = T.addSubscriptionBtn;
+  if (els.probeProxyBtn) els.probeProxyBtn.textContent = T.probeActiveBtn || T.probeProxyBtn;
+  if (els.keyNameLabelSpan) els.keyNameLabelSpan.textContent = T.keyNameLabel;
+  if (els.manualKeyName) els.manualKeyName.placeholder = T.keyNamePlaceholder || "My VPN";
+  if (els.advancedFieldsSummary) els.advancedFieldsSummary.textContent = T.advancedFieldsSummary;
+  if (els.saveManualKeyBtn) els.saveManualKeyBtn.textContent = T.saveBtn;
+  if (els.cancelManualKeyBtn) els.cancelManualKeyBtn.textContent = T.cancelBtn;
+  if (els.newSubTitle) els.newSubTitle.textContent = T.newSubTitle;
+  if (els.subNameLabelSpan) els.subNameLabelSpan.textContent = T.subNameLabel;
+  if (els.newSubscriptionName) els.newSubscriptionName.placeholder = T.subNamePlaceholder;
+  if (els.subUrlLabelSpan) els.subUrlLabelSpan.textContent = T.subUrlLabel;
+  if (els.saveSubscriptionBtn) els.saveSubscriptionBtn.textContent = T.saveSubscriptionBtn;
+  if (els.cancelSubscriptionBtn) els.cancelSubscriptionBtn.textContent = T.cancelBtn;
+  if (els.importProxyBtn) els.importProxyBtn.textContent = T.parseUriBtn || T.importProxyBtn;
   if (els.proxyUrlLabel) els.proxyUrlLabel.textContent = T.proxyUrlLabel;
   if (els.proxyAddressLabel) els.proxyAddressLabel.textContent = T.proxyAddressLabel;
   if (els.proxyPortLabel) els.proxyPortLabel.textContent = T.proxyPortLabel;
@@ -3565,8 +4011,6 @@ function applyTranslations() {
   if (els.duplicateProfileBtn) els.duplicateProfileBtn.textContent = T.duplicateProfileBtn;
   if (els.removeProfileBtn) els.removeProfileBtn.textContent = T.removeProfileBtn;
   if (els.saveStateBtn) els.saveStateBtn.textContent = T.saveStateBtn;
-  if (els.importProxyBtn) els.importProxyBtn.textContent = T.importProxyBtn;
-  if (els.probeProxyBtn) els.probeProxyBtn.textContent = T.probeProxyBtn;
   if (els.addGroupBtn) els.addGroupBtn.textContent = T.addGroupBtn;
 
   if (els.importStateBtn) els.importStateBtn.title = T.importStateTitle;

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AntiGoblin</title>
-  <link rel="stylesheet" href="./styles.css?v=77">
+  <link rel="stylesheet" href="./styles.css?v=87">
 </head>
 <body>
     <div id="authOverlay" class="auth-overlay" hidden>
@@ -131,17 +131,17 @@
             </div>
 
             <section class="key-block">
-              <h4 class="key-block-title">Подписки</h4>
+              <h4 class="key-block-title" id="subsHeading">Подписки</h4>
               <ul id="subscriptionsList" class="cards-list" aria-live="polite"></ul>
             </section>
 
             <section class="key-block">
-              <h4 class="key-block-title">Ручные ключи</h4>
+              <h4 class="key-block-title" id="manualKeysHeading">Ручные ключи</h4>
               <ul id="manualKeysList" class="cards-list" aria-live="polite"></ul>
             </section>
 
             <section class="key-block">
-              <h4 class="key-block-title">Активный ключ</h4>
+              <h4 class="key-block-title" id="activeKeyHeading">Активный ключ</h4>
               <ul id="activeProxyList" class="active-proxy-list" aria-live="polite"></ul>
               <div id="proxyProbeStatus" class="probe-status" hidden></div>
             </section>
@@ -149,18 +149,18 @@
             <div id="manualKeyForm" class="inline-form" hidden>
               <h4 class="key-block-title" id="manualKeyFormTitle">Новый ключ</h4>
               <label>
-                <span id="proxyUrlLabel">vless:// или vmess:// URI</span>
+                <span id="proxyUrlLabel">vless:// / vmess:// / hysteria2:// URI</span>
                 <textarea id="proxyImportUrl" rows="3" placeholder="vless://uuid@host:port?type=tcp&security=reality&pbk=...&fp=random&sni=...&sid=...&spx=%2F&flow=xtls-rprx-vision#name"></textarea>
               </label>
               <div class="form-row">
                 <button id="importProxyBtn" type="button">Распарсить URI в поля</button>
               </div>
               <label>
-                <span>Имя ключа</span>
+                <span id="keyNameLabelSpan">Имя ключа</span>
                 <input id="manualKeyName" type="text" placeholder="My VPN">
               </label>
               <details class="advanced-fields">
-                <summary>Расширенные поля (заполняются автоматически)</summary>
+                <summary id="advancedFieldsSummary">Расширенные поля (заполняются автоматически)</summary>
                 <div class="grid two">
                   <label>
                     <span id="proxyAddressLabel">Сервер</span>
@@ -191,13 +191,13 @@
             </div>
 
             <div id="subscriptionForm" class="inline-form" hidden>
-              <h4 class="key-block-title">Новая подписка</h4>
+              <h4 class="key-block-title" id="newSubTitle">Новая подписка</h4>
               <label>
-                <span>Имя</span>
+                <span id="subNameLabelSpan">Имя</span>
                 <input id="newSubscriptionName" type="text" placeholder="My subscription">
               </label>
               <label>
-                <span>URL (только https://)</span>
+                <span id="subUrlLabelSpan">URL (только https://)</span>
                 <input id="newSubscriptionUrl" type="url" placeholder="https://example.com/sub/token">
               </label>
               <div id="subscriptionFormStatus" class="probe-status" hidden></div>
@@ -316,6 +316,6 @@
     </main>
   </div>
 
-  <script charset="utf-8" src="./app.js?v=77"></script>
+  <script charset="utf-8" src="./app.js?v=87"></script>
 </body>
 </html>

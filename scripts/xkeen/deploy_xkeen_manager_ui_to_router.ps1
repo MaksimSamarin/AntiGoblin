@@ -36,7 +36,12 @@ function Send-RemoteFile {
     [string]$RemotePath
   )
 
-  & $python $sshHelper --host $RouterHost --user $RouterUser upload --local $LocalPath --remote $RemotePath --mode 644
+  $binaryExts = @('.png', '.jpg', '.jpeg', '.gif', '.ico', '.woff', '.woff2', '.zip', '.tar', '.gz')
+  $ext = [System.IO.Path]::GetExtension($LocalPath).ToLower()
+  $extraArgs = @()
+  if ($binaryExts -contains $ext) { $extraArgs += '--binary' }
+
+  & $python $sshHelper --host $RouterHost --user $RouterUser upload --local $LocalPath --remote $RemotePath --mode 644 @extraArgs
   if ($LASTEXITCODE -ne 0) {
     throw "Failed to upload $RemotePath"
   }

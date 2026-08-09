@@ -6,7 +6,7 @@
 
 | Файл | Что это |
 |------|---------|
-| `install.sh` | On-router установщик одной командой. Скачивается через `wget` на роутере, разворачивает весь стек. |
+| `install.sh` | On-router установщик одной командой. Скачивается через `curl` на роутере (дефолтный `wget-nossl` в Entware не поддерживает HTTPS), разворачивает весь стек. |
 | `README.md` | Главная страница проекта, quickstart. |
 | `LICENSE` | MIT. |
 | `.gitignore` | Игнор для `.env`, `snapshots/`, `archive/`, `tmp/`, `.claude/` и т.д. |
@@ -40,7 +40,9 @@ Backend и runtime-сборка. Раскатывается в `/opt/share/xkeen
 | `antigoblin-sysctl.initd.sh` | `/opt/etc/init.d/S20antigoblin-sysctl` | Занижает TCP/conntrack таймауты для роутера. |
 | `antigoblin-selfheal-loop.sh` | `/opt/share/xkeen-manager/api/xkeen-selfheal-loop.sh` | Daemon, гоняет `xkeen-selfheal.sh` каждые 15 секунд. |
 | `antigoblin-selfheal.cron.sh` | `/opt/etc/cron.1min/50-antigoblin-selfheal` | Страховочный слой self-heal раз в минуту. |
-| `antigoblin-remount-hook.sh` | `/opt/etc/ndm/fs.d/50-antigoblin.sh` и `/opt/etc/ndm/usb.d/50-antigoblin.sh` | Восстановление после возврата `/opt` и USB-событий. |
+| `antigoblin-remount-hook.sh` | `/opt/etc/ndm/usb.d/50-antigoblin.sh` | Восстановление после USB-remount / возврата `/opt`. Legacy-копия в `fs.d/` снимается при upgrade. |
+| `antigoblin-netfilter-hook.sh` | `/opt/etc/ndm/netfilter.d/50-antigoblin.sh` | Мгновенное восстановление TPROXY-jump в mangle PREROUTING при NDM-reload netfilter (WAN reconnect, WiFi client join, firewall changes). |
+| `antigoblin-firstboot.sh` | `/opt/etc/init.d/S99antigoblin-firstboot` | One-shot init.d, только для «USB-installer» пути (см. ниже). Внутри USB-tarball, при обычной установке через `curl install.sh` не используется. |
 
 ### Dev-скрипты (только локально на Windows)
 
@@ -55,6 +57,7 @@ Backend и runtime-сборка. Раскатывается в `/opt/share/xkeen
 - `xkeen_backup_state.ps1` — снимок `/opt/etc/xray`, `iptables`, `ip rule` в `snapshots/` (gitignored).
 - `router_ssh.py` — paramiko-обертка для SSH/SCP, используется PowerShell-скриптами.
 - `xkeen_rollback_notes.md` — fast rollback path при аварии.
+- `build-usb-installer.sh` — собирает Keenetic USB installer tarball (Entware + AntiGoblin overlay + sing-box) для «всё-на-флешке» пути. Публикуется как GitHub Release asset через `.github/workflows/release-usb-installer.yml` при пуше тега `v*`, локально можно запускать под Linux/WSL/Git-Bash. См. раздел «Вариант всё-на-флешке» в [README](../README.md).
 
 ## `configs/xkeen/`
 
@@ -109,6 +112,17 @@ UI и state:
 - `/opt/var/log/xray/access.log` и `error.log`
 - `/opt/var/log/sing-box-xkeen.log` (если включен debug)
 - `/opt/var/log/xkeen-manager-uhttpd.log`
+- `/opt/var/log/antigoblin-firstboot.log` (только на USB-installer пути, при первом boot после разворачивания Entware)
+
+## USB installer (для «всё-на-флешке» пути)
+
+- `scripts/xkeen/build-usb-installer.sh` собирает два артефакта в `dist/`: `antigoblin-usb-<arch>.zip` (рекомендуемый — с готовой папкой `install/` внутри, распаковывается в корень флешки) и сырой `<arch>-installer.tar.gz` (для тех, кто предпочитает положить руками). Оба содержат одну и ту же полезную нагрузку:
+  - весь `opt/` из чистого Entware installer нужной архитектуры;
+  - `/opt/sbin/sing-box` — предзагруженный бинарь;
+  - `/opt/share/antigoblin-staged/` — полная копия репы (для offline install);
+  - `/opt/etc/init.d/S99antigoblin-firstboot` — берётся из `scripts/xkeen/antigoblin-firstboot.sh`.
+- `.github/workflows/release-usb-installer.yml` — CI, matrix `aarch64` × `armv7`, публикует артефакты в GitHub Release при пуше тега `v*`.
+- Флаг `/opt/etc/antigoblin.done` — маркер что firstboot уже отработал (защита от повторного запуска). Удалить и перезагрузить роутер, если нужен полный re-provision.
 
 ## Правила на будущее
 

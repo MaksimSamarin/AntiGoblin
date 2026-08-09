@@ -1,0 +1,85 @@
+name: Release USB installer tarballs
+
+# Fires on version tags (`v1.2.3` etc.) and on manual dispatch. Builds one
+# Keenetic USB installer tarball per supported architecture, then attaches
+# them to the corresponding GitHub Release.
+#
+# Manual runs (workflow_dispatch) upload the tarballs as workflow
+# artifacts only — no Release is touched. Handy for testing the pipeline
+# before cutting a real tag.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label baked into the tarball filename (defaults to git describe).'
+        required: false
+        default: ''
+
+permissions:
+  contents: write   # needed to upload assets to the tagged Release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      # `fail-fast: false` — a broken armv7 build must not throw away the
+      # good aarch64 tarball. aarch64 alone covers ~90% of active Keenetic
+      # boxes; shipping only that is better than shipping nothing.
+      fail-fast: false
+      matrix:
+        arch: [aarch64, armv7]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Full history so `git describe --tags` inside the builder returns
+          # the current tag rather than a stray hash.
+          fetch-depth: 0
+
+      - name: Build USB installer for ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          VERSION_ARG=""
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION_ARG="--version ${{ github.event.inputs.version }}"
+          fi
+          ./scripts/xkeen/build-usb-installer.sh --arch ${{ matrix.arch }} $VERSION_ARG
+
+      - name: Show artifact metadata
+        run: ls -lah dist/
+
+      - name: Upload workflow artifact
+        # Always uploads to the workflow run, both for tag builds and
+        # manual runs. Retention is short — the real distribution channel
+        # for tagged builds is the Release below.
+        uses: actions/upload-artifact@v4
+        with:
+          name: antigoblin-usb-${{ matrix.arch }}
+          path: |
+            dist/antigoblin-usb-${{ matrix.arch }}.zip
+            dist/${{ matrix.arch }}-installer.tar.gz
+          retention-days: 14
+
+      - name: Attach to GitHub Release
+        # Only on tag builds. `softprops/action-gh-release@v2` creates the
+        # release if the tag exists but has no release yet, and appends
+        # assets otherwise. We publish two artifacts per arch:
+        #   * antigoblin-usb-<arch>.zip — recommended, contains the whole
+        #     `install/` folder ready to extract onto the USB stick.
+        #   * <arch>-installer.tar.gz  — raw tarball for users who prefer
+        #     to drop it into `install/` by hand.
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/antigoblin-usb-${{ matrix.arch }}.zip
+            dist/${{ matrix.arch }}-installer.tar.gz
+          fail_on_unmatched_files: true
+          # Don't wipe body/notes written by previous matrix legs.
+          append_body: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

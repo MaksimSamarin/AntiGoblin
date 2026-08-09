@@ -11,35 +11,23 @@ if (-not $RouterUser) { $RouterUser = if ($env:ROUTER_SSH_USER) { $env:ROUTER_SS
 if (-not $Port -or $Port -le 0) { $Port = if ($env:ANTIGOBLIN_UI_PORT) { [int]$env:ANTIGOBLIN_UI_PORT } else { 8899 } }
 
 if (-not $env:ROUTER_SSH_PASSWORD) { throw "ROUTER_SSH_PASSWORD is not set. Put it in .env or export it before running." }
-$routerPassword = $env:ROUTER_SSH_PASSWORD
-$sec = ConvertTo-SecureString $routerPassword -AsPlainText -Force
-$cred = New-Object System.Management.Automation.PSCredential($RouterUser, $sec)
+$python = (Get-Command python -ErrorAction Stop).Source
+$sshHelper = Join-Path $PSScriptRoot 'router_ssh.py'
 
-Import-Module Posh-SSH -ErrorAction Stop
+function Invoke-RouterCommand {
+  param([string]$Command)
+  & $python $sshHelper --host $RouterHost --user $RouterUser run --command $Command
+  if ($LASTEXITCODE -ne 0) { throw "Router command failed: $Command" }
+}
 
-$session = New-SSHSession -ComputerName $RouterHost -Credential $cred -AcceptKey -ConnectionTimeout 10
-
-try {
-  $killCommand = @"
+$killCommand = @"
 PID=`$(netstat -lnpt 2>/dev/null | awk '`$4 ~ /:$Port`$/ && `$6 == "LISTEN" { split(`$7, a, "/"); print a[1]; exit }')
 [ -n "`$PID" ] && kill "`$PID" 2>/dev/null || true
 "@
 
-  $commands = @(
-    $killCommand,
-    "killall lighttpd 2>/dev/null || true",
-    "sleep 1",
-    "netstat -lnpt 2>/dev/null | grep ':$Port ' || true"
-  )
+Invoke-RouterCommand -Command $killCommand
+Invoke-RouterCommand -Command "killall lighttpd 2>/dev/null || true"
+Invoke-RouterCommand -Command "sleep 1"
+Invoke-RouterCommand -Command "netstat -lnpt 2>/dev/null | grep ':$Port ' || true"
 
-  foreach ($command in $commands) {
-    $result = Invoke-SSHCommand -SSHSession $session -Command $command -TimeOut 30000
-    if ($result.Output) { $result.Output }
-    if ($result.Error) { Write-Output '--- STDERR ---'; $result.Error }
-  }
-
-  Write-Output "Stopped router-hosted UI on port $Port"
-}
-finally {
-  Remove-SSHSession -SSHSession $session | Out-Null
-}
+Write-Output "Stopped router-hosted UI on port $Port"
