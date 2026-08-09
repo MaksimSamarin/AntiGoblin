@@ -1200,14 +1200,28 @@ case "$REQUEST_METHOD" in
     }
     if validate_confdir; then
       if restart_xray; then
-        # Deliberately NOT calling repair_runtime here. It runs xkeen_repair_hooks
-        # (which rebuilds xkeen_bypass ipset by resolving every domain in state
-        # — 60+ nslookups when the DNS cache is cold) AND a second restart_xray
-        # right after we already restarted. Both together push the apply call
-        # past 60s and the browser's 20s fetch timeout aborts the request while
-        # xray IS getting restarted. The selfheal tick (every 15s) refreshes
-        # the ipset on its own; the small window where bypass-set has yesterday's
-        # domains until the next tick is acceptable.
+        # Rebuild the bypass / udp-route ipsets synchronously here, using
+        # the domains/CIDRs from the just-saved state. The DNS cache
+        # (/tmp/xkeen-dns-cache/) makes this cheap on subsequent applies
+        # — first-run only pays for uncached domain lookups.
+        #
+        # Why not xkeen_repair_hooks (the full runtime rebuild)? Because
+        # it ALSO calls restart_xray a second time. In practice we saw
+        # apply take 60s+ (double restart + cold DNS cache), UI aborts
+        # at its 20s fetch timeout, and xray keeps restarting under it.
+        #
+        # Why not rely purely on the 15s selfheal tick to do this? Because
+        # if selfheal-loop hangs for any reason (we've seen ~9h stalls),
+        # a user who just added a new bypass domain sees traffic still go
+        # through the VPN indefinitely. Doing it inline in apply gives
+        # the correct semantics regardless of selfheal health.
+        if type xkeen_build_bypass_ipset >/dev/null 2>&1; then
+          xkeen_build_bypass_ipset >/dev/null 2>&1 || true
+          xkeen_build_udp_route_ipset >/dev/null 2>&1 || true
+          # Re-apply the UDP-route jump so it matches the fresh ipset —
+          # ipset swap alone doesn't touch iptables. Cheap idempotent op.
+          xkeen_apply_udp_route >/dev/null 2>&1 || true
+        fi
         json_ok "{\"ok\":true,\"backup\":\"$BACKUP\",\"restarted\":true}"
       else
         rollback_routing
