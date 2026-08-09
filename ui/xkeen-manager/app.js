@@ -253,6 +253,7 @@ const LOCALES = {
     healthCheckBypassIpset: "ipset xkeen_bypass существует",
     healthCheckPass: "ок",
     healthCheckFail: "сбой",
+    healthCheckNa: "не нужно",
     healthFetchFailed: "Не удалось загрузить статус",
     restartXrayBtn: "↻ xray",
     restartSingboxBtn: "↻ sing-box",
@@ -479,6 +480,7 @@ const LOCALES = {
     healthCheckBypassIpset: "xkeen_bypass ipset present",
     healthCheckPass: "ok",
     healthCheckFail: "fail",
+    healthCheckNa: "not needed",
     healthFetchFailed: "Failed to load health status",
     restartXrayBtn: "↻ xray",
     restartSingboxBtn: "↻ sing-box",
@@ -1428,17 +1430,30 @@ async function renderHealth() {
 
   els.healthBadges.innerHTML = bannerHtml + badgesHtml + vpnHtml + ctHtml;
 
+  // checks.* is a tri-state string: "ok" | "fail" | "na". Legacy backend
+  // returned booleans (true/false) — normalize them so the UI works
+  // against both old and new backends while a rolling upgrade is in
+  // progress.
+  const normStatus = (v) => {
+    if (v === true) return "ok";
+    if (v === false) return "fail";
+    if (v === "ok" || v === "fail" || v === "na") return v;
+    return "fail";
+  };
   const checkRows = [
-    { label: T.healthCheckTproxy, ok: checks.tproxyRuleAtEnd },
-    { label: T.healthCheckIpRule, ok: checks.ipRuleMasked },
-    { label: T.healthCheckUdpIpset, ok: checks.udpIpsetExists, extra: sizes.udpRoute != null ? `${sizes.udpRoute} ${T.cidrShort}` : null },
-    { label: T.healthCheckBypassIpset, ok: checks.bypassIpsetExists, extra: sizes.bypass != null ? `${sizes.bypass} ${T.cidrShort}` : null }
+    { label: T.healthCheckTproxy, status: normStatus(checks.tproxyRuleAtEnd) },
+    { label: T.healthCheckIpRule, status: normStatus(checks.ipRuleMasked) },
+    { label: T.healthCheckUdpIpset, status: normStatus(checks.udpIpsetExists),
+      extra: sizes.udpRoute != null ? `${sizes.udpRoute} ${T.cidrShort}` : null },
+    { label: T.healthCheckBypassIpset, status: normStatus(checks.bypassIpsetExists),
+      extra: sizes.bypass != null ? `${sizes.bypass} ${T.cidrShort}` : null }
   ];
   els.healthChecks.innerHTML = checkRows.map((row) => {
-    const okClass = row.ok ? "check-ok" : "check-bad";
-    const okText = row.ok ? T.healthCheckPass : T.healthCheckFail;
+    const cls = { ok: "check-ok", fail: "check-bad", na: "check-na" }[row.status];
+    const mark = { ok: "✓", fail: "✗", na: "—" }[row.status];
+    const text = { ok: T.healthCheckPass, fail: T.healthCheckFail, na: T.healthCheckNa || "не требуется" }[row.status];
     const extra = row.extra ? escapeHtml(row.extra) : "";
-    return `<div class="check-row ${okClass}"><span class="check-mark">${row.ok ? "✓" : "✗"}</span><span class="check-label">${escapeHtml(row.label)}</span><span class="check-extra">${extra}</span><span class="check-status">${escapeHtml(okText)}</span></div>`;
+    return `<div class="check-row ${cls}"><span class="check-mark">${mark}</span><span class="check-label">${escapeHtml(row.label)}</span><span class="check-extra">${extra}</span><span class="check-status">${escapeHtml(text)}</span></div>`;
   }).join("");
 }
 

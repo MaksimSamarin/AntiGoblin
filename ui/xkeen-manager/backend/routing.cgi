@@ -320,17 +320,38 @@ emit_health() {
   SB_LISTEN_OK=0
   netstat -lnpu 2>/dev/null | grep -q ':61221 ' && SB_LISTEN_OK=1
 
-  TPROXY_AT_END=0
-  iptables -t mangle -S PREROUTING 2>/dev/null | tail -1 | grep -q 'xkeen_udp_route' && TPROXY_AT_END=1
-  IP_RULE_MASKED=0
-  ip rule show 2>/dev/null | grep -qE 'fwmark 0x111/0x111 (lookup|table) 111' && IP_RULE_MASKED=1
-  UDP_IPSET_OK=0
-  ipset list xkeen_udp_route -terse >/dev/null 2>&1 && UDP_IPSET_OK=1
-  BYPASS_IPSET_OK=0
-  ipset list xkeen_bypass -terse >/dev/null 2>&1 && BYPASS_IPSET_OK=1
+  # UDP route is only required when the active profile has at least one
+  # non-bypass/non-direct group enabled. If not, the ipset, the mangle
+  # jump and the ip rule are DELIBERATELY absent — reporting "fail" for
+  # those in that case is a false positive. Return "na" so the UI can
+  # show a neutral "not needed" badge instead of red.
+  UDP_ROUTE_NEEDED=0
+  if type xkeen_udp_config_enabled >/dev/null 2>&1 && xkeen_udp_config_enabled 2>/dev/null; then
+    UDP_ROUTE_NEEDED=1
+  fi
+
+  UDP_MARK_HEX="${XKEEN_UDP_MARK:-0x111}"
+  UDP_TABLE="${XKEEN_UDP_TABLE:-111}"
+
+  # State strings: "ok" | "fail" | "na". Consumed by the frontend as
+  # tri-state so it can paint "na" grey ("not required") instead of red.
+  if [ "$UDP_ROUTE_NEEDED" = "1" ]; then
+    TPROXY_AT_END="fail"
+    iptables -t mangle -S PREROUTING 2>/dev/null | tail -1 | grep -q 'xkeen_udp_route' && TPROXY_AT_END="ok"
+    IP_RULE_MASKED="fail"
+    ip rule show 2>/dev/null | grep -qE "fwmark ${UDP_MARK_HEX}(/${UDP_MARK_HEX})? (lookup|table) ${UDP_TABLE}" && IP_RULE_MASKED="ok"
+    UDP_IPSET_OK="fail"
+    ipset list xkeen_udp_route -terse >/dev/null 2>&1 && UDP_IPSET_OK="ok"
+  else
+    TPROXY_AT_END="na"
+    IP_RULE_MASKED="na"
+    UDP_IPSET_OK="na"
+  fi
+  BYPASS_IPSET_OK="fail"
+  ipset list xkeen_bypass -terse >/dev/null 2>&1 && BYPASS_IPSET_OK="ok"
 
   UDP_IPSET_SIZE=0
-  if [ "$UDP_IPSET_OK" = "1" ]; then
+  if [ "$UDP_IPSET_OK" = "ok" ]; then
     UDP_IPSET_SIZE="$(ipset list xkeen_udp_route 2>/dev/null | /opt/bin/awk '/^Members:/ { m=1; next } m && NF { c++ } END { print c+0 }')"
   fi
   BYPASS_IPSET_SIZE=0
@@ -432,10 +453,10 @@ emit_health() {
     --argjson sb_listen "$SB_LISTEN_OK" \
     --argjson sh_run "$SH_RUN" \
     --arg sh_pid "${SELFHEAL_PID:-}" \
-    --argjson tproxy_end "$TPROXY_AT_END" \
-    --argjson ip_rule_masked "$IP_RULE_MASKED" \
-    --argjson udp_ipset_ok "$UDP_IPSET_OK" \
-    --argjson bypass_ipset_ok "$BYPASS_IPSET_OK" \
+    --arg tproxy_end "$TPROXY_AT_END" \
+    --arg ip_rule_masked "$IP_RULE_MASKED" \
+    --arg udp_ipset_ok "$UDP_IPSET_OK" \
+    --arg bypass_ipset_ok "$BYPASS_IPSET_OK" \
     --argjson udp_ipset_size "$UDP_IPSET_SIZE" \
     --argjson bypass_ipset_size "$BYPASS_IPSET_SIZE" \
     --argjson xray_fd "$XRAY_FD" \
@@ -457,10 +478,10 @@ emit_health() {
         selfheal:{ running: $sh_run, pid: $sh_pid }
       },
       checks: {
-        tproxyRuleAtEnd: ($tproxy_end == 1),
-        ipRuleMasked:    ($ip_rule_masked == 1),
-        udpIpsetExists:  ($udp_ipset_ok == 1),
-        bypassIpsetExists: ($bypass_ipset_ok == 1)
+        tproxyRuleAtEnd:   $tproxy_end,
+        ipRuleMasked:      $ip_rule_masked,
+        udpIpsetExists:    $udp_ipset_ok,
+        bypassIpsetExists: $bypass_ipset_ok
       },
       ipsetSize: { udpRoute: $udp_ipset_size, bypass: $bypass_ipset_size },
       xrayFd: { count: $xray_fd, limit: $xray_fd_limit },
@@ -1200,15 +1221,49 @@ case "$REQUEST_METHOD" in
     }
     if validate_confdir; then
       if restart_xray; then
-        # Deliberately NOT calling repair_runtime here. It runs xkeen_repair_hooks
-        # (which rebuilds xkeen_bypass ipset by resolving every domain in state
-        # — 60+ nslookups when the DNS cache is cold) AND a second restart_xray
-        # right after we already restarted. Both together push the apply call
-        # past 60s and the browser's 20s fetch timeout aborts the request while
-        # xray IS getting restarted. The selfheal tick (every 15s) refreshes
-        # the ipset on its own; the small window where bypass-set has yesterday's
-        # domains until the next tick is acceptable.
-        json_ok "{\"ok\":true,\"backup\":\"$BACKUP\",\"restarted\":true}"
+        # Rebuild the bypass / udp-route ipsets synchronously here, using
+        # the domains/CIDRs from the just-saved state. The DNS cache
+        # (/tmp/xkeen-dns-cache/) makes this cheap on subsequent applies
+        # — first-run only pays for uncached domain lookups.
+        #
+        # Why not xkeen_repair_hooks (the full runtime rebuild)? Because
+        # it ALSO calls restart_xray a second time. In practice we saw
+        # apply take 60s+ (double restart + cold DNS cache), UI aborts
+        # at its 20s fetch timeout, and xray keeps restarting under it.
+        #
+        # Why not rely purely on the 15s selfheal tick to do this? Because
+        # if selfheal-loop hangs for any reason (we've seen ~9h stalls),
+        # a user who just added a new bypass domain sees traffic still go
+        # through the VPN indefinitely. Doing it inline in apply gives
+        # the correct semantics regardless of selfheal health.
+        # Return "success" to the UI FIRST, then run the ipset rebuild in
+        # a detached child. Rationale: full rebuild for a profile with
+        # many bypass domains + many routed domains can hit 30s+ even with
+        # parallel resolve, and the browser aborts the fetch at its 45s
+        # timeout — the user sees "signal is aborted" although xray IS
+        # restarted and routing.json IS live. Since bypass/udp ipset drift
+        # is self-correcting on the next selfheal tick (15s), giving the
+        # UI the ack up-front and completing the rebuild asynchronously is
+        # strictly better UX. The user can still verify "bypass took
+        # effect" via a follow-up check.
+        (
+          # Detach cleanly so uhttpd doesn't block on our stdio.
+          exec >/dev/null 2>&1 </dev/null
+          if type xkeen_build_bypass_ipset >/dev/null 2>&1; then
+            xkeen_ensure_mark || true
+            xkeen_build_bypass_ipset || true
+            # udp_route rebuild only when the active profile actually needs
+            # UDP routing — skips a ~10-20s scan when the profile has no
+            # VPN groups at all (typical single-bypass-group setups).
+            if xkeen_udp_config_enabled 2>/dev/null; then
+              xkeen_build_udp_route_ipset || true
+              xkeen_apply_udp_route || true
+            else
+              xkeen_cleanup_udp_route 2>/dev/null || true
+            fi
+          fi
+        ) &
+        json_ok "{\"ok\":true,\"backup\":\"$BACKUP\",\"restarted\":true,\"ipsetRebuildAsync\":true}"
       else
         rollback_routing
         json_err "xray restart failed, rollback applied"
