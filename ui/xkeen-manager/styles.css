@@ -552,7 +552,10 @@ button.danger-solid {
 }
 .check-row {
   display: grid;
-  grid-template-columns: 22px 1fr 80px 56px;
+  /* extra and status become auto-width so localized labels ("НЕ НУЖНО",
+     "not needed") don't get clipped or overlap the "N CIDR" counter to
+     their left. gap keeps them visually separated. */
+  grid-template-columns: 22px 1fr auto auto;
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
@@ -562,7 +565,7 @@ button.danger-solid {
   font-size: 13px;
   transition: background 160ms ease, border-color 160ms ease;
 }
-.check-row .check-extra { text-align: right; }
+.check-row .check-extra { text-align: right; white-space: nowrap; }
 .check-row .check-status { text-align: center; justify-self: end; }
 .check-row:hover {
   background: rgba(255, 255, 255, 0.04);
@@ -602,6 +605,7 @@ button.danger-solid {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--line);
+  white-space: nowrap;
 }
 .check-row.check-ok .check-status {
   color: #88d4b3;
@@ -612,6 +616,19 @@ button.danger-solid {
   color: #e89a9a;
   background: rgba(232, 100, 100, 0.10);
   border-color: rgba(232, 100, 100, 0.35);
+}
+/* "not required" state — same neutral grey as the disabled variants used
+   elsewhere in the panel. Signals "this check is currently N/A" without
+   the red alarm colour that check-bad uses. */
+.check-row.check-na .check-mark {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+.check-row.check-na .check-status {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--line);
 }
 .check-row .check-extra {
   color: var(--muted);

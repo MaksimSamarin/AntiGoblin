@@ -399,13 +399,49 @@ xkeen_ipset_has_members() {
 
 xkeen_add_domains_to_set() {
   SET_NAME="$1"
+  # Parallel resolve: fork up to N nslookups at a time. Each child writes
+  # its resolved IPs to a per-child scratch file; after `wait` we ingest
+  # them in one pass. This turns a 40-domain × ~3s serial worst case
+  # (~120s cold DNS cache) into 40/N * 3s (~15s at N=8). Bounded fork
+  # count keeps the router CPU happy — nslookup is IO-bound but not free.
+  #
+  # Cache-safe under concurrency: xkeen_dns_cache_set writes one file per
+  # domain key, and simultaneous resolves of the same domain converge on
+  # the same IP so a last-writer-wins race is benign.
+  MAX_PARALLEL="${XKEEN_RESOLVE_PARALLEL:-8}"
+  BATCH_DIR="/tmp/xkeen-resolve-$$-$(date +%s)"
+  mkdir -p "$BATCH_DIR" 2>/dev/null || {
+    # Fallback to serial if we can't stage — no correctness impact.
+    while IFS= read -r domain; do
+      [ -n "$domain" ] || continue
+      xkeen_resolve_ipv4 "$domain" | while IFS= read -r ip; do
+        [ -n "$ip" ] || continue
+        ipset add "$SET_NAME" "$ip"/32 -exist 2>/dev/null || true
+      done
+    done
+    return
+  }
+
+  N=0
   while IFS= read -r domain; do
     [ -n "$domain" ] || continue
-    xkeen_resolve_ipv4 "$domain" | while IFS= read -r ip; do
-      [ -n "$ip" ] || continue
-      ipset add "$SET_NAME" "$ip"/32 -exist 2>/dev/null || true
-    done
+    (
+      xkeen_resolve_ipv4 "$domain" > "$BATCH_DIR/$N.ips" 2>/dev/null
+    ) &
+    N=$((N + 1))
+    if [ $((N % MAX_PARALLEL)) -eq 0 ]; then
+      wait
+    fi
   done
+  wait
+
+  # Ingest — deduplicate across children so ipset add gets each IP once.
+  cat "$BATCH_DIR"/*.ips 2>/dev/null | sort -u | while IFS= read -r ip; do
+    [ -n "$ip" ] || continue
+    ipset add "$SET_NAME" "$ip"/32 -exist 2>/dev/null || true
+  done
+
+  rm -rf "$BATCH_DIR" 2>/dev/null || true
 }
 
 xkeen_add_cidrs_to_set() {
@@ -471,12 +507,26 @@ xkeen_build_bypass_ipset() {
 xkeen_udp_config_enabled() {
   xkeen_has_cmd jq || return 1
   [ -f "$STATE_PATH" ] || return 1
+  # UDP TPROXY must be active whenever ANY of these routes packets through
+  # the VPN outbound:
+  #   (a) an enabled group in the active profile with outboundTag other
+  #       than "direct"/"bypass" — the classic case;
+  #   (b) fallbackOutbound == "vless-reality" — TCP not matched by a group
+  #       still ends up in the xray REDIRECT path and exits via VPN;
+  #       without a matching UDP TPROXY, Discord voice packets leak via
+  #       WAN direct → server sees two source IPs (TCP-via-VPN,
+  #       UDP-via-WAN) → NAT flap → 5-10s voice reconnect on every
+  #       apply/repair. The bypass chain still exempts local nets and
+  #       user-listed bypass CIDRs before TPROXY, so this doesn't force
+  #       every packet through the tunnel.
   jq -e '
     (.activeProfileId // "") as $id
-    | any(.profiles[]? | select(.id == $id) | .groups[]?;
-        (.enabled != false)
-        and (.outboundTag != "direct")
-        and (.outboundTag != "bypass"))
+    | .profiles[]? | select(.id == $id) as $p
+    | (any($p.groups[]?;
+             (.enabled != false)
+             and (.outboundTag != "direct")
+             and (.outboundTag != "bypass")))
+      or ($p.fallbackOutbound == "vless-reality")
   ' "$STATE_PATH" >/dev/null 2>&1
 }
 
@@ -485,15 +535,38 @@ xkeen_build_udp_route_ipset() {
   ipset destroy "$TMP_SET" 2>/dev/null || true
   ipset create "$TMP_SET" hash:net family inet -exist
 
+  # Catch-all path: when the profile's fallback outbound is vless-reality,
+  # TCP that doesn't match any group ends up going through the VPN. UDP
+  # must follow — otherwise Discord voice (TCP handshake via VPN, UDP via
+  # WAN) trips a NAT flap and drops the call every few seconds. hash:net
+  # rejects 0.0.0.0/0, so split into the two halves. The chain's bypass
+  # RETURN still exempts local nets + user bypass list before TPROXY.
+  IS_CATCHALL=0
+  if xkeen_has_cmd jq && [ -f "$STATE_PATH" ] && jq -e '
+    (.activeProfileId // "") as $id
+    | .profiles[]? | select(.id == $id)
+    | .fallbackOutbound == "vless-reality"
+  ' "$STATE_PATH" >/dev/null 2>&1; then
+    IS_CATCHALL=1
+    ipset add "$TMP_SET" 0.0.0.0/1 -exist 2>/dev/null || true
+    ipset add "$TMP_SET" 128.0.0.0/1 -exist 2>/dev/null || true
+  fi
+
   if xkeen_has_cmd jq && [ -f "$STATE_PATH" ]; then
-    jq -r '
-      (.activeProfileId // "") as $id
-      | .profiles[]?
-      | select(.id == $id)
-      | .groups[]?
-      | select((.enabled != false) and (.outboundTag != "direct") and (.outboundTag != "bypass"))
-      | .domains[]?
-    ' "$STATE_PATH" 2>/dev/null | sed '/^[[:space:]]*$/d' | xkeen_add_domains_to_set "$TMP_SET"
+    # Skip per-domain resolves when we already have catch-all — they're
+    # a subset, and resolving 40+ domains for nothing costs 15-30s on
+    # cold DNS cache. Explicit group domains still get resolved for the
+    # non-catch-all (direct fallback) case.
+    if [ "$IS_CATCHALL" = "0" ]; then
+      jq -r '
+        (.activeProfileId // "") as $id
+        | .profiles[]?
+        | select(.id == $id)
+        | .groups[]?
+        | select((.enabled != false) and (.outboundTag != "direct") and (.outboundTag != "bypass"))
+        | .domains[]?
+      ' "$STATE_PATH" 2>/dev/null | sed '/^[[:space:]]*$/d' | xkeen_add_domains_to_set "$TMP_SET"
+    fi
 
     # Warn (but don't block) when the user adds an RFC1918 CIDR to a
     # routed group. Consequence: entire LAN traffic goes through TPROXY →
