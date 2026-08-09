@@ -114,10 +114,13 @@ mkdir -p "$STAGE"
 log "Unpacking Entware into staging root"
 tar -xzf "$WORK_DIR/entware.tar.gz" -C "$STAGE"
 
-# Sanity: the upstream Entware installer expands under `opt/`. If the
-# structure changes we want a clear failure here, not a cryptic error
-# after our overlay is written.
-[ -d "$STAGE/opt" ] || { echo "Entware tarball does not contain opt/ — mirror layout changed?" >&2; exit 1; }
+# Entware's <arch>-installer.tar.gz ships with paths relative to /opt
+# (bin/, etc/, lib/, sbin/, usr/) — the router-side `npkg` extracts them
+# into /opt directly. Our overlay files must be placed alongside these
+# (bin/, etc/, sbin/, share/) — NOT under an added `opt/` layer, which
+# would extract to /opt/opt/… on the router.
+[ -d "$STAGE/bin" ] && [ -d "$STAGE/etc" ] \
+  || { echo "Entware tarball layout unexpected (no bin/ or etc/ at root) — mirror layout changed?" >&2; exit 1; }
 
 # ---- 2. Fetch and stage sing-box binary ----
 log "Fetching sing-box $SING_BOX_VERSION for candidates: $SB_CANDIDATES"
@@ -140,15 +143,15 @@ tar -xzf "$SB_TARBALL" -C "$SB_EXTRACT"
 SB_BIN="$(find "$SB_EXTRACT" -type f -name sing-box | head -n 1)"
 [ -n "$SB_BIN" ] || { echo "sing-box binary not found inside downloaded tarball" >&2; exit 1; }
 
-mkdir -p "$STAGE/opt/sbin"
-cp "$SB_BIN" "$STAGE/opt/sbin/sing-box"
-chmod 755 "$STAGE/opt/sbin/sing-box"
+mkdir -p "$STAGE/sbin"
+cp "$SB_BIN" "$STAGE/sbin/sing-box"
+chmod 755 "$STAGE/sbin/sing-box"
 
 # ---- 3. Stage AntiGoblin sources ----
 # Copy the whole repository (minus dev/local noise) into
 # /opt/share/antigoblin-staged. firstboot points install.sh at this via
 # ANTIGOBLIN_SRC_DIR, so the layout is exactly what install.sh expects.
-STAGED_REPO="$STAGE/opt/share/antigoblin-staged"
+STAGED_REPO="$STAGE/share/antigoblin-staged"
 mkdir -p "$STAGED_REPO"
 log "Staging AntiGoblin sources into $STAGED_REPO"
 
@@ -171,16 +174,16 @@ printf '%s\n' "$VERSION" > "$STAGED_REPO/VERSION"
 FIRSTBOOT_SRC="$REPO_ROOT/scripts/xkeen/antigoblin-firstboot.sh"
 [ -f "$FIRSTBOOT_SRC" ] || { echo "Missing $FIRSTBOOT_SRC — cannot build USB installer" >&2; exit 1; }
 
-mkdir -p "$STAGE/opt/etc/init.d"
-cp "$FIRSTBOOT_SRC" "$STAGE/opt/etc/init.d/S99antigoblin-firstboot"
-chmod 755 "$STAGE/opt/etc/init.d/S99antigoblin-firstboot"
+mkdir -p "$STAGE/etc/init.d"
+cp "$FIRSTBOOT_SRC" "$STAGE/etc/init.d/S99antigoblin-firstboot"
+chmod 755 "$STAGE/etc/init.d/S99antigoblin-firstboot"
 
 # ---- 5. Optional: bundle .ipk cache for offline install ----
 # We ship an empty cache for MVP. firstboot's install.sh call will `opkg
 # install` online — if the router boots WAN-up (the default), this is
 # unnoticeable. Populating the cache is a future-work item, tracked by
 # `docs/architecture.md` under "USB installer notes".
-mkdir -p "$STAGE/opt/var/opkg-cache"
+mkdir -p "$STAGE/var/opkg-cache"
 
 # ---- 6. Repack the whole stage back into a single installer tarball ----
 # Filename is deliberately identical to a vanilla Entware installer
@@ -188,9 +191,10 @@ mkdir -p "$STAGE/opt/var/opkg-cache"
 # without renaming. Version stamped inside via VERSION file (step 3).
 TAR_OUT="$DIST_DIR/${ARCH}-installer.tar.gz"
 log "Packing final tarball: $TAR_OUT"
-# Change into $STAGE so paths inside the archive start at `opt/…` — that's
-# the format Entware's `npkg` handler expects. Using `--owner=root
-# --group=root` so extraction on the router doesn't preserve build-host
+# Change into $STAGE so paths inside the archive start at `bin/…`,
+# `etc/…`, `share/…` — matching Entware's own installer tarball layout.
+# npkg extracts these directly into /opt on the router. Using
+# `--owner=root --group=root` so extraction doesn't preserve build-host
 # UIDs (would show ugly numeric owners).
 tar --owner=0 --group=0 -czf "$TAR_OUT" -C "$STAGE" .
 

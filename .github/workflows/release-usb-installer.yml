@@ -26,12 +26,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
-      # `fail-fast: false` — a broken armv7 build must not throw away the
-      # good aarch64 tarball. aarch64 alone covers ~90% of active Keenetic
-      # boxes; shipping only that is better than shipping nothing.
+      # aarch64 only for now. armv7sf has no prebuilt <arch>-installer.tar.gz
+      # on bin.entware.net (that repo only ships a generic.sh installer for
+      # armv7), so our build-usb-installer.sh strategy of "grab the vanilla
+      # Entware tarball and overlay" doesn't apply. Aarch64 covers ~90%+ of
+      # active Keenetic hardware; armv7 support will land in a later release
+      # once we adapt the builder to run generic.sh instead of downloading
+      # a static tarball.
       fail-fast: false
       matrix:
-        arch: [aarch64, armv7]
+        arch: [aarch64]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
