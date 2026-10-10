@@ -6,6 +6,11 @@ const STORAGE_KEY = "xkeen-manager-state-v7";
 // never resolves. Wraps fetch with AbortController — polyfills the
 // browsers that don't support AbortSignal.timeout yet.
 const ROUTER_FETCH_TIMEOUT_MS = 20000;
+// GeoIP/GeoSite expansion parses ~27 MB of protobuf data in QuickJS before
+// validating and replacing sing-box config. A real Giga takes ~23 seconds for
+// a medium rule set, so the generic 20-second request limit is too short.
+// Stay below uhttpd's 120-second CGI timeout while leaving room for slow flash.
+const SINGBOX_APPLY_TIMEOUT_MS = 90000;
 
 // Try to parse the response body as JSON. If the response is not-OK, throw
 // a "HTTP N" error BEFORE attempting to parse — a 500 with an empty body
@@ -39,14 +44,21 @@ function fetchWithTimeout(url, init, timeoutMs) {
   const opts = init ? { ...init } : {};
   // Respect a caller-provided signal by racing; otherwise create our own.
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, ms);
   if (opts.signal) {
     const outer = opts.signal;
     if (outer.aborted) controller.abort();
     else outer.addEventListener("abort", () => controller.abort(), { once: true });
   }
   opts.signal = controller.signal;
-  return fetch(url, opts).finally(() => clearTimeout(timer));
+  return fetch(url, opts).catch((error) => {
+    if (timedOut) throw new Error(`request timed out after ${Math.ceil(ms / 1000)}s`);
+    throw error;
+  }).finally(() => clearTimeout(timer));
 }
 const LANGUAGE_KEY = "xkeen-manager-lang-v1";
 const STATE_URL = "./api/routing.cgi?kind=state";
@@ -1344,7 +1356,7 @@ async function saveRemoteSingbox() {
       "Content-Type": "application/json; charset=utf-8"
     },
     body: JSON.stringify(buildSingboxDocument(profile))
-  });
+  }, SINGBOX_APPLY_TIMEOUT_MS);
   await parseResponseOrThrow(response);
 }
 
