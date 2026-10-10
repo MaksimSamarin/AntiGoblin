@@ -163,10 +163,10 @@ install_packages() {
   opkg_run update || log "WARN: opkg update failed; trying package installs with the current index"
 
   # Essentials — the stack literally can't run without them; fail hard.
-  # Optionals — nice-to-have (rich netstat, coreutils base64, standalone
-  # curl/wget for user shell); warn and continue.
-  ESSENTIAL_PKGS="xray uhttpd_kn iptables ipset conntrack jq gawk ca-bundle"
-  OPTIONAL_PKGS="cron curl wget tar gzip coreutils-base64 coreutils-timeout net-tools-netstat"
+  # Optionals — nice-to-have (rich netstat, timeout and user-shell tools);
+  # warn and continue.
+  ESSENTIAL_PKGS="xray uhttpd_kn iptables ipset conntrack jq gawk ca-bundle quickjs curl coreutils-base64"
+  OPTIONAL_PKGS="cron wget tar gzip coreutils-timeout net-tools-netstat"
 
   MISSING_ESSENTIAL=""
   for pkg in $ESSENTIAL_PKGS; do
@@ -404,9 +404,14 @@ deploy_sources() {
   deploy_file "$BACKEND/routing.cgi"      /opt/share/xkeen-manager/api/routing.cgi
   deploy_file "$BACKEND/xkeen-selfheal.sh" /opt/share/xkeen-manager/api/xkeen-selfheal.sh
   deploy_file "$BACKEND/xkeen-runtime.sh"  /opt/share/xkeen-manager/api/xkeen-runtime.sh
+  deploy_file "$BACKEND/geodata.js" /opt/share/xkeen-manager/api/geodata.js 644
+  deploy_file "$BACKEND/subscription-refresh.js" /opt/share/xkeen-manager/api/subscription-refresh.js 644
+  deploy_file "$BACKEND/subscription-candidate.js" /opt/share/xkeen-manager/api/subscription-candidate.js 644
 
   log "Deploying init and watchdog scripts"
   deploy_file "$SCRIPTS/antigoblin-selfheal-loop.sh" /opt/share/xkeen-manager/api/xkeen-selfheal-loop.sh
+  deploy_file "$SCRIPTS/antigoblin-geodata.sh" /opt/share/xkeen-manager/api/antigoblin-geodata.sh
+  deploy_file "$SCRIPTS/antigoblin-subscription-refresh.sh" /opt/share/xkeen-manager/api/antigoblin-subscription-refresh.sh
   deploy_file "$SCRIPTS/antigoblin-sysctl.initd.sh"  /opt/etc/init.d/S20antigoblin-sysctl
   deploy_file "$SCRIPTS/antigoblin-singbox.initd.sh" /opt/etc/init.d/S24antigoblin-singbox
   deploy_file "$SCRIPTS/antigoblin-selfheal.initd.sh" /opt/etc/init.d/S25antigoblin-selfheal

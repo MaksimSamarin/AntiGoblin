@@ -6,7 +6,15 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
+cleanup() {
+  for _ in 1 2 3 4 5; do
+    rm -rf "$tmpdir" 2>/dev/null || true
+    [ ! -e "$tmpdir" ] && return 0
+    sleep 1
+  done
+  return 0
+}
+trap cleanup EXIT
 
 opt="$tmpdir/opt"
 mkdir -p "$opt/etc/init.d" "$opt/share/antigoblin-staged/ui/xkeen-manager" "$tmpdir/bin"
@@ -39,16 +47,16 @@ for command in opkg busybox; do
   chmod 755 "$opt/bin/$command"
 done
 
-for _ in $(seq 1 8); do
-  [ -f "$marker" ] && break
+for _ in $(seq 1 30); do
+  if [ -f "$marker" ] \
+      && [ -f "$opt/etc/antigoblin.done" ] \
+      && [ ! -e "$opt/etc/init.d/S99antigoblin-firstboot.sh" ]; then
+    break
+  fi
   sleep 1
 done
 
 test -f "$marker"
 test -f "$opt/etc/antigoblin.done"
-for _ in $(seq 1 3); do
-  [ ! -e "$opt/etc/init.d/S99antigoblin-firstboot.sh" ] && break
-  sleep 1
-done
 test ! -e "$opt/etc/init.d/S99antigoblin-firstboot.sh"
 echo "PASS: firstboot waits for Entware and completes without reboot"

@@ -25,9 +25,10 @@
 Текущая живая модель runtime:
 
 - любая UI-группа с outbound `vless-reality` гонит и `TCP`, и `UDP` через VPN — отдельных флагов для UDP нет;
-- группы с outbound `bypass` обходят `xray` полностью через `RETURN`;
+- обычные домены/CIDR групп `bypass` обходят `xray` через `RETURN`; Geo-правила получают эквивалентный `direct` внутри Xray/sing-box;
 - группы с outbound `direct` входят в `xray`, но уходят напрямую без VPN;
 - общий `UDP` устройств вне VPN-групп идёт напрямую;
+- группы принимают `geosite:<категория>` и `geoip:<категория>`; Geo-правила одинаково применяются к TCP и UDP;
 - локалка и discovery обходят `xray` через `RETURN`;
 - дополнительно на LAN-IP роутера поднят **SOCKS5-inbound (порт 61080, TCP+UDP)** — для точечного per-process туннеля с PC ([подробнее](#точечный-туннель-для-приложений-с-pc-socks5-inbound)).
 
@@ -53,8 +54,9 @@
 
 - по HTTPS-only, с лимитом ответа 256KB и таймаутом 10 секунд;
 - хранит URL подписки в `xkeen-ui-state.json` (root-only на роутере);
-- обновляется по кнопке ↻ в UI (auto-refresh пока не реализован);
+- обновляется по кнопке ↻ в UI или автоматически каждые 6 часов, если у подписки включена отдельная галка;
 - при refresh добавляет новые ключи, помечает удалённые, оставляет неизменные на месте; активный ключ сохраняется, если он всё ещё в подписке.
+- отдельная галка авто-переключения выбирает другой ключ из той же подписки, если активный ключ исчез у провайдера или перестал пропускать трафик. Кандидат сначала запускается изолированно и проверяется реальным HTTPS-запросом через SOCKS; при отсутствии рабочего кандидата сохраняется последняя конфигурация, а при неудачном применении выполняется откат;
 
 ### Точечный туннель для приложений с PC (SOCKS5-inbound)
 
@@ -358,12 +360,15 @@ ANTIGOBLIN_FORCE=1 sh install.sh
 3. **Создать или включить routing-группы.** У каждой группы выбрать outbound:
    - `vless-reality` — TCP и UDP этой группы идут через активный ключ (тег `vless-reality` остаётся одинаковым независимо от протокола ключа — это просто маршрут «через VPN»);
    - `direct` — трафик группы входит в `xray` и выходит без VPN;
-   - `bypass` — трафик группы обходит `xray` полностью (через `RETURN`).
+   - `bypass` — маршрут мимо VPN: обычные домены/CIDR обходят `xray` через `RETURN`, Geo-правила выходят через `direct` после сопоставления категории.
+   В поле доменов можно писать `geosite:youtube` или `geosite:category-games@cn`, а в поле CIDR — `geoip:google`, `geoip:telegram` и другие категории установленных баз.
 4. **Нажать `Сохранить и применить`.** Backend пересоберёт `04_outbounds.json` (xray) и при необходимости `sing-box-xkeen.json`, перезапустит оба процесса.
 
 В web UI Keenetic в разделе «Приоритеты подключений» — назначить нужные устройства в политику `xkeen`. Только устройства из этой политики попадают под управление AntiGoblin; остальные политики (например, личная `no_vpn`) не трогаются.
 
 ## Где брать списки IP / CIDR / доменов для популярных сервисов
+
+Для больших списков сначала используй встроенные Geo-базы. В панели «Правила трафика» нажми **«Обновить Geo-базы»**, затем добавь `geosite:youtube` в домены и/или `geoip:google` в CIDR. Файлы проверяются по SHA-256, применяются атомарно и автоматически обновляются раз в 7 дней, пока хотя бы один профиль использует Geo-правила.
 
 Для routing-групп удобно набивать не только домены, но и CIDR-диапазоны — особенно для сервисов с UDP/RTC (Discord voice, FaceTime, Zoom), у которых пакеты часто идут на голые IP без TLS-SNI. Полезные источники:
 
@@ -376,7 +381,7 @@ ANTIGOBLIN_FORCE=1 sh install.sh
   - GitHub: https://api.github.com/meta
 - **[dnscheck.tools](https://dnscheck.tools/)** — посмотреть, на какие IP резолвится домен у разных DNS-резолверов. Помогает при отладке «работает у меня, не работает на роутере».
 
-Практическое правило: если сервис только TCP (сайт, API) — обычно хватает домена. Если есть UDP/QUIC/RTC/voice — добавляй и CIDR из `iplist.opencck.org`, иначе routing-rule по домену не успеет сработать (у пакета нет SNI).
+Практическое правило: если сервис только TCP (сайт, API) — обычно хватает домена или `geosite`. Для UDP/QUIC/RTC добавляй и `geoip`, если подходящая IP-категория существует. При наличии Geo-правил AntiGoblin передаёт весь UDP устройств политики в sing-box, который sniff-ит QUIC и применяет те же группы; трафик fallback=`direct` остаётся прямым.
 
 ## Структура проекта
 
@@ -395,6 +400,7 @@ ANTIGOBLIN_FORCE=1 sh install.sh
 
 - `/opt/etc/xray/configs/04_outbounds.json` — outbound активного ключа. Для `hysteria2` это SOCKS5 в локальный sing-box.
 - `/opt/etc/xray/configs/05_routing.json` — правила маршрутизации UI-групп.
+- `/opt/etc/xray/dat/geoip.dat`, `/opt/etc/xray/dat/geosite.dat` — проверенные Geo-базы Xray; рядом хранится одна backup-пара предыдущей версии.
 - `/opt/etc/sing-box/xkeen.json` — для xray-протоколов это TPROXY+SS-relay; для `hysteria2` это TPROXY+mixed-inbound+hysteria2-outbound.
 
 Перед каждой записью бэкенд сохраняет копию с суффиксом `.bak-ui-<timestamp>` — откатить руками можно `cp`-ом.
@@ -408,9 +414,9 @@ UI и backend:
 - `/opt/share/xkeen-manager/api/xkeen-selfheal.sh`
 - `/opt/share/xkeen-manager/api/xkeen-runtime.sh`
 
-Bypass собирается только из UI-групп с outbound `bypass`. Их домены и CIDR попадают в runtime `xkeen_bypass` и обходят `xray` через `RETURN`.
+Bypass собирается только из UI-групп с outbound `bypass`. Обычные домены и CIDR попадают в runtime `xkeen_bypass` и обходят `xray` через `RETURN`. `geosite:`/`geoip:` остаются в Xray/sing-box, где категория сопоставляется до отправки в `direct`.
 
-UDP-маршрутизация привязана к outbound группы автоматически: для любой включенной группы с outbound `vless-reality` ее домены/CIDR попадают в `xkeen_udp_route`, и совпавший UDP уходит через `TPROXY → sing-box (61221) → xray SS-relay (127.0.0.1:62640) → xray VLESS Reality`. Группы с outbound `direct` или `bypass` UDP не трогают.
+UDP-маршрутизация привязана к outbound группы автоматически. Без Geo-правил домены/CIDR VPN-групп попадают в `xkeen_udp_route`, как раньше. Если активный профиль использует `geosite:` или `geoip:`, `xkeen_udp_route` принимает весь IPv4 UDP устройств политики, а sing-box после QUIC sniff выбирает `proxy` или `direct` по порядку тех же UI-групп. Это сохраняет GeoSite/GeoIP-семантику для UDP и не меняет профили без Geo-правил.
 
 Общая сборка runtime живет в `xkeen-runtime.sh`: и apply из UI, и self-heal используют один и тот же код для `iptables`/`ipset`.
 
@@ -548,6 +554,8 @@ Install-Module Posh-SSH -Scope CurrentUser -Force
 | [jq](https://jqlang.github.io/jq/), [gawk](https://www.gnu.org/software/gawk/), `coreutils-base64`, `net-tools-netstat` | Парсинг state.json, парсинг `ndmc`, JSON-API в backend, вспомогательные утилиты. | разные FOSS-лицензии |
 | [KeeneticOS](https://help.keenetic.com/) | Базовый сетевой стек, политики маршрутизации, UI-видимая политика `xkeen`. | проприетарная (предоставляется производителем) |
 | [rekryt/iplist](https://github.com/rekryt/iplist) (`iplist.opencck.org`) | Не часть стека, но рекомендуется в README как источник готовых IP/CIDR-листов для популярных сервисов. | MIT |
+| [Loyalsoldier/v2ray-rules-dat](https://github.com/Loyalsoldier/v2ray-rules-dat) | Загружаемые во время работы `geoip.dat` и `geosite.dat`; обновление проверяет опубликованные SHA-256. | GPL-3.0 |
+| [QuickJS](https://bellard.org/quickjs/) | Разбор protobuf Geo-баз непосредственно на роутере. | MIT |
 
 ## Лицензия и пользовательское соглашение
 

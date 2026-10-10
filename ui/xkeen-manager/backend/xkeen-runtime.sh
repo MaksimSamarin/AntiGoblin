@@ -502,6 +502,9 @@ xkeen_build_bypass_ipset() {
       | .groups[]?
       | select((.enabled != false) and (.outboundTag == "bypass" or .outboundTag == "direct"))
       | .domains[]?
+      # Entware jq is built without ONIGURUMA, so jq regex helpers are
+      # unavailable on real Keenetic hardware.
+      | select((ascii_downcase | startswith("geosite:")) | not)
     ' "$STATE_PATH" 2>/dev/null | sed '/^[[:space:]]*$/d' | xkeen_add_domains_to_set "$TMP_SET"
 
     jq -r '
@@ -511,6 +514,7 @@ xkeen_build_bypass_ipset() {
       | .groups[]?
       | select((.enabled != false) and (.outboundTag == "bypass" or .outboundTag == "direct"))
       | .cidrs[]?
+      | select((ascii_downcase | startswith("geoip:")) | not)
     ' "$STATE_PATH" 2>/dev/null | sed '/^[[:space:]]*$/d' | xkeen_add_cidrs_to_set "$TMP_SET"
   fi
 
@@ -558,7 +562,12 @@ xkeen_build_udp_route_ipset() {
   if xkeen_has_cmd jq && [ -f "$STATE_PATH" ] && jq -e '
     (.activeProfileId // "") as $id
     | .profiles[]? | select(.id == $id)
-    | .fallbackOutbound == "vless-reality"
+    | . as $p
+    | ($p.fallbackOutbound == "vless-reality")
+      or any($p.groups[]?;
+        (.enabled != false)
+        and (any(.domains[]?; ascii_downcase | startswith("geosite:"))
+          or any(.cidrs[]?; ascii_downcase | startswith("geoip:"))))
   ' "$STATE_PATH" >/dev/null 2>&1; then
     IS_CATCHALL=1
     ipset add "$TMP_SET" 0.0.0.0/1 -exist 2>/dev/null || true
@@ -578,6 +587,7 @@ xkeen_build_udp_route_ipset() {
         | .groups[]?
         | select((.enabled != false) and (.outboundTag != "direct") and (.outboundTag != "bypass"))
         | .domains[]?
+        | select((ascii_downcase | startswith("geosite:")) | not)
       ' "$STATE_PATH" 2>/dev/null | sed '/^[[:space:]]*$/d' | xkeen_add_domains_to_set "$TMP_SET"
     fi
 
@@ -593,6 +603,7 @@ xkeen_build_udp_route_ipset() {
       | .groups[]?
       | select((.enabled != false) and (.outboundTag != "direct") and (.outboundTag != "bypass"))
       | .cidrs[]?
+      | select((ascii_downcase | startswith("geoip:")) | not)
     ' "$STATE_PATH" 2>/dev/null | sed '/^[[:space:]]*$/d' | while IFS= read -r cidr; do
       case "$cidr" in
         192.168.*|10.*|172.16.*|172.17.*|172.18.*|172.19.*|172.20.*|172.21.*|172.22.*|172.23.*|172.24.*|172.25.*|172.26.*|172.27.*|172.28.*|172.29.*|172.30.*|172.31.*)
