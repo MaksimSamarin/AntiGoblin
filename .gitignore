@@ -28,3 +28,8 @@ helper_key
 
 # Local assistant instructions
 /AGENTS.md
+
+# Local AntiGoblin test contour and merge artifacts
+/lab/
+/.dockerignore
+/issue*.patch
