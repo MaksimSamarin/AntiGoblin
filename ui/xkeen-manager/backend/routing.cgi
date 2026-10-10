@@ -1343,8 +1343,8 @@ case "$REQUEST_METHOD" in
         | .profiles[]? | select(.id == $id)
         | any(.groups[]?;
             (.enabled != false)
-            and (any(.domains[]?; test("^geosite:[a-z0-9]"; "i"))
-              or any(.cidrs[]?; test("^geoip:[a-z0-9]"; "i"))))
+            and (any(.domains[]?; ascii_downcase | startswith("geosite:"))
+              or any(.cidrs[]?; ascii_downcase | startswith("geoip:"))))
       ' "$STATE_PATH" >/dev/null 2>&1; then
         if [ ! -x "$GEODATA_SCRIPT" ]; then
           json_err "geoip.dat/geosite.dat are required; update Geo databases first"

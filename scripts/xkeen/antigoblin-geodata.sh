@@ -34,8 +34,8 @@ profile_uses_geodata() {
   [ -f "$STATE" ] || return 1
   jq -e '
     any(.profiles[]?.groups[]?;
-      any(.domains[]?; test("^geosite:[a-z0-9]"; "i"))
-      or any(.cidrs[]?; test("^geoip:[a-z0-9]"; "i")))
+      any(.domains[]?; ascii_downcase | startswith("geosite:"))
+      or any(.cidrs[]?; ascii_downcase | startswith("geoip:")))
   ' "$STATE" >/dev/null 2>&1
 }
 
@@ -145,8 +145,8 @@ render_singbox() {
     | .profiles[]? | select(.id == $id)
     | any(.groups[]?;
         (.enabled != false)
-        and (any(.domains[]?; test("^geosite:[a-z0-9]"; "i"))
-          or any(.cidrs[]?; test("^geoip:[a-z0-9]"; "i"))))
+        and (any(.domains[]?; ascii_downcase | startswith("geosite:"))
+          or any(.cidrs[]?; ascii_downcase | startswith("geoip:"))))
   ' "$RENDER_STATE" >/dev/null 2>&1; then
     cp "$RENDER_INPUT" "$RENDER_OUTPUT"
     return $?
