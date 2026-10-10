@@ -163,10 +163,10 @@ install_packages() {
   opkg_run update || log "WARN: opkg update failed; trying package installs with the current index"
 
   # Essentials — the stack literally can't run without them; fail hard.
-  # Optionals — nice-to-have (rich netstat, coreutils base64, standalone
-  # curl/wget for user shell); warn and continue.
-  ESSENTIAL_PKGS="xray uhttpd_kn iptables ipset conntrack jq gawk ca-bundle"
-  OPTIONAL_PKGS="cron curl wget tar gzip coreutils-base64 coreutils-timeout net-tools-netstat"
+  # Optionals — nice-to-have (rich netstat, timeout and user-shell tools);
+  # warn and continue.
+  ESSENTIAL_PKGS="xray uhttpd_kn iptables ipset conntrack jq gawk ca-bundle quickjs curl coreutils-base64"
+  OPTIONAL_PKGS="cron wget tar gzip coreutils-timeout net-tools-netstat"
 
   MISSING_ESSENTIAL=""
   for pkg in $ESSENTIAL_PKGS; do
@@ -225,14 +225,14 @@ ensure_xkeen_policy() {
   # XKEEN_POLICY_DESC_RE — keep them in sync (an earlier install.sh copy
   # required a mandatory space and silently missed Format B).
   DESC_MATCH='description(([[:space:]]*[=:])|([[:space:]]+))[[:space:]]*"?xkeen($|[":,[:space:]])'
-  if ndmc -c 'show ip policy' 2>/dev/null | grep -Eq "$DESC_MATCH"; then
+  if LD_LIBRARY_PATH= ndmc -c 'show ip policy' 2>/dev/null | grep -Eq "$DESC_MATCH"; then
     log "Keenetic policy 'xkeen' already exists"
     return 0
   fi
 
   log "Creating Keenetic policy 'xkeen'"
 
-  WAN_IFACE="$(ndmc -c 'show interface' | /opt/bin/awk '
+  WAN_IFACE="$(LD_LIBRARY_PATH= ndmc -c 'show interface' | /opt/bin/awk '
     /^Interface, name = / {
       iface=$4
       gsub(/"/, "", iface)
@@ -247,7 +247,7 @@ ensure_xkeen_policy() {
   [ -n "$WAN_IFACE" ] || die "Failed to detect active WAN interface. Add the policy manually."
 
   NEXT_POLICY_NUM="$(
-    ndmc -c 'show running-config' | /opt/bin/awk '
+    LD_LIBRARY_PATH= ndmc -c 'show running-config' | /opt/bin/awk '
       /^ip policy Policy[0-9]+$/ {
         name=$3
         sub(/^Policy/, "", name)
@@ -269,15 +269,15 @@ ensure_xkeen_policy() {
   [ -n "$NEXT_POLICY_NUM" ] || NEXT_POLICY_NUM=42
   POLICY_NAME="Policy$NEXT_POLICY_NUM"
 
-  ndmc -c "ip policy $POLICY_NAME"
-  ndmc -c "ip policy $POLICY_NAME description xkeen"
-  ndmc -c "ip policy $POLICY_NAME permit global $WAN_IFACE"
+  LD_LIBRARY_PATH= ndmc -c "ip policy $POLICY_NAME"
+  LD_LIBRARY_PATH= ndmc -c "ip policy $POLICY_NAME description xkeen"
+  LD_LIBRARY_PATH= ndmc -c "ip policy $POLICY_NAME permit global $WAN_IFACE"
   # Persist to startup-config. Retry a few times: if another process is
   # writing config, first save can fail transiently and we'd silently lose
   # the policy after reboot.
   saved=0
   for _try in 1 2 3; do
-    if ndmc -c "system configuration save" >/dev/null 2>&1; then
+    if LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1; then
       saved=1
       break
     fi
@@ -404,9 +404,14 @@ deploy_sources() {
   deploy_file "$BACKEND/routing.cgi"      /opt/share/xkeen-manager/api/routing.cgi
   deploy_file "$BACKEND/xkeen-selfheal.sh" /opt/share/xkeen-manager/api/xkeen-selfheal.sh
   deploy_file "$BACKEND/xkeen-runtime.sh"  /opt/share/xkeen-manager/api/xkeen-runtime.sh
+  deploy_file "$BACKEND/geodata.js" /opt/share/xkeen-manager/api/geodata.js 644
+  deploy_file "$BACKEND/subscription-refresh.js" /opt/share/xkeen-manager/api/subscription-refresh.js 644
+  deploy_file "$BACKEND/subscription-candidate.js" /opt/share/xkeen-manager/api/subscription-candidate.js 644
 
   log "Deploying init and watchdog scripts"
   deploy_file "$SCRIPTS/antigoblin-selfheal-loop.sh" /opt/share/xkeen-manager/api/xkeen-selfheal-loop.sh
+  deploy_file "$SCRIPTS/antigoblin-geodata.sh" /opt/share/xkeen-manager/api/antigoblin-geodata.sh
+  deploy_file "$SCRIPTS/antigoblin-subscription-refresh.sh" /opt/share/xkeen-manager/api/antigoblin-subscription-refresh.sh
   deploy_file "$SCRIPTS/antigoblin-sysctl.initd.sh"  /opt/etc/init.d/S20antigoblin-sysctl
   deploy_file "$SCRIPTS/antigoblin-singbox.initd.sh" /opt/etc/init.d/S24antigoblin-singbox
   deploy_file "$SCRIPTS/antigoblin-selfheal.initd.sh" /opt/etc/init.d/S25antigoblin-selfheal
@@ -514,7 +519,7 @@ start_services() {
 }
 
 print_summary() {
-  ROUTER_IP="$(ndmc -c 'show interface' 2>/dev/null | /opt/bin/awk '
+  ROUTER_IP="$(LD_LIBRARY_PATH= ndmc -c 'show interface' 2>/dev/null | /opt/bin/awk '
     /^Interface, name = / { iface=$4; gsub(/"/, "", iface); next }
     iface == "Bridge0" && /address:[[:space:]]+/ { print $2; exit }
   ')"

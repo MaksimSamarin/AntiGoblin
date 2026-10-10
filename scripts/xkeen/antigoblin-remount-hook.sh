@@ -38,11 +38,11 @@ cron_running() {
 ensure_xray_init_confdir() {
   [ -f "$XRAY_INIT" ] || return 0
   grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$XRAY_INIT" 2>/dev/null && return 0
-  grep -q 'ARGS="run -confdir /opt/etc/xray"' "$XRAY_INIT" 2>/dev/null || return 0
+  grep -qE 'ARGS="run -confdir /opt/etc/(xray|\$PROCS)"' "$XRAY_INIT" 2>/dev/null || return 0
   cp "$XRAY_INIT" "$XRAY_INIT.bak-antigoblin-confdir" 2>/dev/null || true
   # Atomic swap: sed → tmp → mv. `cat > INIT` truncates then writes in
   # two steps; a kill between them leaves the init script empty.
-  if sed 's#ARGS="run -confdir /opt/etc/xray"#ARGS="run -confdir /opt/etc/xray/configs"#' "$XRAY_INIT" > "$XRAY_INIT.tmp" \
+  if sed -E 's#ARGS="run -confdir /opt/etc/(xray|\$PROCS)"#ARGS="run -confdir /opt/etc/xray/configs"#' "$XRAY_INIT" > "$XRAY_INIT.tmp" \
       && chmod 755 "$XRAY_INIT.tmp" 2>/dev/null \
       && mv "$XRAY_INIT.tmp" "$XRAY_INIT"; then
     :

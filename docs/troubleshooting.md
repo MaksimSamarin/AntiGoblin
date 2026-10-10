@@ -39,7 +39,37 @@
 - `bypass` означает `RETURN` ещё до попадания в `xray`. `direct` означает «вошел в xray и вышел без VPN» — этого недостаточно для IoT.
 - Локальный multicast/broadcast уже выносится автоматически — руками этого делать не надо.
 
-## 3. Chrome / Claude / Discord обходят VPN через QUIC
+## 3. Claude Code / VS Code не авторизуется: `platform.claude.com` видит RU
+
+### Симптом
+
+- В Claude Code / VS Code слетает авторизация или повторяется login flow.
+- В логе расширения есть `platform.claude.com/v1/oauth/token`, `403` и `Request not allowed`.
+- `https://claude.ai/cdn-cgi/trace` показывает VPN-IP, а `https://platform.claude.com/cdn-cgi/trace` показывает direct/RU-IP.
+
+### Причина
+
+Claude Code использует не только `claude.ai` и `api.anthropic.com`, но и OAuth endpoint `platform.claude.com`. Если в группе Claude есть только `claude.ai`/`anthropic.com`, часть авторизации может уйти в fallback `direct`.
+
+### Решение
+
+В UI-группу Claude с outbound `vless-reality` добавить домены:
+
+- `claude.ai`
+- `claude.com`
+- `platform.claude.com`
+- `anthropic.com`
+- `claudeusercontent.com`
+
+После этого нажать `Сохранить и применить` и проверить:
+
+```powershell
+curl.exe --noproxy "*" -4 -s https://platform.claude.com/cdn-cgi/trace
+```
+
+Ожидаемо: `ip=` равен VPN exit IP, а `loc=` не RU.
+
+## 4. Chrome / Claude / Discord обходят VPN через QUIC
 
 ### Симптом
 
@@ -57,7 +87,7 @@
 
 Для Cloudflare, Discord и подобных лучше добавлять не только домены, но и CIDR-диапазоны: у QUIC-пакетов не всегда есть SNI, по которому правило по домену сматчится.
 
-## 4. Discord voice плавает по задержке или вообще не подключается
+## 5. Discord voice плавает по задержке или вообще не подключается
 
 ### Симптом
 
@@ -91,7 +121,7 @@ netstat -lnptu | grep 62640                    # xray relay слушает
 ip rule show | grep 'fwmark 0x111'             # masked rule lookup 111
 ```
 
-## 5. Игра не подключается к серверу или висит на логине после установки
+## 6. Игра не подключается к серверу или висит на логине после установки
 
 ### Симптом
 
@@ -107,7 +137,7 @@ ip rule show | grep 'fwmark 0x111'             # masked rule lookup 111
 - Положить устройство с игрой не в `xkeen`, а в политику Keenetic типа `no_vpn` (если она у тебя есть), либо
 - Создать в UI группу с outbound `bypass`, добавить туда домены/CIDR игрового сервера, и держать игровое устройство в `xkeen`. Игровой трафик уйдет до `xray` через `RETURN`, остальной TCP пойдет через VPN.
 
-## 6. Что-то ведет себя «как раньше» после Сохранить и применить
+## 7. Что-то ведет себя «как раньше» после Сохранить и применить
 
 Симптом: вроде применил новую группу, но устройство продолжает идти старым путем.
 
@@ -117,7 +147,7 @@ ip rule show | grep 'fwmark 0x111'             # masked rule lookup 111
 - Conntrack еще держит старые TCP-записи. Self-heal сам сбрасывает conntrack к VPN-апстриму при controlled-restart `xray`, но конкретные клиентские сессии могут остаться. Подождать 1–2 минуты или выключить-включить Wi-Fi на устройстве.
 - Keenetic не успел перепривязать устройство к политике после смены — проверить в `Приоритеты подключений`.
 
-## 7. Включить отладочный лог `xray` (по необходимости)
+## 8. Включить отладочный лог `xray` (по необходимости)
 
 Когда нужно понять, какой именно `IP:port` входит в `xray` и в какой outbound он уходит:
 
@@ -148,7 +178,7 @@ tail -f /opt/var/log/xray/access.log
 
 И снова рестарт `xray`. Иначе access.log быстро забьет флешку.
 
-## 8. Где смотреть логи
+## 9. Где смотреть логи
 
 | Лог | Что там |
 |-----|--------|
@@ -160,3 +190,137 @@ tail -f /opt/var/log/xray/access.log
 | `/opt/var/log/xkeen-manager-uhttpd.log` | UI-сервер `uhttpd_kn` на :8899. |
 
 То же самое доступно прямо в UI в блоке «Здоровье и логи» — селектор и кнопка «Загрузить».
+
+## 10. Диагностика внутренностей self-heal (advanced)
+
+### DNS cache
+`xkeen-runtime.sh` кэширует результаты `nslookup` в `/tmp/xkeen-dns-cache/` чтобы apply/selfheal не блокировался на медленных DNS-ответах.
+
+- Положительный TTL — 15 мин, отрицательный — 2 мин (пустой файл = «нет A-записей»).
+- Проверить содержимое:
+
+```sh
+ls -la /tmp/xkeen-dns-cache/ | head
+```
+
+- Заставить пересобрать (если поменялся upstream DNS и IP-ки устарели):
+
+```sh
+rm -rf /tmp/xkeen-dns-cache/*
+/opt/share/xkeen-manager/api/xkeen-selfheal.sh --force
+```
+
+### Shared apply-lock
+
+`selfheal / apply / netfilter-hook` синхронизируются через один mkdir-lock — `/tmp/xkeen-selfheal.lock/`. Remount-hook перезапускает службы без этого lock; заключительный вызов selfheal получает lock самостоятельно.
+
+- Кто держит и жив ли:
+
+```sh
+[ -f /tmp/xkeen-selfheal.lock/pid ] && cat /tmp/xkeen-selfheal.lock/pid
+PID=$(cat /tmp/xkeen-selfheal.lock/pid 2>/dev/null)
+[ -n "$PID" ] && tr '\0' ' ' </proc/$PID/cmdline
+```
+
+- Симптомы застрявшего lock: `apply` из UI отвечает `503 apply lock busy`, health checks сериализуются. Селфхил сам ловит stale (умершего или подменённого владельца) и пишет `lock_stale_cleanup` в `xray-manual.log` — эти сообщения полезны:
+
+```sh
+grep -E "lock_stale|lock_abandoned" /opt/var/log/xray-manual.log | tail -20
+```
+
+- Ручная зачистка (только если фрилок реально сдох и не self-cleanup'ится):
+
+```sh
+rm -rf /tmp/xkeen-selfheal.lock
+```
+
+### NDM netfilter-hook
+
+`/opt/etc/ndm/netfilter.d/50-antigoblin.sh` восстанавливает TPROXY-jump в конце `mangle PREROUTING` за миллисекунды после каждого NDM reload netfilter (WAN reconnect, WiFi client join, firewall changes).
+
+- Проверить что хук стоит и исполняем:
+
+```sh
+ls -la /opt/etc/ndm/netfilter.d/50-antigoblin.sh
+```
+
+- Симптом: `Discord` теряет голос на 1-3 секунды при WiFi-событиях. Без хука восстановление занимает до 15 сек (следующий selfheal-tick).
+
+- Тест руками (удалить правило, вызвать хук, проверить восстановление). Mark политики xkeen у каждого роутера свой — берём из `/tmp/xkeen-mark` (кэш, пишется selfheal/apply при успешном ndmc-запросе):
+
+```sh
+MARK="0x$(cat /tmp/xkeen-mark 2>/dev/null)"
+iptables -t mangle -D PREROUTING -p udp -m connmark --mark "$MARK" -m conntrack ! --ctstate INVALID -m set --match-set xkeen_udp_route dst -j xkeen_udp_route
+env table=mangle /opt/etc/ndm/netfilter.d/50-antigoblin.sh
+iptables -t mangle -S PREROUTING | tail -2
+```
+
+### xray restart backoff
+
+После N подряд неудачных стартов selfheal вводит экспоненциальный backoff (60 → 300 → 900 → 1800 сек), чтобы кривой конфиг не превращал selfheal в watchdog storm.
+
+- Проверить активен ли backoff:
+
+```sh
+[ -f /tmp/xkeen-xray-start-backoff.ts ] && \
+  echo "backoff active until $(date -d @$(cat /tmp/xkeen-xray-start-backoff.ts) 2>/dev/null || cat /tmp/xkeen-xray-start-backoff.ts)"
+cat /tmp/xkeen-xray-start-fail-streak 2>/dev/null
+```
+
+- Сбросить (например после ручной починки конфига):
+
+```sh
+rm -f /tmp/xkeen-xray-start-backoff.ts /tmp/xkeen-xray-start-fail-streak
+/opt/share/xkeen-manager/api/xkeen-selfheal.sh --force
+```
+
+Успешный старт xray (из UI-`Рестарт` или selfheal-цикла) обе эти отметки сбрасывает автоматически.
+
+### `repair failed: runtime hooks` каждые 15 сек — `ndmc` падает под Entware `LD_LIBRARY_PATH`
+
+Симптомы (все сразу, ровно с какого-то момента):
+
+- `/opt/var/log/xkeen-selfheal.log` — `repair start` / `repair failed: runtime hooks` каждые 15 сек, ни одного `repair done`;
+- `/tmp/xkeen-mark` не обновляется (дата = последний успешный repair);
+- в UI Health `tproxyRuleAtEnd: fail`, а `iptables -t nat -S PREROUTING | grep xkeen` пуст — после любого NDM netfilter-reload цепочки `xkeen` / `xkeen_udp_route` пропадают и не возвращаются;
+- «VPN подключён, сайты не грузятся»: xray жив, но трафик устройств идёт мимо него;
+- упавший xray сам не поднимается (`restart_xray` в selfheal идёт после hooks);
+- при этом панель показывает `policyName` и `mark` — CGI ndmc работает, что маскирует проблему.
+
+Причина: `/bin/ndmc` — системный бинарь, слинкованный с библиотеками прошивки. Entware-стартер `rc.unslung` экспортирует `LD_LIBRARY_PATH=/opt/lib:/opt/usr/lib:/lib:/usr/lib` во все `/opt/etc/init.d/S*`, включая selfheal-демон и SSH-сессии с Entware-профилем. Как только в `/opt/lib` появляется библиотека, конфликтующая с системной (обычно после `opkg upgrade`), ndmc под этим окружением падает:
+
+```
+ndm: ndmc: system failed [0xcffd0062].
+ndm: Cli::Main: failed to initialize.
+```
+
+`xkeen_ensure_mark` возвращает ошибку без записи в лог, `xkeen_repair_hooks` прерывается на первом шаге. uhttpd (CGI) переменную не наследует — панель продолжает видеть mark.
+
+Проверка одной парой команд из SSH роутера:
+
+```sh
+LD_LIBRARY_PATH= ndmc -c 'show version'            # должно ответить
+LD_LIBRARY_PATH=/opt/lib:/opt/usr/lib:/lib:/usr/lib ndmc -c 'show version'   # если падает — это оно
+```
+
+Фикс — в коде: все вызовы идут через `xkeen_ndmc()` (`LD_LIBRARY_PATH= ndmc "$@"`) в `xkeen-runtime.sh`; в `routing.cgi`, `install.sh`, `antigoblin-firstboot.sh` и PS1-помощниках ndmc вызывается как `LD_LIBRARY_PATH= ndmc -c …`. Глобально чистить `LD_LIBRARY_PATH` нельзя — `jq`, `awk`, `curl` из `/opt/bin` без `/opt/lib` не запустятся.
+
+Убедиться, что помогло: `/opt/share/xkeen-manager/api/xkeen-selfheal.sh --force` → в логе `repair done`, `/tmp/xkeen-mark` со свежей датой, в UI Health все чеки `ok`.
+
+### xray не стартует через `S24xray` / не переживает ребут
+
+Стоковый Entware-init `/opt/etc/init.d/S24xray` содержит `ARGS="run -confdir /opt/etc/$PROCS"` — путь задан через переменную. Он раскрывается в `/opt/etc/xray`, где лежит только `config.json.example`; рабочие конфиги — в `/opt/etc/xray/configs/`. Такой xray стартует с пустым конфигом и сразу выходит: `/opt/etc/init.d/S24xray restart` **гасит** рабочий xray и не поднимает новый.
+
+Selfheal и remount-hook чинят это автоматически (`ensure_xray_init_confdir`); backend deploy также исправляет init-скрипт. Старые версии искали в файле литерал `/opt/etc/xray` и молча пропускали форму с `$PROCS`. Проверить и починить руками:
+
+```sh
+grep -n 'ARGS=' /opt/etc/init.d/S24xray          # должно быть: run -confdir /opt/etc/xray/configs
+sed -i -E 's#ARGS="run -confdir /opt/etc/(xray|\$PROCS)"#ARGS="run -confdir /opt/etc/xray/configs"#' /opt/etc/init.d/S24xray
+```
+
+Поднять xray без init-скрипта, так же как это делает selfheal:
+
+```sh
+XRAY_LOCATION_ASSET=/opt/etc/xray/dat XRAY_LOCATION_CONFDIR=/opt/etc/xray/configs \
+  /opt/sbin/start-stop-daemon -S -b -m -p /opt/var/run/xray-ui.pid -x /opt/sbin/xray -- run
+```

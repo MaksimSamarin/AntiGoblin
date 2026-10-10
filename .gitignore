@@ -15,3 +15,21 @@ ui/xkeen-manager/router-live-routing.json
 .env.local
 *.env
 !.env.example
+
+# remote-support tooling — operational, not part of the product.
+# Carries private keys and references the maintainer's own VPS; nothing here
+# belongs in a public repository.
+scripts/support/
+docs/remote-support.md
+scripts/xkeen/remote-diagnose.sh
+*.pub
+tunnel_key
+helper_key
+
+# Local assistant instructions
+/AGENTS.md
+
+# Local AntiGoblin test contour and merge artifacts
+/lab/
+/.dockerignore
+/issue*.patch

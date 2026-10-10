@@ -154,12 +154,18 @@ ensure_xray_init_confdir() {
   INIT="/opt/etc/init.d/S24xray"
   [ -f "$INIT" ] || return 0
   grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$INIT" 2>/dev/null && return 0
-  grep -q 'ARGS="run -confdir /opt/etc/xray"' "$INIT" 2>/dev/null || return 0
+  # The stock Entware init ships ARGS="run -confdir /opt/etc/$PROCS" — the
+  # path is spelled through the $PROCS variable, not as a literal "xray".
+  # Matching only the literal form silently skipped the patch on every such
+  # router, leaving S24xray pointing at /opt/etc/xray where no *.json lives
+  # (they are in configs/), so xray could not be started via its init script
+  # and did not survive a reboot. Accept both spellings.
+  grep -qE 'ARGS="run -confdir /opt/etc/(xray|\$PROCS)"' "$INIT" 2>/dev/null || return 0
   cp "$INIT" "$INIT.bak-antigoblin-confdir" 2>/dev/null || true
   # Atomic swap via mv. The old `cat tmp > INIT` did truncate+write in two
   # steps; if killed between them, INIT would be left empty and xray would
   # not start on next boot. `mv` is atomic within a filesystem.
-  if sed 's#ARGS="run -confdir /opt/etc/xray"#ARGS="run -confdir /opt/etc/xray/configs"#' "$INIT" > "$INIT.tmp" \
+  if sed -E 's#ARGS="run -confdir /opt/etc/(xray|\$PROCS)"#ARGS="run -confdir /opt/etc/xray/configs"#' "$INIT" > "$INIT.tmp" \
       && chmod 755 "$INIT.tmp" 2>/dev/null \
       && mv "$INIT.tmp" "$INIT"; then
     health_log "action=xray_init_confdir file=$INIT value=/opt/etc/xray/configs"
@@ -410,9 +416,12 @@ maybe_rotate_logs() {
   rotate_log_if_large "/opt/var/log/xkeen-selfheal.log"   5242880
   rotate_log_if_large "/opt/var/log/xkeen-health.log"    10485760
   rotate_log_if_large "/opt/var/log/xkeen-sysctl.log"     1048576
+  rotate_log_if_large "/opt/var/log/xkeen-geodata.log"    5242880
+  rotate_log_if_large "/opt/var/log/xkeen-subscription-refresh.log" 5242880
 
   trim_backups "/opt/etc/xray/configs"            "*.bak-ui-*" 5
   trim_backups "/opt/share/xkeen-manager"         "xkeen-ui-state.json.bak-ui-*" 5
+  trim_backups "/opt/share/xkeen-manager"         "xkeen-ui-state.json.bak-sub-auto-*" 5
 
   # Garbage-collect DNS cache in the same daily rotate — otherwise
   # /tmp/xkeen-dns-cache/ grows unbounded on tmpfs across subscription

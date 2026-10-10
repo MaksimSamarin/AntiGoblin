@@ -142,7 +142,7 @@ xkeen_has_rule() {
 #   - `description = xkeen:Home`  (format A, newer one-liner, one policy per row)
 #   - `description: xkeen`        (format B, older multiline, no space before `:`)
 #   - `description xkeen`         (format C, bare, what our own
-#                                  `ndmc -c "ip policy X description xkeen"`
+#                                  `xkeen_ndmc -c "ip policy X description xkeen"`
 #                                  produces on some builds)
 # Bare `descriptionxkeen` MUST NOT match, so between the word and `xkeen` we
 # require EITHER at least one whitespace OR a `=`/`:` separator.
@@ -269,6 +269,19 @@ xkeen_delete_jumps() {
   done
 }
 
+# Every ndmc call goes through here. /bin/ndmc is a system binary linked
+# against the firmware's own libraries; under Entware's LD_LIBRARY_PATH
+# (/opt/lib first — exported by rc.unslung to every /opt/etc/init.d/S* script,
+# i.e. to the selfheal daemon) it can pick up a foreign lib from /opt/lib and
+# die with "system failed [0xcffd0062] / Cli::Main: failed to initialize".
+# uhttpd (CGI) does not inherit that variable, which is why the panel kept
+# seeing the mark while selfheal reported "repair failed: runtime hooks" for
+# six days straight after an /opt/lib package update. Strip it for ndmc only —
+# Entware tools we call (jq, awk, curl) still need /opt/lib.
+xkeen_ndmc() {
+  LD_LIBRARY_PATH= ndmc "$@"
+}
+
 xkeen_get_mark() {
   # NDMC prints marks in two shapes:
   #   Format A (one-liner):  "policy, name = PolicyN, description = xkeen:X, mark = 0xNNN, ..."
@@ -279,7 +292,7 @@ xkeen_get_mark() {
   # Format-A line entirely and then read `mark` from an unrelated later
   # policy. Now we first try to extract mark from the SAME line as
   # description; if not found, we fall through to Format-B lookahead.
-  ndmc -c 'show ip policy' 2>/dev/null | /opt/bin/awk -v pat="$XKEEN_POLICY_DESC_RE" '
+  xkeen_ndmc -c 'show ip policy' 2>/dev/null | /opt/bin/awk -v pat="$XKEEN_POLICY_DESC_RE" '
     function extract_mark(line) {
       if (match(line, /mark[[:space:]]*[=:][[:space:]]*(0x)?[0-9a-fA-F]+/)) {
         val = substr(line, RSTART, RLENGTH)
@@ -309,7 +322,7 @@ xkeen_get_mark() {
 }
 
 xkeen_default_wan_iface() {
-  ndmc -c 'show interface' 2>/dev/null | /opt/bin/awk '
+  xkeen_ndmc -c 'show interface' 2>/dev/null | /opt/bin/awk '
     /^Interface, name = / {
       iface=$4
       gsub(/"/, "", iface)
@@ -323,7 +336,7 @@ xkeen_default_wan_iface() {
 }
 
 xkeen_next_policy_name() {
-  ndmc -c 'show running-config' 2>/dev/null | /opt/bin/awk '
+  xkeen_ndmc -c 'show running-config' 2>/dev/null | /opt/bin/awk '
     /^ip policy Policy[0-9]+$/ {
       name=$3
       sub(/^Policy/, "", name)
@@ -337,7 +350,7 @@ xkeen_next_policy_name() {
 }
 
 xkeen_ensure_policy() {
-  if ndmc -c 'show ip policy' 2>/dev/null | grep -Eq "$XKEEN_POLICY_DESC_RE"; then
+  if xkeen_ndmc -c 'show ip policy' 2>/dev/null | grep -Eq "$XKEEN_POLICY_DESC_RE"; then
     return 0
   fi
 
@@ -348,12 +361,12 @@ xkeen_ensure_policy() {
   [ -n "$POLICY_NAME" ] || POLICY_NAME="Policy42"
 
   xkeen_runtime_log "policy_missing create=$POLICY_NAME wan=$WAN_IFACE"
-  ndmc -c "ip policy $POLICY_NAME" >/dev/null 2>&1 || return 1
-  ndmc -c "ip policy $POLICY_NAME description xkeen" >/dev/null 2>&1 || return 1
-  ndmc -c "ip policy $POLICY_NAME permit global $WAN_IFACE" >/dev/null 2>&1 || return 1
-  ndmc -c "system configuration save" >/dev/null 2>&1 || true
+  xkeen_ndmc -c "ip policy $POLICY_NAME" >/dev/null 2>&1 || return 1
+  xkeen_ndmc -c "ip policy $POLICY_NAME description xkeen" >/dev/null 2>&1 || return 1
+  xkeen_ndmc -c "ip policy $POLICY_NAME permit global $WAN_IFACE" >/dev/null 2>&1 || return 1
+  xkeen_ndmc -c "system configuration save" >/dev/null 2>&1 || true
   sleep 1
-  ndmc -c 'show ip policy' 2>/dev/null | grep -Eq "$XKEEN_POLICY_DESC_RE"
+  xkeen_ndmc -c 'show ip policy' 2>/dev/null | grep -Eq "$XKEEN_POLICY_DESC_RE"
 }
 
 xkeen_ensure_mark() {
@@ -489,6 +502,9 @@ xkeen_build_bypass_ipset() {
       | .groups[]?
       | select((.enabled != false) and (.outboundTag == "bypass" or .outboundTag == "direct"))
       | .domains[]?
+      # Entware jq is built without ONIGURUMA, so jq regex helpers are
+      # unavailable on real Keenetic hardware.
+      | select((ascii_downcase | startswith("geosite:")) | not)
     ' "$STATE_PATH" 2>/dev/null | sed '/^[[:space:]]*$/d' | xkeen_add_domains_to_set "$TMP_SET"
 
     jq -r '
@@ -498,6 +514,7 @@ xkeen_build_bypass_ipset() {
       | .groups[]?
       | select((.enabled != false) and (.outboundTag == "bypass" or .outboundTag == "direct"))
       | .cidrs[]?
+      | select((ascii_downcase | startswith("geoip:")) | not)
     ' "$STATE_PATH" 2>/dev/null | sed '/^[[:space:]]*$/d' | xkeen_add_cidrs_to_set "$TMP_SET"
   fi
 
@@ -545,7 +562,12 @@ xkeen_build_udp_route_ipset() {
   if xkeen_has_cmd jq && [ -f "$STATE_PATH" ] && jq -e '
     (.activeProfileId // "") as $id
     | .profiles[]? | select(.id == $id)
-    | .fallbackOutbound == "vless-reality"
+    | . as $p
+    | ($p.fallbackOutbound == "vless-reality")
+      or any($p.groups[]?;
+        (.enabled != false)
+        and (any(.domains[]?; ascii_downcase | startswith("geosite:"))
+          or any(.cidrs[]?; ascii_downcase | startswith("geoip:"))))
   ' "$STATE_PATH" >/dev/null 2>&1; then
     IS_CATCHALL=1
     ipset add "$TMP_SET" 0.0.0.0/1 -exist 2>/dev/null || true
@@ -565,6 +587,7 @@ xkeen_build_udp_route_ipset() {
         | .groups[]?
         | select((.enabled != false) and (.outboundTag != "direct") and (.outboundTag != "bypass"))
         | .domains[]?
+        | select((ascii_downcase | startswith("geosite:")) | not)
       ' "$STATE_PATH" 2>/dev/null | sed '/^[[:space:]]*$/d' | xkeen_add_domains_to_set "$TMP_SET"
     fi
 
@@ -580,6 +603,7 @@ xkeen_build_udp_route_ipset() {
       | .groups[]?
       | select((.enabled != false) and (.outboundTag != "direct") and (.outboundTag != "bypass"))
       | .cidrs[]?
+      | select((ascii_downcase | startswith("geoip:")) | not)
     ' "$STATE_PATH" 2>/dev/null | sed '/^[[:space:]]*$/d' | while IFS= read -r cidr; do
       case "$cidr" in
         192.168.*|10.*|172.16.*|172.17.*|172.18.*|172.19.*|172.20.*|172.21.*|172.22.*|172.23.*|172.24.*|172.25.*|172.26.*|172.27.*|172.28.*|172.29.*|172.30.*|172.31.*)

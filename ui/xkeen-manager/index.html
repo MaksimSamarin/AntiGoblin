@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AntiGoblin</title>
-  <link rel="stylesheet" href="./styles.css?v=90">
+  <link rel="stylesheet" href="./styles.css?v=91">
 </head>
 <body>
     <div id="authOverlay" class="auth-overlay" hidden>
@@ -311,11 +311,19 @@
           </div>
           <button id="addGroupBtn" type="button">&#1044;&#1086;&#1073;&#1072;&#1074;&#1080;&#1090;&#1100; &#1075;&#1088;&#1091;&#1087;&#1087;&#1091;</button>
         </div>
+        <div class="geodata-card">
+          <div>
+            <strong id="geodataTitle">GeoIP / GeoSite</strong>
+            <div id="geodataStatus" class="geodata-status">&#1055;&#1088;&#1086;&#1074;&#1077;&#1088;&#1082;&#1072;...</div>
+            <div id="geodataHint" class="geodata-hint">geoip:google &#1074; CIDR, geosite:youtube &#1074; &#1076;&#1086;&#1084;&#1077;&#1085;&#1072;&#1093;</div>
+          </div>
+          <button id="updateGeodataBtn" type="button">&#1054;&#1073;&#1085;&#1086;&#1074;&#1080;&#1090;&#1100; Geo-&#1073;&#1072;&#1079;&#1099;</button>
+        </div>
         <div id="groups"></div>
       </section>
     </main>
   </div>
 
-  <script charset="utf-8" src="./app.js?v=90"></script>
+  <script charset="utf-8" src="./app.js?v=91"></script>
 </body>
 </html>

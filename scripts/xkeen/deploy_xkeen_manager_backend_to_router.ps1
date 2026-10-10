@@ -10,6 +10,11 @@ param(
   [string]$RemoteSysctlInit = "/opt/etc/init.d/S20antigoblin-sysctl",
   [string]$RemoteInitScript = "/opt/etc/init.d/S26antigoblin",
   [string]$RemoteCronScript = "/opt/etc/cron.1min/50-antigoblin-selfheal",
+  [string]$RemoteGeodataScript = "/opt/share/xkeen-manager/api/antigoblin-geodata.sh",
+  [string]$RemoteGeodataWorker = "/opt/share/xkeen-manager/api/geodata.js",
+  [string]$RemoteSubscriptionRefresh = "/opt/share/xkeen-manager/api/antigoblin-subscription-refresh.sh",
+  [string]$RemoteSubscriptionWorker = "/opt/share/xkeen-manager/api/subscription-refresh.js",
+  [string]$RemoteSubscriptionCandidate = "/opt/share/xkeen-manager/api/subscription-candidate.js",
   # remount-hook is installed to usb.d only. Historically shipped in both
   # fs.d and usb.d, which caused a double-fire on USB Entware mounts and
   # raced with selfheal. RemoteFsHook is kept only to clean up the legacy
@@ -34,6 +39,11 @@ $sshHelper = Join-Path $PSScriptRoot 'router_ssh.py'
 $localApi = Join-Path $repoRoot 'ui\xkeen-manager\backend\routing.cgi'
 $localSelfHeal = Join-Path $repoRoot 'ui\xkeen-manager\backend\xkeen-selfheal.sh'
 $localRuntime = Join-Path $repoRoot 'ui\xkeen-manager\backend\xkeen-runtime.sh'
+$localGeodataWorker = Join-Path $repoRoot 'ui\xkeen-manager\backend\geodata.js'
+$localGeodataScript = Join-Path $repoRoot 'scripts\xkeen\antigoblin-geodata.sh'
+$localSubscriptionWorker = Join-Path $repoRoot 'ui\xkeen-manager\backend\subscription-refresh.js'
+$localSubscriptionCandidate = Join-Path $repoRoot 'ui\xkeen-manager\backend\subscription-candidate.js'
+$localSubscriptionRefresh = Join-Path $repoRoot 'scripts\xkeen\antigoblin-subscription-refresh.sh'
 $localXrayRelay = Join-Path $repoRoot 'configs\xkeen\02_relay.sample.json'
 $localSingboxConfig = Join-Path $repoRoot 'configs\xkeen\sing-box-xkeen.sample.json'
 $localSelfhealLoop = Join-Path $repoRoot 'scripts\xkeen\antigoblin-selfheal-loop.sh'
@@ -98,6 +108,21 @@ if (-not (Test-Path $localSelfHeal)) {
 if (-not (Test-Path $localRuntime)) {
   throw "Missing runtime file: $localRuntime"
 }
+if (-not (Test-Path $localGeodataWorker)) {
+  throw "Missing geodata worker: $localGeodataWorker"
+}
+if (-not (Test-Path $localGeodataScript)) {
+  throw "Missing geodata updater: $localGeodataScript"
+}
+if (-not (Test-Path $localSubscriptionWorker)) {
+  throw "Missing subscription worker: $localSubscriptionWorker"
+}
+if (-not (Test-Path $localSubscriptionCandidate)) {
+  throw "Missing subscription candidate builder: $localSubscriptionCandidate"
+}
+if (-not (Test-Path $localSubscriptionRefresh)) {
+  throw "Missing subscription refresh script: $localSubscriptionRefresh"
+}
 if (-not (Test-Path $localXrayRelay)) {
   throw "Missing xray relay config: $localXrayRelay"
 }
@@ -134,16 +159,24 @@ Invoke-RouterCommand -Command "mkdir -p $RemoteApiDir"
 Invoke-RouterCommand -Command "mkdir -p $RemoteRuntimeDir"
 Invoke-RouterCommand -Command "mkdir -p /opt/etc/cron.1min"
 Invoke-RouterCommand -Command "mkdir -p /opt/etc/xray/configs"
+Invoke-RouterCommand -Command "mkdir -p /opt/etc/xray/dat"
 Invoke-RouterCommand -Command "mkdir -p /opt/etc/sing-box"
 Invoke-RouterCommand -Command "mkdir -p /opt/etc/ndm/netfilter.d"
 Invoke-RouterCommand -Command "opkg update >/dev/null 2>&1 || true"
 Invoke-RouterCommand -Command "opkg install uhttpd_kn >/dev/null 2>&1 || true"
 Invoke-RouterCommand -Command "opkg install conntrack >/dev/null 2>&1 || true"
 Invoke-RouterCommand -Command "opkg install tar gzip wget ca-bundle >/dev/null 2>&1 || true"
+Invoke-RouterCommand -Command "opkg install quickjs curl coreutils-base64 >/dev/null"
+Invoke-RouterCommand -Command "test -x /opt/bin/qjs && test -x /opt/bin/curl && test -x /opt/bin/base64"
 
 Send-RemoteFile -LocalPath $localApi -RemotePath "$RemoteApiDir/routing.cgi"
 Send-RemoteFile -LocalPath $localSelfHeal -RemotePath "$RemoteApiDir/xkeen-selfheal.sh"
 Send-RemoteFile -LocalPath $localRuntime -RemotePath "$RemoteApiDir/xkeen-runtime.sh"
+Send-RemoteFile -LocalPath $localGeodataWorker -RemotePath $RemoteGeodataWorker -Mode '644'
+Send-RemoteFile -LocalPath $localGeodataScript -RemotePath $RemoteGeodataScript
+Send-RemoteFile -LocalPath $localSubscriptionWorker -RemotePath $RemoteSubscriptionWorker -Mode '644'
+Send-RemoteFile -LocalPath $localSubscriptionCandidate -RemotePath $RemoteSubscriptionCandidate -Mode '644'
+Send-RemoteFile -LocalPath $localSubscriptionRefresh -RemotePath $RemoteSubscriptionRefresh
 # 02_relay.json и sing-box/xkeen.json — runtime-сгенерируемые файлы
 # (перезаписываются backend'ом из state.json при каждом Apply). Sample-файл
 # трогаем только если файла ещё нет на роутере (первая установка).
@@ -209,13 +242,12 @@ Invoke-RouterCommand -Command $installSingbox
 
 $patchXrayInit = @'
 XRAY_INIT="/opt/etc/init.d/S24xray"
-if [ -f "$XRAY_INIT" ] && grep -q 'ARGS="run -confdir /opt/etc/xray"' "$XRAY_INIT" 2>/dev/null && ! grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$XRAY_INIT" 2>/dev/null; then
+if [ -f "$XRAY_INIT" ] && grep -qE 'ARGS="run -confdir /opt/etc/(xray|\$PROCS)"' "$XRAY_INIT" 2>/dev/null && ! grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$XRAY_INIT" 2>/dev/null; then
   cp "$XRAY_INIT" "$XRAY_INIT.bak-antigoblin-confdir" 2>/dev/null || true
-  sed 's#ARGS="run -confdir /opt/etc/xray"#ARGS="run -confdir /opt/etc/xray/configs"#' "$XRAY_INIT" > "$XRAY_INIT.tmp" \
-    && cat "$XRAY_INIT.tmp" > "$XRAY_INIT" \
-    && rm -f "$XRAY_INIT.tmp" \
-    && chmod 755 "$XRAY_INIT"
+  sed -E 's#ARGS="run -confdir /opt/etc/(xray|\$PROCS)"#ARGS="run -confdir /opt/etc/xray/configs"#' "$XRAY_INIT" > "$XRAY_INIT.tmp" \
+    && chmod 755 "$XRAY_INIT.tmp" \
+    && mv "$XRAY_INIT.tmp" "$XRAY_INIT"
 fi
 '@
 Invoke-RouterCommand -Command $patchXrayInit
-Invoke-RouterCommand -Command "chmod 755 '$RemoteSelfhealLoop' '$RemoteSelfhealInit' '$RemoteSingboxInit' '$RemoteSysctlInit' '$RemoteInitScript' '$RemoteCronScript' '$RemoteUsbHook' '$RemoteNetfilterHook' && '$RemoteSysctlInit' start >/dev/null 2>&1 || true && '$RemoteSingboxInit' restart >/dev/null 2>&1 || true && '$RemoteSelfhealInit' restart >/dev/null 2>&1 || true && '$RemoteInitScript' restart >/dev/null 2>&1 || true"
+Invoke-RouterCommand -Command "chmod 755 '$RemoteSelfhealLoop' '$RemoteSelfhealInit' '$RemoteSingboxInit' '$RemoteSysctlInit' '$RemoteInitScript' '$RemoteCronScript' '$RemoteGeodataScript' '$RemoteSubscriptionRefresh' '$RemoteUsbHook' '$RemoteNetfilterHook' && '$RemoteSysctlInit' start >/dev/null 2>&1 || true && '$RemoteSingboxInit' restart >/dev/null 2>&1 || true && '$RemoteSelfhealInit' restart >/dev/null 2>&1 || true && '$RemoteInitScript' restart >/dev/null 2>&1 || true"
