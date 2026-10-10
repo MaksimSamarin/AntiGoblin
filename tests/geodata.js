@@ -5,7 +5,17 @@ const { spawnSync } = require("child_process");
 
 const repo = path.resolve(__dirname, "..");
 const worker = path.join(repo, "ui/xkeen-manager/backend/geodata.js");
+const appSource = fs.readFileSync(path.join(repo, "ui/xkeen-manager/app.js"), "utf8");
+const indexSource = fs.readFileSync(path.join(repo, "ui/xkeen-manager/index.html"), "utf8");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "antigoblin-geodata-"));
+
+if (!appSource.includes("const SINGBOX_APPLY_TIMEOUT_MS = 90000;")
+    || !/fetchWithTimeout\(SINGBOX_URL,[\s\S]*SINGBOX_APPLY_TIMEOUT_MS\)/.test(appSource)) {
+  throw new Error("sing-box Geo apply must allow the router-side QuickJS expansion to finish");
+}
+if (!indexSource.includes("app.js?v=92") || !indexSource.includes("styles.css?v=92")) {
+  throw new Error("Geo apply UI cache-buster was not updated");
+}
 
 function varint(value) {
   const bytes = [];
