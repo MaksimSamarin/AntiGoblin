@@ -170,8 +170,8 @@ touch /opt/var/log/xkeen-selfheal.log
 touch /opt/var/log/xkeen-health.log
 
 XKEEN_DESC_RE='description(([[:space:]]*[=:])|([[:space:]]+))[[:space:]]*"?xkeen($|[":,[:space:]])'
-if ! ndmc -c 'show ip policy' 2>/dev/null | grep -Eq "$XKEEN_DESC_RE"; then
-  WAN_IFACE="$(ndmc -c 'show interface' | /opt/bin/awk '
+if ! LD_LIBRARY_PATH= ndmc -c 'show ip policy' 2>/dev/null | grep -Eq "$XKEEN_DESC_RE"; then
+  WAN_IFACE="$(LD_LIBRARY_PATH= ndmc -c 'show interface' | /opt/bin/awk '
     /^Interface, name = / {
       iface=$4
       gsub(/"/, "", iface)
@@ -189,7 +189,7 @@ if ! ndmc -c 'show ip policy' 2>/dev/null | grep -Eq "$XKEEN_DESC_RE"; then
   fi
 
   NEXT_POLICY_NUM="$(
-    ndmc -c 'show running-config' | /opt/bin/awk '
+    LD_LIBRARY_PATH= ndmc -c 'show running-config' | /opt/bin/awk '
       /^ip policy Policy[0-9]+$/ {
         name=$3
         sub(/^Policy/, "", name)
@@ -211,12 +211,12 @@ if ! ndmc -c 'show ip policy' 2>/dev/null | grep -Eq "$XKEEN_DESC_RE"; then
   [ -n "$NEXT_POLICY_NUM" ] || NEXT_POLICY_NUM=42
   POLICY_NAME="Policy$NEXT_POLICY_NUM"
 
-  ndmc -c "ip policy $POLICY_NAME"
-  ndmc -c "ip policy $POLICY_NAME description xkeen"
-  ndmc -c "ip policy $POLICY_NAME permit global $WAN_IFACE"
+  LD_LIBRARY_PATH= ndmc -c "ip policy $POLICY_NAME"
+  LD_LIBRARY_PATH= ndmc -c "ip policy $POLICY_NAME description xkeen"
+  LD_LIBRARY_PATH= ndmc -c "ip policy $POLICY_NAME permit global $WAN_IFACE"
   saved=0
   for _try in 1 2 3; do
-    if ndmc -c "system configuration save" >/dev/null 2>&1; then saved=1; break; fi
+    if LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1; then saved=1; break; fi
     sleep 1
   done
   [ "$saved" = "1" ] || echo 'WARN: system configuration save failed after 3 tries; policy may not survive reboot.'

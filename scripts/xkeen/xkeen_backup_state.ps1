@@ -29,7 +29,7 @@ $commands = @(
   "sh -c 'ip route show table all > /tmp/xkeen-backup-$timestamp/ip-route-all.txt'",
   "sh -c 'iptables -t mangle -S > /tmp/xkeen-backup-$timestamp/iptables-mangle.txt'",
   "sh -c 'iptables -t nat -S > /tmp/xkeen-backup-$timestamp/iptables-nat.txt 2>/dev/null || true'",
-  "ndmc -c 'show version' > /tmp/xkeen-backup-$timestamp/show-version.txt",
+  "LD_LIBRARY_PATH= ndmc -c 'show version' > /tmp/xkeen-backup-$timestamp/show-version.txt",
   "cd /tmp && /opt/bin/tar -czf xkeen-backup-$timestamp.tar.gz xkeen-backup-$timestamp",
   "ls -lh /tmp/xkeen-backup-$timestamp.tar.gz"
 )

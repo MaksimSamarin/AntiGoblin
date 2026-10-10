@@ -584,7 +584,7 @@ emit_stack_info() {
   GW="$(ip route show default 2>/dev/null | /opt/bin/awk '/^default/{print $3; exit}')"
   LAN_NET="$(ip route show 2>/dev/null | /opt/bin/awk '/scope link/ && /^(192\.168\.|10\.|172\.)/ {print $1; exit}')"
 
-  POLICY_BLOCK="$(ndmc -c 'show ip policy' 2>/dev/null)"
+  POLICY_BLOCK="$(LD_LIBRARY_PATH= ndmc -c 'show ip policy' 2>/dev/null)"
   # Format A (newer): one-line "policy, name = Policy42, description = xkeen:Home"
   # Format B (older): multi-line with separate "name: Policy42" / "description: xkeen:Home"
   # Use the single source of truth from xkeen-runtime.sh to guarantee that

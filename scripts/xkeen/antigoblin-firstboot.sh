@@ -124,7 +124,7 @@ if [ ! -f "$DONE_FLAG" ]; then
   # seriously wrong and we should bail rather than hang init forever.
   i=0
   while [ $i -lt 20 ]; do
-    if ndmc -c 'show version' >/dev/null 2>&1; then
+    if LD_LIBRARY_PATH= ndmc -c 'show version' >/dev/null 2>&1; then
       log "NDM ready after $((i * 2))s"
       break
     fi

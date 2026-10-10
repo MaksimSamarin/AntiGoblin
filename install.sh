@@ -225,14 +225,14 @@ ensure_xkeen_policy() {
   # XKEEN_POLICY_DESC_RE — keep them in sync (an earlier install.sh copy
   # required a mandatory space and silently missed Format B).
   DESC_MATCH='description(([[:space:]]*[=:])|([[:space:]]+))[[:space:]]*"?xkeen($|[":,[:space:]])'
-  if ndmc -c 'show ip policy' 2>/dev/null | grep -Eq "$DESC_MATCH"; then
+  if LD_LIBRARY_PATH= ndmc -c 'show ip policy' 2>/dev/null | grep -Eq "$DESC_MATCH"; then
     log "Keenetic policy 'xkeen' already exists"
     return 0
   fi
 
   log "Creating Keenetic policy 'xkeen'"
 
-  WAN_IFACE="$(ndmc -c 'show interface' | /opt/bin/awk '
+  WAN_IFACE="$(LD_LIBRARY_PATH= ndmc -c 'show interface' | /opt/bin/awk '
     /^Interface, name = / {
       iface=$4
       gsub(/"/, "", iface)
@@ -247,7 +247,7 @@ ensure_xkeen_policy() {
   [ -n "$WAN_IFACE" ] || die "Failed to detect active WAN interface. Add the policy manually."
 
   NEXT_POLICY_NUM="$(
-    ndmc -c 'show running-config' | /opt/bin/awk '
+    LD_LIBRARY_PATH= ndmc -c 'show running-config' | /opt/bin/awk '
       /^ip policy Policy[0-9]+$/ {
         name=$3
         sub(/^Policy/, "", name)
@@ -269,15 +269,15 @@ ensure_xkeen_policy() {
   [ -n "$NEXT_POLICY_NUM" ] || NEXT_POLICY_NUM=42
   POLICY_NAME="Policy$NEXT_POLICY_NUM"
 
-  ndmc -c "ip policy $POLICY_NAME"
-  ndmc -c "ip policy $POLICY_NAME description xkeen"
-  ndmc -c "ip policy $POLICY_NAME permit global $WAN_IFACE"
+  LD_LIBRARY_PATH= ndmc -c "ip policy $POLICY_NAME"
+  LD_LIBRARY_PATH= ndmc -c "ip policy $POLICY_NAME description xkeen"
+  LD_LIBRARY_PATH= ndmc -c "ip policy $POLICY_NAME permit global $WAN_IFACE"
   # Persist to startup-config. Retry a few times: if another process is
   # writing config, first save can fail transiently and we'd silently lose
   # the policy after reboot.
   saved=0
   for _try in 1 2 3; do
-    if ndmc -c "system configuration save" >/dev/null 2>&1; then
+    if LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1; then
       saved=1
       break
     fi
@@ -514,7 +514,7 @@ start_services() {
 }
 
 print_summary() {
-  ROUTER_IP="$(ndmc -c 'show interface' 2>/dev/null | /opt/bin/awk '
+  ROUTER_IP="$(LD_LIBRARY_PATH= ndmc -c 'show interface' 2>/dev/null | /opt/bin/awk '
     /^Interface, name = / { iface=$4; gsub(/"/, "", iface); next }
     iface == "Bridge0" && /address:[[:space:]]+/ { print $2; exit }
   ')"

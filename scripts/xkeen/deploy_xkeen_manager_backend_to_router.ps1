@@ -209,12 +209,11 @@ Invoke-RouterCommand -Command $installSingbox
 
 $patchXrayInit = @'
 XRAY_INIT="/opt/etc/init.d/S24xray"
-if [ -f "$XRAY_INIT" ] && grep -q 'ARGS="run -confdir /opt/etc/xray"' "$XRAY_INIT" 2>/dev/null && ! grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$XRAY_INIT" 2>/dev/null; then
+if [ -f "$XRAY_INIT" ] && grep -qE 'ARGS="run -confdir /opt/etc/(xray|\$PROCS)"' "$XRAY_INIT" 2>/dev/null && ! grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$XRAY_INIT" 2>/dev/null; then
   cp "$XRAY_INIT" "$XRAY_INIT.bak-antigoblin-confdir" 2>/dev/null || true
-  sed 's#ARGS="run -confdir /opt/etc/xray"#ARGS="run -confdir /opt/etc/xray/configs"#' "$XRAY_INIT" > "$XRAY_INIT.tmp" \
-    && cat "$XRAY_INIT.tmp" > "$XRAY_INIT" \
-    && rm -f "$XRAY_INIT.tmp" \
-    && chmod 755 "$XRAY_INIT"
+  sed -E 's#ARGS="run -confdir /opt/etc/(xray|\$PROCS)"#ARGS="run -confdir /opt/etc/xray/configs"#' "$XRAY_INIT" > "$XRAY_INIT.tmp" \
+    && chmod 755 "$XRAY_INIT.tmp" \
+    && mv "$XRAY_INIT.tmp" "$XRAY_INIT"
 fi
 '@
 Invoke-RouterCommand -Command $patchXrayInit
