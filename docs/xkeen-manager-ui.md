@@ -61,6 +61,8 @@ Radio-кнопка в панели «Активный ключ». Активны
 
 Обновление загружает оба файла и опубликованные SHA-256 во временный каталог, проверяет текущий Xray-конфиг с новыми базами, атомарно заменяет пару и оставляет одну backup-версию. Cron повторяет обновление раз в 7 дней только когда Geo-правила реально используются.
 
+Для UDP `geoip:` компилируется в persistent cache и загружается в kernel `ipset`; `geosite:` в selective-профиле обрабатывается отдельным QUIC-inbound `:61222` только для UDP/443. Geo-правила не включают общий UDP catch-all. При явном full-tunnel весь UDP идёт через `:61221` одним правилом без развёрнутой VPN GeoSite-таблицы.
+
 Защита слабых моделей: один активный профиль не может развернуть больше 100 000 Geo-записей или создать больше 16 MiB sing-box rules JSON. Превышение лимита останавливает apply до изменения live-конфига.
 
 ### `Сохранить`
@@ -148,9 +150,9 @@ UI использует логин и пароль от веб-интерфей�
 
 - Устройства находятся в политике `xkeen` (Keenetic UI → «Приоритеты подключений»).
 - Есть hook `PREROUTING → xkeen` в table `nat` (для TCP).
-- В mangle-PREROUTING в **самом конце** висит TPROXY-jump для UDP-route (проверяет `xkeen_udp_route` ipset).
+- В mangle-PREROUTING в конце висит targeted TPROXY-jump `xkeen_udp_route`; при selective GeoSite последним идёт `xkeen_quic_route` только для UDP/443.
 - `xray` слушает `:61219` (dokodemo TCP), `:61080` (socks-in TCP+UDP), `:62640` (SS-relay TCP+UDP).
-- `sing-box` слушает `:61221` (TPROXY UDP), `:61225` (mixed для hy2 bridge).
+- `sing-box` слушает `:61221` (targeted/full-tunnel UDP), `:61222` (selective QUIC), `:61225` (mixed для hy2 bridge).
 - socks-in inbound имеет `settings.ip` = LAN-IP роутера (автоподставляется при apply/restart).
 - Локалка, discovery и RFC1918-подсети идут через `RETURN` до `xray`.
 

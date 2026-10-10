@@ -1509,7 +1509,8 @@ async function renderHealth() {
       fdLabel || null
     ] },
     { name: "sing-box", svc: services.singbox, sev: services.singbox?.running ? "ok" : "critical", extras: [
-      services.singbox?.listenUdp ? "udp 61221" : null
+      services.singbox?.listenUdp ? "udp 61221" : null,
+      services.singbox?.listenQuicUdp ? "quic 61222" : null
     ] },
     { name: "self-heal", svc: services.selfheal, sev: services.selfheal?.running ? "ok" : "critical", extras: [] }
   ];
@@ -3140,6 +3141,7 @@ function deleteSubscription(subId) {
 // forward TCP traffic into when the active proxy is hysteria2. xray treats
 // the relay as a normal SOCKS5 upstream; sing-box does the real tunneling.
 const SINGBOX_XRAY_RELAY_PORT = 61225;
+const SINGBOX_QUIC_TPROXY_PORT = 61222;
 
 function buildOutboundsDocument(profile) {
   const config = getActiveProxyConfig(profile);
@@ -3215,6 +3217,13 @@ function buildSingboxDocument(profile) {
         tag: "xkeen-udp-tproxy",
         listen: "0.0.0.0",
         listen_port: 61221,
+        network: "udp"
+      },
+      {
+        type: "tproxy",
+        tag: "xkeen-quic-tproxy",
+        listen: "0.0.0.0",
+        listen_port: SINGBOX_QUIC_TPROXY_PORT,
         network: "udp"
       }
     ],

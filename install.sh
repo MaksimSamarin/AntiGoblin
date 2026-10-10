@@ -387,6 +387,27 @@ deploy_sources() {
     fi
   fi
 
+  # Upgrade path for selective GeoSite QUIC routing. Existing sing-box
+  # configs predate the dedicated UDP/443 TPROXY inbound; add it without
+  # touching the active proxy outbound or any user-specific HY2 settings.
+  if command -v jq >/dev/null 2>&1 && [ -f /opt/etc/sing-box/xkeen.json ]; then
+    if ! jq -e '.inbounds[]? | select(.tag == "xkeen-quic-tproxy" or .listen_port == 61222)' \
+        /opt/etc/sing-box/xkeen.json >/dev/null 2>&1; then
+      TMP_SB=/opt/etc/sing-box/xkeen.json.tmp-quic-merge
+      if jq '.inbounds += [{type:"tproxy",tag:"xkeen-quic-tproxy",listen:"0.0.0.0",listen_port:61222,network:"udp"}]' \
+          /opt/etc/sing-box/xkeen.json > "$TMP_SB" 2>/dev/null \
+          && jq -e '.' "$TMP_SB" >/dev/null 2>&1; then
+        mv "$TMP_SB" /opt/etc/sing-box/xkeen.json
+        chmod 644 /opt/etc/sing-box/xkeen.json
+        log "Merged selective QUIC inbound into existing sing-box config"
+      else
+        rm -f "$TMP_SB"
+      fi
+    else
+      log "Skipped QUIC inbound merge: sing-box already declares tag=xkeen-quic-tproxy or port=61222"
+    fi
+  fi
+
   # Persist UI port for the init script (source of truth for :$UI_PORT).
   printf 'PORT=%s\n' "$UI_PORT" > /opt/etc/antigoblin.conf
   chmod 644 /opt/etc/antigoblin.conf

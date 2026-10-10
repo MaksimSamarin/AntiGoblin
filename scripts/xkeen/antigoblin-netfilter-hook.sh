@@ -1,13 +1,13 @@
 #!/bin/sh
 # NDM netfilter.d hook. Runs whenever KeeneticOS reloads netfilter (WAN
 # reconnect, WiFi client join/leave, firewall changes in UI, etc). NDM
-# often rebuilds mangle PREROUTING and our TPROXY-tail rule for UDP-route
-# gets bumped out of the last position — pushing the first UDP packet of
+# often rebuilds mangle PREROUTING and our targeted/QUIC TPROXY tail rules
+# get removed or reordered — pushing the first UDP packet of
 # a Discord voice call through WAN direct, which the server sees as a
 # NAT flap and drops the call for 1-3 seconds.
 #
-# This hook makes the recovery instant (~5-10ms) instead of waiting up to
-# 15s for the next self-heal cycle. It only re-adds the PREROUTING jump;
+# This hook makes the recovery instant instead of waiting up to 15s for the
+# next self-heal cycle. It only re-adds the required PREROUTING jumps;
 # it does NOT rebuild ipsets (self-heal owns that).
 #
 # NDM invokes: /opt/etc/ndm/netfilter.d/<name>.sh with env vars including
@@ -39,21 +39,29 @@ if [ -z "$MARK" ]; then
 fi
 [ -n "$MARK" ] || exit 0
 
-ipset list "$XKEEN_UDP_ROUTE_SET" -terse >/dev/null 2>&1 || exit 0
-
-LAST_RULE="$(iptables -t mangle -S PREROUTING 2>/dev/null | tail -n 1)"
-case "$LAST_RULE" in
-  *xkeen_udp_route*) exit 0 ;;
-esac
-
 xkeen_delete_jumps mangle PREROUTING xkeen_udp_route
-if ! iptables -t mangle -A PREROUTING \
-  -m connmark --mark "0x$MARK" \
-  -m conntrack ! --ctstate INVALID \
-  -p udp \
-  -m set --match-set "$XKEEN_UDP_ROUTE_SET" dst \
-  -j xkeen_udp_route 2>/dev/null; then
-  xkeen_runtime_log "netfilter_hook: iptables_fail PREROUTING xkeen_udp_route (mark=0x$MARK)"
+xkeen_delete_jumps mangle PREROUTING xkeen_quic_route
+
+if ipset list "$XKEEN_UDP_ROUTE_SET" -terse >/dev/null 2>&1 \
+    && xkeen_ipset_has_members "$XKEEN_UDP_ROUTE_SET"; then
+  if ! iptables -t mangle -A PREROUTING \
+    -m connmark --mark "0x$MARK" \
+    -m conntrack ! --ctstate INVALID \
+    -p udp \
+    -m set --match-set "$XKEEN_UDP_ROUTE_SET" dst \
+    -j xkeen_udp_route 2>/dev/null; then
+    xkeen_runtime_log "netfilter_hook: iptables_fail PREROUTING xkeen_udp_route (mark=0x$MARK)"
+  fi
+fi
+
+if xkeen_quic_config_enabled; then
+  if ! iptables -t mangle -A PREROUTING \
+    -m connmark --mark "0x$MARK" \
+    -m conntrack ! --ctstate INVALID \
+    -p udp --dport 443 \
+    -j xkeen_quic_route 2>/dev/null; then
+    xkeen_runtime_log "netfilter_hook: iptables_fail PREROUTING xkeen_quic_route (mark=0x$MARK)"
+  fi
 fi
 
 exit 0

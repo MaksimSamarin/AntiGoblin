@@ -381,7 +381,7 @@ ANTIGOBLIN_FORCE=1 sh install.sh
   - GitHub: https://api.github.com/meta
 - **[dnscheck.tools](https://dnscheck.tools/)** — посмотреть, на какие IP резолвится домен у разных DNS-резолверов. Помогает при отладке «работает у меня, не работает на роутере».
 
-Практическое правило: если сервис только TCP (сайт, API) — обычно хватает домена или `geosite`. Для UDP/QUIC/RTC добавляй и `geoip`, если подходящая IP-категория существует. При наличии Geo-правил AntiGoblin передаёт весь UDP устройств политики в sing-box, который sniff-ит QUIC и применяет те же группы; трафик fallback=`direct` остаётся прямым.
+Практическое правило: если сервис только TCP (сайт, API) — обычно хватает домена или `geosite`. Для UDP/RTC добавляй `geoip` или точечный CIDR. GeoIP разворачивается в быстрый kernel-ipset, а GeoSite перехватывает только QUIC на UDP/443 через отдельный inbound sing-box. Остальной UDP не попадает в userspace. В режиме полного туннеля весь UDP идёт через VPN одним простым catch-all без перебора Geo-категорий.
 
 ## Структура проекта
 
@@ -416,7 +416,7 @@ UI и backend:
 
 Bypass собирается только из UI-групп с outbound `bypass`. Обычные домены и CIDR попадают в runtime `xkeen_bypass` и обходят `xray` через `RETURN`. `geosite:`/`geoip:` остаются в Xray/sing-box, где категория сопоставляется до отправки в `direct`.
 
-UDP-маршрутизация привязана к outbound группы автоматически. Без Geo-правил домены/CIDR VPN-групп попадают в `xkeen_udp_route`, как раньше. Если активный профиль использует `geosite:` или `geoip:`, `xkeen_udp_route` принимает весь IPv4 UDP устройств политики, а sing-box после QUIC sniff выбирает `proxy` или `direct` по порядку тех же UI-групп. Это сохраняет GeoSite/GeoIP-семантику для UDP и не меняет профили без Geo-правил.
+UDP-маршрутизация привязана к outbound группы автоматически. Обычные домены/CIDR и развёрнутые `geoip:` попадают в `xkeen_udp_route` и матчятся ядром. Для `geosite:` в selective-профиле отдельная цепочка принимает только UDP/443 на `:61222`, где sing-box sniff-ит QUIC; несовпавший QUIC возвращается в direct. Полный туннель использует обычный `:61221` catch-all и не материализует VPN GeoSite-правила, потому что весь трафик уже направлен в один outbound.
 
 Общая сборка runtime живет в `xkeen-runtime.sh`: и apply из UI, и self-heal используют один и тот же код для `iptables`/`ipset`.
 
@@ -464,8 +464,10 @@ MARK="0x$(cat /tmp/xkeen-mark 2>/dev/null)"
 case "$MARK" in 0x) MARK=0xffffaab ;; esac
 iptables -t nat -D PREROUTING -m connmark --mark "$MARK" -m conntrack ! --ctstate INVALID -j xkeen 2>/dev/null || true
 iptables -t mangle -D PREROUTING -p udp -m connmark --mark "$MARK" -m conntrack ! --ctstate INVALID -m set --match-set xkeen_udp_route dst -j xkeen_udp_route 2>/dev/null || true
+iptables -t mangle -D PREROUTING -p udp --dport 443 -m connmark --mark "$MARK" -m conntrack ! --ctstate INVALID -j xkeen_quic_route 2>/dev/null || true
 iptables -t nat -F xkeen 2>/dev/null; iptables -t nat -X xkeen 2>/dev/null
 iptables -t mangle -F xkeen_udp_route 2>/dev/null; iptables -t mangle -X xkeen_udp_route 2>/dev/null
+iptables -t mangle -F xkeen_quic_route 2>/dev/null; iptables -t mangle -X xkeen_quic_route 2>/dev/null
 ipset destroy xkeen_udp_route 2>/dev/null; ipset destroy xkeen_bypass 2>/dev/null
 
 # 4. Удалить UI, backend, конфиг порта и логи
@@ -546,7 +548,7 @@ Install-Module Posh-SSH -Scope CurrentUser -Force
 | Компонент | Роль в `AntiGoblin` | Лицензия |
 |-----------|----------------------|----------|
 | [XTLS/Xray-core](https://github.com/XTLS/Xray-core) | TCP transparent proxy на `:61219`. Outbound зависит от активного ключа: VLESS/VMess через любой из `tcp`/`ws`/`grpc`/`xhttp` поверх `reality`/`tls`/`none`; для `hysteria2` xray ходит SOCKS5'ом в локальный sing-box. Локальный Shadowsocks-relay для xray-протокольных UDP. | MPL-2.0 |
-| [SagerNet/sing-box](https://github.com/SagerNet/sing-box) | TPROXY UDP inbound на `:61221` для voice/RTC-трафика. Для xray-протокольных ключей релит UDP в xray на `:62640`; для `hysteria2` хостит mixed-inbound на `127.0.0.1:61225` для TCP-моста от xray и сам терминирует hysteria2-outbound. | GPL-3.0 |
+| [SagerNet/sing-box](https://github.com/SagerNet/sing-box) | TPROXY UDP inbound на `:61221` для точечных IP/voice и full-tunnel, отдельный `:61222` для selective QUIC/GeoSite. Для xray-протокольных ключей релит UDP в xray на `:62640`; для `hysteria2` хостит mixed-inbound на `127.0.0.1:61225` для TCP-моста и сам терминирует hysteria2-outbound. | GPL-3.0 |
 | [Entware](https://github.com/Entware/Entware) | Linux-окружение `/opt` на роутере: `opkg`, базовые утилиты, init-инфраструктура. | GPL-2.0 |
 | [uhttpd_kn](https://github.com/Entware/Entware/tree/master/sources/uhttpd_kn) | HTTP-сервер, на котором живёт UI на порту `:8899`. | ISC |
 | [iptables](https://www.netfilter.org/projects/iptables/) + [ipset](https://ipset.netfilter.org/) | Mark-based selective routing для устройств политики `xkeen`. | GPL-2.0 |

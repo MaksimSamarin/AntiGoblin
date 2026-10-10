@@ -83,9 +83,9 @@ curl.exe --noproxy "*" -4 -s https://platform.claude.com/cdn-cgi/trace
 
 ### Решение
 
-Положить домены/CIDR сервиса в группу с outbound `vless-reality`. Self-heal сам добавит их в `xkeen_udp_route`, и QUIC-трафик начнет проходить через VPN. Отдельного флага «UDP через VPN» нет — UDP идет в VPN автоматически за outbound группы.
+Положить домены/`geosite:` сервиса в группу с outbound `vless-reality`. Selective GeoSite добавит только policy-marked UDP/443 в `xkeen_quic_route` → sing-box `:61222`; несовпавший QUIC останется direct. CIDR и `geoip:` загружаются в kernel `xkeen_udp_route` и идут через `:61221`.
 
-Для Cloudflare, Discord и подобных лучше добавлять не только домены, но и CIDR-диапазоны: у QUIC-пакетов не всегда есть SNI, по которому правило по домену сматчится.
+Для IP-only/RTC трафика добавляй точечный CIDR или `geoip:`. Не добавляй целиком общие Cloudflare/Google Cloud диапазоны без необходимости: они захватывают чужой UDP и создают лишнюю нагрузку.
 
 ## 5. Discord voice плавает по задержке или вообще не подключается
 
@@ -96,14 +96,14 @@ curl.exe --noproxy "*" -4 -s https://platform.claude.com/cdn-cgi/trace
 
 ### Причина
 
-Discord voice идет по UDP RTC к Cloudflare-CDN (`104.29.x.x:19300-19400` и т.п.). Если эти IP не в `xkeen_udp_route`, голос остается на direct — у провайдера это часто упирается в плохие маршруты или фильтры.
+Discord voice получает от control-соединения голый IP voice-сервера и общается с ним по UDP. GeoSite/SNI здесь недостаточно: нужный адрес должен попасть в точечный CIDR/ipset. Общий UDP catch-all использовать нельзя — он добавляет userspace-jitter всем приложениям политики.
 
 ### Решение
 
 В UI создать (или включить) группу для Discord с outbound `vless-reality`. В нее добавить:
 
 - домены `discord.com`, `discord.gg`, `discordapp.com`, `discordapp.net`;
-- CIDR Discord/Cloudflare RTC. Готовые свежие списки можно взять в [iplist.opencck.org](https://iplist.opencck.org/) (раздел `discord`).
+- точечные CIDR Discord voice (например, подтверждённый диапазон, наблюдаемый в текущем звонке). Общие CDN/cloud-префиксы добавлять только после проверки владельца и фактического трафика.
 
 Транспортный путь под капотом:
 

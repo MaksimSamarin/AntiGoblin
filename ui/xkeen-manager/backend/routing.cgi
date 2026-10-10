@@ -327,6 +327,8 @@ emit_health() {
   netstat -lnpu 2>/dev/null | grep -q '127.0.0.1:62640 ' && XRAY_RELAY_OK=1
   SB_LISTEN_OK=0
   netstat -lnpu 2>/dev/null | grep -q ':61221 ' && SB_LISTEN_OK=1
+  SB_QUIC_LISTEN_OK=0
+  netstat -lnpu 2>/dev/null | grep -q ':61222 ' && SB_QUIC_LISTEN_OK=1
 
   # UDP route is only required when the active profile has at least one
   # non-bypass/non-direct group enabled. If not, the ipset, the mangle
@@ -345,7 +347,11 @@ emit_health() {
   # tri-state so it can paint "na" grey ("not required") instead of red.
   if [ "$UDP_ROUTE_NEEDED" = "1" ]; then
     TPROXY_AT_END="fail"
-    iptables -t mangle -S PREROUTING 2>/dev/null | tail -1 | grep -q 'xkeen_udp_route' && TPROXY_AT_END="ok"
+    if type xkeen_quic_config_enabled >/dev/null 2>&1 && xkeen_quic_config_enabled 2>/dev/null; then
+      iptables -t mangle -S PREROUTING 2>/dev/null | tail -1 | grep -q 'xkeen_quic_route' && TPROXY_AT_END="ok"
+    else
+      iptables -t mangle -S PREROUTING 2>/dev/null | tail -1 | grep -q 'xkeen_udp_route' && TPROXY_AT_END="ok"
+    fi
     IP_RULE_MASKED="fail"
     ip rule show 2>/dev/null | grep -qE "fwmark ${UDP_MARK_HEX}(/${UDP_MARK_HEX})? (lookup|table) ${UDP_TABLE}" && IP_RULE_MASKED="ok"
     UDP_IPSET_OK="fail"
@@ -483,6 +489,7 @@ emit_health() {
     --argjson sb_run "$SB_RUN" \
     --arg sb_pid "${SB_PID:-}" \
     --argjson sb_listen "$SB_LISTEN_OK" \
+    --argjson sb_quic_listen "$SB_QUIC_LISTEN_OK" \
     --argjson sh_run "$SH_RUN" \
     --arg sh_pid "${SELFHEAL_PID:-}" \
     --arg tproxy_end "$TPROXY_AT_END" \
@@ -508,7 +515,7 @@ emit_health() {
       healthStatus: $health_status,
       services: {
         xray:    { running: $xray_run, pid: $xray_pid, listenTcp: ($xray_tcp == 1), listenRelayUdp: ($xray_relay == 1) },
-        singbox: { running: $sb_run, pid: $sb_pid, listenUdp: ($sb_listen == 1) },
+        singbox: { running: $sb_run, pid: $sb_pid, listenUdp: ($sb_listen == 1), listenQuicUdp: ($sb_quic_listen == 1) },
         selfheal:{ running: $sh_run, pid: $sh_pid }
       },
       checks: {
@@ -705,7 +712,7 @@ emit_stack_info() {
       versions: { xray: $xray_ver, singbox: $sb_ver, kernel: $kernel, hostname: $hostname, uptimeSec: $uptime_sec },
       vpn:      { host: $vpn_host, port: $vpn_port, sni: $vpn_sni, exitIp: $vpn_ip },
       network:  { wanIface: $wan_iface, wanIp: $wan_ip, gateway: $gw, lanNet: $lan_net },
-      xkeen:    { policyName: $policy_name, policyDescription: $policy_desc, mark: $xkeen_mark, tproxyUdp: 61221, redirectTcp: 61219, ssRelay: "127.0.0.1:62640" },
+      xkeen:    { policyName: $policy_name, policyDescription: $policy_desc, mark: $xkeen_mark, tproxyUdp: 61221, tproxyQuic: 61222, redirectTcp: 61219, ssRelay: "127.0.0.1:62640" },
       runtime:  { selfhealIntervalSec: 15, logRotateInterval: "daily", backupRetention: 5, fdWarn: 400, fdCritical: 600 },
       resources:{ memAvailKb: $mem_avail_kb, memTotalKb: $mem_total_kb, conntrackCount: $ct_count, conntrackMax: $ct_max, xrayFd: $xray_fd, xrayFdLimit: $xray_fd_limit, diskTotalKb: $disk_total_kb, diskUsedKb: $disk_used_kb, diskAvailKb: $disk_avail_kb, diskMount: $disk_mount }
     }')"

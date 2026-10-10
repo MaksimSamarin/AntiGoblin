@@ -21,10 +21,11 @@
 │ - адреса из ipset xkeen_bypass -> RETURN                    │
 │ - остальной TCP -> REDIRECT 61219 (xray)                    │
 │ - UDP к адресам из ipset xkeen_udp_route -> TPROXY 61221    │
+│ - selective QUIC UDP/443 -> TPROXY 61222                    │
 └─────┬───────────────────────────────────┬──────────────────┘
       │ TCP                               │ UDP
 ┌─────▼──────────────────────┐  ┌─────────▼─────────────┐
-│ xray (61219, 62640)         │  │ sing-box (61221)      │
+│ xray (61219, 62640)         │  │ sing-box (61221/61222)│
 │ - dokodemo-door TCP 61219   │  │ - tproxy UDP 61221    │
 │ - shadowsocks relay 62640   │  │ - SS outbound to      │
 │ - vless-reality outbound    │  │   127.0.0.1:62640     │
@@ -67,10 +68,11 @@ RETURN  fallback
 
 ```text
 PREROUTING  UDP, dst ∈ xkeen_udp_route -> TPROXY :61221 (sing-box)
+PREROUTING  selective GeoSite, UDP/443 -> TPROXY :61222 (sing-box QUIC sniff)
             всё остальное UDP -> direct (никаких хуков нет)
 ```
 
-`sing-box` на :61221 принимает TPROXY-UDP и проксирует его в локальный xray Shadowsocks-relay (`127.0.0.1:62640`). Уже оттуда xray по тегу inbound отправляет UDP в outbound `vless-reality`.
+`sing-box` на :61221 принимает точечно выбранный UDP (обычные CIDR, DNS-результаты и GeoIP из kernel-ipset) и проксирует его в локальный xray Shadowsocks-relay (`127.0.0.1:62640`). Inbound `:61222` принимает только selective UDP/443, sniff-ит QUIC SNI и применяет GeoSite; несовпавший трафик выходит direct.
 
 Эта схема воспроизводит локальный путь `v2rayN` (TUN → SS-relay → xray VLESS) и стабильно работает для realtime-UDP, в т.ч. Discord voice. Прямой путь `xray TPROXY → vless-reality` retired как нерабочий: для realtime-UDP он давал стабильный 5000 мс ping.
 
@@ -86,7 +88,7 @@ PREROUTING  UDP, dst ∈ xkeen_udp_route -> TPROXY :61221 (sing-box)
 
 Отдельного флага «UDP через VPN» у группы нет: UDP идёт в VPN автоматически за outbound группы.
 
-При наличии `geosite:`/`geoip:` runtime переводит `xkeen_udp_route` в catch-all для помеченных политикой устройств. Backend разворачивает выбранные protobuf-категории в правила sing-box (`domain`, `domain_suffix`, `domain_keyword`, `domain_regex`, `ip_cidr`), добавляет QUIC sniff и сохраняет порядок UI-групп. Профили без Geo-правил продолжают использовать выборочный destination-ipset.
+`geoip:` разворачивается один раз при apply/обновлении базы и атомарно загружается в kernel-ipset; sing-box не перебирает тысячи IP-префиксов на каждом пакете. `geosite:` разворачивается только в доменные правила для QUIC-inbound `:61222`. Catch-all включается исключительно при явном full-tunnel (`fallback=vless-reality` или catch-all VPN-группа) и остаётся компактным.
 
 `bypass` и `direct` — **не одно и то же**. `bypass` — это `RETURN` ещё в `iptables`, поток вообще не доходит до `xray`. `direct` — поток вошёл в `xray`, но был выпущен наружу без VPN. Для локалки, discovery и части IoT cloud-сценариев нужен именно `bypass`, а не `direct`.
 
@@ -142,7 +144,7 @@ KeeneticOS при некоторых событиях (WAN reconnect, WiFi clien
 - проверяет, что политика `xkeen` существует — если её удалили в Keenetic UI, создаёт заново как `Policy42+`;
 - проверяет, что `xray` жив, слушает `61219`, имеет приемлемый `fd`/`conntrack`/память;
 - проверяет, что `PREROUTING -> xkeen` на месте, и при необходимости пересобирает цепочку;
-- проверяет, что `sing-box` слушает `61221`, если в UI есть хотя бы одна группа с outbound `vless-reality`;
+- проверяет `61221`, а для selective GeoSite также QUIC-inbound `61222`;
 - раз в ~5 минут пересобирает `xkeen_bypass` и `xkeen_udp_route` (DNS-имена могут резолвиться в новые IP) через `ipset swap` — без рестарта `xray`;
 - пишет health-snapshot в `/opt/var/log/xkeen-health.log`;
 - пишет действия в `/opt/var/log/xkeen-selfheal.log`.
@@ -157,7 +159,7 @@ KeeneticOS при некоторых событиях (WAN reconnect, WiFi clien
 ## Что больше не часть live-архитектуры
 
 - `xkeen_udp` (общий UDP-перехват всей политики) — ломал игры и IoT.
-- `xkeen_quic` (отдельный блокатор UDP/443) — перешел в общий `xkeen_udp_route` за outbound группы.
+- старый `xkeen_quic`-блокатор retired; новая `xkeen_quic_route` — отдельный selective TPROXY-путь UDP/443 с fallback direct.
 - Прямой xray TPROXY UDP на 61220 → vless-reality — заменен на `sing-box → SS-relay → xray VLESS`.
 - Seed-файлы `bypass-domains.txt` / `bypass-cidrs.txt` — единственным источником истины является `xkeen-ui-state.json`.
 - Live-снапшоты роутера в продуктовой части репозитория.
