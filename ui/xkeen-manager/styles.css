@@ -277,6 +277,21 @@ button.danger-solid {
 
 .danger { color: #ffd3d3; }
 .group-card { border: 1px solid var(--line); border-radius: 20px; background: rgba(7,15,24,0.26); padding: 16px; margin-bottom: 14px; }
+.geodata-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(9, 20, 31, 0.52);
+}
+.geodata-status { margin-top: 4px; color: var(--muted); font-size: 13px; }
+.geodata-status.ok { color: var(--accent); }
+.geodata-status.error { color: #ff9080; }
+.geodata-hint { margin-top: 5px; color: var(--muted); font-size: 12px; }
 .group-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; margin-bottom: 14px; }
 .group-head-main { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
 .group-head-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
@@ -966,6 +981,8 @@ code { color: var(--accent-2); }
 }
 
 @media (max-width: 760px) {
+  .geodata-card { align-items: stretch; flex-direction: column; }
+  .geodata-card button { width: 100%; }
   .page { padding: 18px 14px 28px; }
   .hero-brand {
     grid-template-columns: 1fr;
@@ -1110,6 +1127,25 @@ code { color: var(--accent-2); }
   margin-top: 6px;
   font-size: 12px;
   color: #ff9080;
+}
+
+.subscription-auto-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 8px 0 0;
+  color: var(--muted, #8aa);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.subscription-auto-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  appearance: auto;
+  -webkit-appearance: checkbox;
 }
 
 .card-actions {

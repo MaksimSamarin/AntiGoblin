@@ -61,6 +61,8 @@ const HEALTH_URL = "./api/routing.cgi?kind=health";
 const LOGS_URL = "./api/routing.cgi?kind=logs";
 const RESTART_SVC_URL = "./api/routing.cgi?kind=restart-svc";
 const STACK_INFO_URL = "./api/routing.cgi?kind=stack-info";
+const GEODATA_STATUS_URL = "./api/routing.cgi?kind=geodata-status";
+const GEODATA_UPDATE_URL = "./api/routing.cgi?kind=geodata-update";
 const MUX_MODES = new Set(["off", "xudp"]);
 const MUX_UDP443_MODES = new Set(["reject", "skip", "allow"]);
 
@@ -123,8 +125,17 @@ const LOCALES = {
     remove: "\u0423\u0434\u0430\u043b\u0438\u0442\u044c",
     comment: "\u041a\u043e\u043c\u043c\u0435\u043d\u0442\u0430\u0440\u0438\u0439",
     commentPlaceholder: "\u041d\u0430\u043f\u0440\u0438\u043c\u0435\u0440: Copilot / Telegram / AI",
-    domains: "\u0414\u043e\u043c\u0435\u043d\u044b",
-    cidr: "CIDR / IP \u0441\u0435\u0442\u0438",
+    domains: "\u0414\u043e\u043c\u0435\u043d\u044b / GeoSite",
+    cidr: "CIDR / GeoIP",
+    geodataTitle: "GeoIP / GeoSite",
+    geodataChecking: "\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 Geo-\u0431\u0430\u0437...",
+    geodataMissing: "\u0411\u0430\u0437\u044b \u043d\u0435 \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u044b",
+    geodataReadyFmt: "\u0423\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u044b: GeoIP {geoip}, GeoSite {geosite}; \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 \u0440\u0430\u0437 \u0432 7 \u0434\u043d\u0435\u0439",
+    geodataHint: "geoip:google \u0432 CIDR, geosite:youtube \u0432 \u0434\u043e\u043c\u0435\u043d\u0430\u0445",
+    geodataUpdate: "\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c Geo-\u0431\u0430\u0437\u044b",
+    geodataUpdating: "\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u0438 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0430...",
+    geodataUpdated: "Geo-\u0431\u0430\u0437\u044b \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u044b",
+    geodataFailed: "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0431\u043d\u043e\u0432\u0438\u0442\u044c Geo-\u0431\u0430\u0437\u044b",
     currentState: "\u0422\u0435\u043a\u0443\u0449\u0438\u0439 state \u0441 \u0440\u043e\u0443\u0442\u0435\u0440\u0430",
     groups: "\u0413\u0440\u0443\u043f\u043f",
     activeGroups: "\u0410\u043a\u0442\u0438\u0432\u043d\u044b\u0445",
@@ -149,7 +160,7 @@ const LOCALES = {
     subRevealHint: "\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c URL \u2014 \u043a\u043d\u043e\u043f\u043a\u0430 \ud83d\udc41",
     // UX helpers
     panelCollapseAria: "\u0421\u0432\u0435\u0440\u043d\u0443\u0442\u044c/\u0440\u0430\u0437\u0432\u0435\u0440\u043d\u0443\u0442\u044c",
-    cidrPlaceholder: "# 0.0.0.0/0 \u2014 \u0432\u0435\u0441\u044c IPv4 (\u043f\u043e\u043b\u043d\u043e\u0435 \u043f\u043e\u043a\u0440\u044b\u0442\u0438\u0435)",
+    cidrPlaceholder: "geoip:google\n# 0.0.0.0/0 \u2014 \u0432\u0435\u0441\u044c IPv4",
     // Exit-IP
     exitDirect: "\u043f\u0440\u044f\u043c\u043e\u0439 ({ip}) \u2014 \u0434\u043e\u0431\u0430\u0432\u044c api.ipify.org \u0432 VPN-\u0433\u0440\u0443\u043f\u043f\u0443",
     exitError: "\u043e\u0448\u0438\u0431\u043a\u0430",
@@ -194,6 +205,9 @@ const LOCALES = {
     subKeysNoneAddFirst: "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0434\u043e\u0431\u0430\u0432\u044c \u0445\u043e\u0442\u044f \u0431\u044b \u043e\u0434\u0438\u043d \u043a\u043b\u044e\u0447.",
     keysPluralForms: { one: "\u043a\u043b\u044e\u0447", few: "\u043a\u043b\u044e\u0447\u0430", many: "\u043a\u043b\u044e\u0447\u0435\u0439", other: "\u043a\u043b\u044e\u0447\u0435\u0439" },
     subRefreshBtn: "\u21bb \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c",
+    subAutoRefresh: "\u0410\u0432\u0442\u043e\u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435, 6 \u0447",
+    subAutoFailover: "\u0421\u043c\u0435\u043d\u0438\u0442\u044c, \u0435\u0441\u043b\u0438 \u0441\u0435\u0440\u0432\u0435\u0440 \u043f\u0440\u043e\u043f\u0430\u043b / \u043d\u0435 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442",
+    subAutoRefreshEnabled: "\u0410\u0432\u0442\u043e\u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 \u0432\u043a\u043b\u044e\u0447\u0435\u043d\u043e. \u041d\u0430\u0436\u043c\u0438 \u00ab\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c\u00bb, \u0447\u0442\u043e\u0431\u044b \u043f\u0435\u0440\u0435\u0434\u0430\u0442\u044c \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0443 \u0440\u043e\u0443\u0442\u0435\u0440\u0443.",
     subRefreshAddedFmt: "+{n} \u043d\u043e\u0432\u044b\u0445",
     subRefreshKeptFmt: "~{n} \u0431\u0435\u0437 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0439",
     subRefreshRemovedFmt: "\u2212{n} \u0443\u0434\u0430\u043b\u0451\u043d\u043e",
@@ -269,6 +283,10 @@ const LOCALES = {
     logsCopiedDone: "Скопировано",
     dedupDomainsRemoved: "Убрано лишних доменов: {n} (покрыты родительским)",
     dedupCidrsRemoved: "Убрано лишних IP/CIDR: {n} (покрыты более широкой сетью)",
+    importRoutesBtn: "\u0418\u043c\u043f\u043e\u0440\u0442 JSON / \u0441\u043f\u0438\u0441\u043a\u0430",
+    importRoutesDone: "\u0418\u043c\u043f\u043e\u0440\u0442: {domains} \u0434\u043e\u043c\u0435\u043d\u043e\u0432, {cidrs} IP/CIDR",
+    importRoutesEmpty: "\u0412 \u0444\u0430\u0439\u043b\u0435 \u043d\u0435\u0442 \u0440\u0430\u0441\u043f\u043e\u0437\u043d\u0430\u043d\u043d\u044b\u0445 \u0434\u043e\u043c\u0435\u043d\u043e\u0432 \u0438\u043b\u0438 IPv4/CIDR",
+    importRoutesFailed: "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u043e\u0447\u0438\u0442\u0430\u0442\u044c \u0441\u043f\u0438\u0441\u043e\u043a: {error}",
     stackInfoFetchFailed: "Не удалось загрузить параметры стека",
     stackVersions: "Версии",
     stackXrayVer: "xray", stackSingboxVer: "sing-box", stackKernel: "ядро", stackUptime: "uptime",
@@ -290,8 +308,8 @@ const LOCALES = {
     toastSavingState: "Сохранение профиля…",
     toastSavingApplying: "Сохранение и применение…",
     toastProbing: "Проверка {addr}:{port}…",
-    toastInvalidDomains: "Удалены не-домены: {list}",
-    toastInvalidCidrs: "Удалены не-IP/CIDR: {list}",
+    toastInvalidDomains: "Удалены не-домены/GeoSite: {list}",
+    toastInvalidCidrs: "Удалены не-IP/CIDR/GeoIP: {list}",
     ipsetUdpLabel: "UDP route ipset",
     ipsetBypassLabel: "Bypass ipset"
   },
@@ -353,8 +371,17 @@ const LOCALES = {
     remove: "Delete",
     comment: "Comment",
     commentPlaceholder: "For example: Copilot / Telegram / AI",
-    domains: "Domains",
-    cidr: "CIDR / IP ranges",
+    domains: "Domains / GeoSite",
+    cidr: "CIDR / GeoIP",
+    geodataTitle: "GeoIP / GeoSite",
+    geodataChecking: "Checking Geo databases...",
+    geodataMissing: "Databases are not installed",
+    geodataReadyFmt: "Installed: GeoIP {geoip}, GeoSite {geosite}; updated every 7 days",
+    geodataHint: "geoip:google in CIDR, geosite:youtube in domains",
+    geodataUpdate: "Update Geo databases",
+    geodataUpdating: "Downloading and validating...",
+    geodataUpdated: "Geo databases updated",
+    geodataFailed: "Geo database update failed",
     currentState: "Current router state",
     groups: "Groups",
     activeGroups: "Active",
@@ -379,7 +406,7 @@ const LOCALES = {
     subRevealHint: "Reveal URL — button 👁",
     // UX helpers
     panelCollapseAria: "Collapse/expand",
-    cidrPlaceholder: "# 0.0.0.0/0 — entire IPv4 (full coverage)",
+    cidrPlaceholder: "geoip:google\n# 0.0.0.0/0 — entire IPv4",
     // Exit-IP
     exitDirect: "direct ({ip}) — add api.ipify.org to a VPN group",
     exitError: "error",
@@ -423,6 +450,9 @@ const LOCALES = {
     subKeysNoneAddFirst: "Add at least one key first.",
     keysPluralForms: { one: "key", other: "keys" },
     subRefreshBtn: "↻ Refresh",
+    subAutoRefresh: "Auto-refresh, 6h",
+    subAutoFailover: "Switch if server disappears / fails",
+    subAutoRefreshEnabled: "Auto-refresh enabled. Click Save to persist the setting on the router.",
     subRefreshAddedFmt: "+{n} new",
     subRefreshKeptFmt: "~{n} unchanged",
     subRefreshRemovedFmt: "−{n} removed",
@@ -496,6 +526,10 @@ const LOCALES = {
     logsCopiedDone: "Copied",
     dedupDomainsRemoved: "Removed redundant domains: {n} (covered by a parent domain)",
     dedupCidrsRemoved: "Removed redundant IP/CIDR: {n} (covered by a broader network)",
+    importRoutesBtn: "Import JSON / list",
+    importRoutesDone: "Imported: {domains} domains, {cidrs} IP/CIDR",
+    importRoutesEmpty: "The file has no recognised domains or IPv4/CIDR entries",
+    importRoutesFailed: "Failed to read route list: {error}",
     stackInfoFetchFailed: "Failed to load stack info",
     stackVersions: "Versions",
     stackXrayVer: "xray", stackSingboxVer: "sing-box", stackKernel: "kernel", stackUptime: "uptime",
@@ -517,8 +551,8 @@ const LOCALES = {
     toastSavingState: "Saving profile…",
     toastSavingApplying: "Saving and applying…",
     toastProbing: "Probing {addr}:{port}…",
-    toastInvalidDomains: "Removed non-domain entries: {list}",
-    toastInvalidCidrs: "Removed non-IP/CIDR entries: {list}",
+    toastInvalidDomains: "Removed non-domain/GeoSite entries: {list}",
+    toastInvalidCidrs: "Removed non-IP/CIDR/GeoIP entries: {list}",
     ipsetUdpLabel: "UDP route ipset",
     ipsetBypassLabel: "Bypass ipset"
   }
@@ -651,6 +685,10 @@ const els = {
   groupsKicker: document.getElementById("groupsKicker"),
   groupsTitle: document.getElementById("groupsTitle"),
   addGroupBtn: document.getElementById("addGroupBtn"),
+  geodataTitle: document.getElementById("geodataTitle"),
+  geodataStatus: document.getElementById("geodataStatus"),
+  geodataHint: document.getElementById("geodataHint"),
+  updateGeodataBtn: document.getElementById("updateGeodataBtn"),
   addProfileBtn: document.getElementById("addProfileBtn"),
   duplicateProfileBtn: document.getElementById("duplicateProfileBtn"),
   removeProfileBtn: document.getElementById("removeProfileBtn"),
@@ -689,9 +727,11 @@ window.addEventListener("unhandledrejection", (event) => {
   pushDebug(`unhandledrejection: ${String(event.reason)}`);
 });
 
-bindTopLevel();
-setupPanelCollapse();
-bootstrap();
+if (!globalThis.__ANTIGOBLIN_HEADLESS__) {
+  bindTopLevel();
+  setupPanelCollapse();
+  bootstrap();
+}
 
 function setupPanelCollapse() {
   const panels = document.querySelectorAll(".panel");
@@ -730,6 +770,7 @@ async function bootstrap() {
     persistAndRender();
     renderHealth().catch(() => {});
     renderStackInfo().catch(() => {});
+    renderGeodataStatus().catch(() => {});
     startExitIpCheck();
   } catch (error) {
     pushDebug(`bootstrap failed: ${error.message}`);
@@ -770,6 +811,7 @@ function bindTopLevel() {
       // instead of showing yesterday's locale until the next probe.
       renderHealth().catch(() => {});
       renderStackInfo().catch(() => {});
+      renderGeodataStatus().catch(() => {});
     });
   }
 
@@ -814,6 +856,10 @@ function bindTopLevel() {
   els.importProxyBtn.title = T.importProxyTitle;
   els.probeProxyBtn.title = T.probeProxyTitle;
   els.logoutBtn.title = T.logoutTitle;
+
+  if (els.updateGeodataBtn) {
+    els.updateGeodataBtn.addEventListener("click", updateGeodata);
+  }
 
   els.logoutBtn.addEventListener("click", async () => {
     try {
@@ -993,6 +1039,15 @@ function bindTopLevel() {
         case "reveal-sub":  toggleRevealSub(id); break;
         case "copy-sub":    copySubUrl(id); break;
       }
+    });
+    els.subscriptionsList.addEventListener("change", (event) => {
+      const refreshToggle = event.target.closest('input[data-act="toggle-auto-refresh"]');
+      if (refreshToggle) {
+        toggleSubscriptionAutoRefresh(refreshToggle.dataset.id, refreshToggle.checked);
+        return;
+      }
+      const failoverToggle = event.target.closest('input[data-act="toggle-auto-failover"]');
+      if (failoverToggle) toggleSubscriptionAutoFailover(failoverToggle.dataset.id, failoverToggle.checked);
     });
   }
 
@@ -1304,6 +1359,66 @@ async function repairRemoteRuntime() {
   await parseResponseOrThrow(response);
 }
 
+function formatFileSize(bytes) {
+  const value = Number(bytes) || 0;
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+  return `${value} B`;
+}
+
+async function renderGeodataStatus() {
+  if (!els.geodataStatus) return;
+  els.geodataStatus.className = "geodata-status";
+  els.geodataStatus.textContent = T.geodataChecking;
+  try {
+    const response = await fetchWithTimeout(GEODATA_STATUS_URL, { cache: "no-store" }, 15000);
+    const payload = await parseResponseOrThrow(response);
+    if (!payload.installed) {
+      els.geodataStatus.className = "geodata-status error";
+      els.geodataStatus.textContent = T.geodataMissing;
+      return;
+    }
+    els.geodataStatus.className = "geodata-status ok";
+    els.geodataStatus.textContent = formatMessage(T.geodataReadyFmt, {
+      geoip: formatFileSize(payload.geoipSize),
+      geosite: formatFileSize(payload.geositeSize)
+    });
+  } catch (error) {
+    if (isAuthError(error)) return;
+    els.geodataStatus.className = "geodata-status error";
+    els.geodataStatus.textContent = `${T.geodataFailed}: ${String(error.message || error).slice(0, 120)}`;
+  }
+}
+
+async function updateGeodata() {
+  if (!els.updateGeodataBtn) return;
+  const previous = els.updateGeodataBtn.textContent;
+  els.updateGeodataBtn.disabled = true;
+  els.updateGeodataBtn.textContent = T.geodataUpdating;
+  if (els.geodataStatus) {
+    els.geodataStatus.className = "geodata-status";
+    els.geodataStatus.textContent = T.geodataUpdating;
+  }
+  const toast = showToast(T.geodataUpdating, { kind: "progress" });
+  try {
+    const response = await fetchWithTimeout(GEODATA_UPDATE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: "{}"
+    }, 120000);
+    await parseResponseOrThrow(response);
+    toast.update(T.geodataUpdated, "success");
+    await renderGeodataStatus();
+  } catch (error) {
+    if (isAuthError(error)) showAuthOverlay(AUTH_LOGIN_HINT);
+    toast.update(`${T.geodataFailed}: ${error.message}`, "error");
+    await renderGeodataStatus().catch(() => {});
+  } finally {
+    els.updateGeodataBtn.disabled = false;
+    els.updateGeodataBtn.textContent = previous;
+  }
+}
+
 function healthSeverity(status) {
   if (!status || status === "ok") return "ok";
   if (status.endsWith("_critical") || status === "xray_down") return "critical";
@@ -1326,10 +1441,15 @@ function ctSeverity(count, max) {
   return "ok";
 }
 
-function vpnSeverity(established, finWait, orphanFin) {
-  if (orphanFin >= 30 || finWait >= 50) return "critical";
-  if (orphanFin >= 20 || finWait >= 20) return "warn";
-  if (established === 0) return "warn";
+function vpnSeverity(vpn, services) {
+  const transport = String(vpn?.transport || "tcp").toLowerCase();
+  if (transport === "udp") {
+    if (!services?.singbox?.running || !services?.singbox?.listenUdp) return "critical";
+    return vpn?.host ? "ok" : "warn";
+  }
+  if ((vpn?.orphanFin || 0) >= 30 || (vpn?.finWait || 0) >= 50) return "critical";
+  if ((vpn?.orphanFin || 0) >= 20 || (vpn?.finWait || 0) >= 20) return "warn";
+  if ((vpn?.established || 0) === 0) return "warn";
   return "ok";
 }
 
@@ -1402,15 +1522,20 @@ async function renderHealth() {
   }).join("");
 
   // VPN tunnel block
-  const vpnSev = vpnSeverity(vpn.established || 0, vpn.finWait || 0, vpn.orphanFin || 0);
+  const vpnSev = vpnSeverity(vpn, services);
   const vpnCls = severityClass(vpnSev);
+  const vpnTransport = String(vpn.transport || "tcp").toUpperCase();
+  const vpnActivity = String(vpn.transport || "tcp").toLowerCase() === "udp"
+    ? (vpn.total || 0)
+    : (vpn.established || 0);
+  const vpnActivityWarn = String(vpn.transport || "tcp").toLowerCase() === "tcp" && vpnActivity === 0;
   const vpnHtml = `<div class="health-badge ${vpnCls}">
     <span class="health-dot" aria-hidden="true"></span>
     <span class="health-text">
       <span class="health-name">VPN tunnel</span>
       <span class="health-status">${escapeHtml(vpn.host || "—")}</span>
     </span>
-    <span class="health-extra health-metric ${vpn.established > 0 ? "" : "metric-warn"}">upstream TCP: ${vpn.established || 0}</span>
+    <span class="health-extra health-metric ${vpnActivityWarn ? "metric-warn" : ""}">upstream ${escapeHtml(vpnTransport)}: ${vpnActivity}</span>
     ${(vpn.finWait || 0) > 0 ? `<span class="health-extra health-metric ${(vpn.finWait || 0) >= 20 ? "metric-warn" : ""}">FIN_WAIT: ${vpn.finWait}</span>` : ""}
     ${(vpn.orphanFin || 0) > 0 ? `<span class="health-extra health-metric ${(vpn.orphanFin || 0) >= 20 ? "metric-crit" : ""}">orphan FIN: ${vpn.orphanFin}</span>` : ""}
   </div>`;
@@ -1885,6 +2010,8 @@ function renderGroups() {
           <input class="group-name" type="text" placeholder="${escapeHtml(T.newGroup)}">
         </div>
         <div class="group-head-actions">
+          <input class="group-route-import-file" type="file" accept=".json,.txt,application/json,text/plain" hidden>
+          <button class="group-route-import" type="button">${escapeHtml(T.importRoutesBtn)}</button>
           <label class="toggle">
             <input class="group-enabled" type="checkbox">
             <span>${escapeHtml(T.active)}</span>
@@ -1909,7 +2036,7 @@ function renderGroups() {
         <div class="grid two">
           <label>
             <span>${escapeHtml(T.domains)}</span>
-            <textarea class="group-domains" rows="9" placeholder="chatgpt.com&#10;openai.com"></textarea>
+            <textarea class="group-domains" rows="9" placeholder="chatgpt.com&#10;geosite:youtube"></textarea>
           </label>
           <label>
             <span>${escapeHtml(T.cidr)}</span>
@@ -1927,6 +2054,8 @@ function renderGroups() {
     const outboundEl = card.querySelector(".group-outbound");
     const domainsEl = card.querySelector(".group-domains");
     const cidrsEl = card.querySelector(".group-cidrs");
+    const importRoutesBtn = card.querySelector(".group-route-import");
+    const importRoutesFile = card.querySelector(".group-route-import-file");
     const removeBtn = card.querySelector(".remove-group");
 
     // Restore expanded/collapsed state per group id so re-render (from
@@ -1955,6 +2084,35 @@ function renderGroups() {
     outboundEl.addEventListener("change", () => updateGroup(group.id, { outboundTag: outboundEl.value }));
     domainsEl.addEventListener("input", () => updateGroup(group.id, { domains: splitLinesOrCsv(domainsEl.value) }));
     cidrsEl.addEventListener("input", () => updateGroup(group.id, { cidrs: splitLinesOrCsv(cidrsEl.value) }));
+    importRoutesBtn.addEventListener("click", () => importRoutesFile.click());
+    importRoutesFile.addEventListener("change", async () => {
+      const file = importRoutesFile.files?.[0];
+      if (!file) return;
+      importRoutesBtn.disabled = true;
+      try {
+        const imported = parseRouteListText(await file.text());
+        if (!imported.domains.length && !imported.cidrs.length) {
+          showToast(T.importRoutesEmpty, { kind: "error", ttl: 4500 });
+          return;
+        }
+        const domains = dedupeDomainsList([...(group.domains || []), ...imported.domains]);
+        const cidrs = dedupeCidrsList([...(group.cidrs || []), ...imported.cidrs]);
+        domainsEl.value = domains.join("\n");
+        cidrsEl.value = cidrs.join("\n");
+        updateGroup(group.id, { domains, cidrs });
+        showToast(formatMessage(T.importRoutesDone, {
+          domains: imported.domains.length,
+          cidrs: imported.cidrs.length
+        }), { kind: "success", ttl: 4500 });
+      } catch (error) {
+        showToast(formatMessage(T.importRoutesFailed, {
+          error: String(error?.message || error).slice(0, 160)
+        }), { kind: "error", ttl: 5000 });
+      } finally {
+        importRoutesFile.value = "";
+        importRoutesBtn.disabled = false;
+      }
+    });
     domainsEl.addEventListener("blur", () => {
       const raw = splitLinesOrCsv(domainsEl.value);
       const part = partitionList(raw, looksLikeDomain);
@@ -2045,9 +2203,12 @@ function buildRoutingDocument(inputState) {
     outboundTag: "vless-reality"
   });
 
-  for (const group of inputState.groups.filter((item) => item.enabled && item.outboundTag !== "direct" && item.outboundTag !== "bypass")) {
+  for (const group of inputState.groups.filter((item) => item.enabled)) {
     const domains = uniq(group.domains);
     const cidrs = uniq(group.cidrs);
+    const outboundTag = group.outboundTag === "direct" || group.outboundTag === "bypass"
+      ? "direct"
+      : group.outboundTag;
 
     // Catch-all: "0.0.0.0/0" (весь IPv4) или пустая группа означают
     // "весь трафик через этот outbound". В xray это правило без ip/domain
@@ -2058,7 +2219,7 @@ function buildRoutingDocument(inputState) {
       rules.push({
         type: "field",
         inboundTag: inboundTags,
-        outboundTag: group.outboundTag
+        outboundTag
       });
       continue;
     }
@@ -2068,7 +2229,7 @@ function buildRoutingDocument(inputState) {
         type: "field",
         inboundTag: inboundTags,
         domain: domains,
-        outboundTag: group.outboundTag
+        outboundTag
       });
     }
 
@@ -2077,7 +2238,7 @@ function buildRoutingDocument(inputState) {
         type: "field",
         inboundTag: inboundTags,
         ip: cidrs,
-        outboundTag: group.outboundTag
+        outboundTag
       });
     }
   }
@@ -2437,6 +2598,14 @@ function renderSubscriptionsList(profile) {
           <span>${formatLastFetched(sub.lastFetched)}</span>
         </div>
         <div class="card-url${isRevealed ? " revealed" : ""}" title="${escapeHtml(isRevealed ? sub.url : T.subRevealHint)}">${escapeHtml(urlDisplay)}</div>
+        <label class="subscription-auto-toggle">
+          <input type="checkbox" data-act="toggle-auto-refresh" data-id="${sub.id}"${sub.autoRefresh ? " checked" : ""}>
+          <span>${escapeHtml(T.subAutoRefresh)}</span>
+        </label>
+        <label class="subscription-auto-toggle">
+          <input type="checkbox" data-act="toggle-auto-failover" data-id="${sub.id}"${sub.autoFailover ? " checked" : ""}${sub.autoRefresh ? "" : " disabled"}>
+          <span>${escapeHtml(T.subAutoFailover)}</span>
+        </label>
         ${errorBlock}
       </div>
       <div class="card-actions">
@@ -2455,6 +2624,26 @@ function renderSubscriptionsList(profile) {
 const refreshingSubs = new Set();
 const revealedSubs = new Set();
 const revealedTimers = new Map();
+
+function toggleSubscriptionAutoRefresh(subId, enabled) {
+  const profile = getActiveProfile();
+  const sub = (profile?.subscriptions || []).find((item) => item.id === subId);
+  if (!sub) return;
+  sub.autoRefresh = !!enabled;
+  if (!enabled) sub.autoFailover = false;
+  sub.autoRefreshIntervalHours = 6;
+  persistState();
+  if (enabled) showToast(T.subAutoRefreshEnabled, { kind: "info", ttl: 5000 });
+  renderSubscriptionsList(profile);
+}
+
+function toggleSubscriptionAutoFailover(subId, enabled) {
+  const profile = getActiveProfile();
+  const sub = (profile?.subscriptions || []).find((item) => item.id === subId);
+  if (!sub) return;
+  sub.autoFailover = !!enabled && sub.autoRefresh === true;
+  persistState();
+}
 
 function toggleRevealSub(subId) {
   if (revealedSubs.has(subId)) {
@@ -2765,6 +2954,9 @@ async function saveSubscription() {
       id: subId,
       name: name || (new URL(url).host),
       url,
+      autoRefresh: false,
+      autoFailover: false,
+      autoRefreshIntervalHours: 6,
       lastFetched: Date.now(),
       lastError: null
     };
@@ -3411,22 +3603,142 @@ function parseHysteria2Uri(uri) {
   };
 }
 
-// Parse a subscription body (already base64-decoded by caller).
-// Each non-empty line is a URI; unknown schemes are skipped silently.
+function parseSubscriptionUri(value) {
+  const trimmed = String(value || "").trim();
+  if (/^vless:\/\//i.test(trimmed)) return parseVlessUri(trimmed);
+  if (/^vmess:\/\//i.test(trimmed)) return parseVmessUri(trimmed);
+  if (/^(hysteria2|hy2):\/\//i.test(trimmed)) return parseHysteria2Uri(trimmed);
+  return null;
+}
+
+function parseSingboxSubscriptionOutbound(outbound) {
+  if (!outbound || typeof outbound !== "object") return null;
+  const protocol = String(outbound.type || "").toLowerCase();
+  if (!["vless", "vmess", "hysteria2", "hy2"].includes(protocol)) return null;
+  const address = String(outbound.server || "").trim();
+  const port = Number(outbound.server_port);
+  if (!address || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+
+  const tls = outbound.tls && typeof outbound.tls === "object" ? outbound.tls : {};
+  const reality = tls.reality && typeof tls.reality === "object" ? tls.reality : {};
+  const transport = outbound.transport && typeof outbound.transport === "object" ? outbound.transport : {};
+  if (protocol === "hysteria2" || protocol === "hy2") {
+    const password = String(outbound.password || "");
+    if (!password) return null;
+    const obfs = outbound.obfs && typeof outbound.obfs === "object" ? outbound.obfs : {};
+    return normalizeProxyConfig({
+      protocol: "hysteria2",
+      name: outbound.tag || `${address}:${port}`,
+      address, port, password,
+      uuid: "", flow: "", network: "udp", security: "tls",
+      serverName: tls.server_name || address,
+      alpn: Array.isArray(tls.alpn) ? tls.alpn : ["h3"],
+      insecure: !!tls.insecure,
+      obfs: obfs.type || "",
+      obfsPassword: obfs.password || ""
+    });
+  }
+
+  const uuid = String(outbound.uuid || "");
+  if (!uuid) return null;
+  return normalizeProxyConfig({
+    protocol,
+    name: outbound.tag || `${address}:${port}`,
+    address, port, uuid,
+    alterId: Number(outbound.alter_id) || 0,
+    flow: outbound.flow || "",
+    network: transport.type || "tcp",
+    security: reality.enabled ? "reality" : (tls.enabled ? "tls" : "none"),
+    serverName: tls.server_name || "",
+    fingerprint: tls.utls?.fingerprint || "",
+    publicKey: reality.public_key || "",
+    shortId: Array.isArray(reality.short_id) ? (reality.short_id[0] || "") : (reality.short_id || ""),
+    path: transport.path || "",
+    host: transport.headers?.Host || transport.headers?.host || "",
+    serviceName: transport.service_name || ""
+  });
+}
+
+function parseXraySubscriptionOutbound(outbound) {
+  if (!outbound || typeof outbound !== "object") return null;
+  const protocol = String(outbound.protocol || "").toLowerCase();
+  if (!["vless", "vmess"].includes(protocol)) return null;
+  const server = outbound.settings?.vnext?.[0];
+  const user = server?.users?.[0];
+  const address = String(server?.address || "").trim();
+  const port = Number(server?.port);
+  const uuid = String(user?.id || "");
+  if (!address || !uuid || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+  const stream = outbound.streamSettings || {};
+  const reality = stream.realitySettings || {};
+  const tls = stream.tlsSettings || {};
+  const ws = stream.wsSettings || {};
+  const grpc = stream.grpcSettings || {};
+  return normalizeProxyConfig({
+    protocol,
+    name: outbound.tag || `${address}:${port}`,
+    address, port, uuid,
+    alterId: Number(user?.alterId) || 0,
+    flow: user?.flow || "",
+    network: stream.network || "tcp",
+    security: stream.security || "none",
+    serverName: reality.serverName || tls.serverName || "",
+    fingerprint: reality.fingerprint || tls.fingerprint || "",
+    publicKey: reality.publicKey || "",
+    shortId: reality.shortId || "",
+    spiderX: reality.spiderX || "/",
+    alpn: Array.isArray(tls.alpn) ? tls.alpn : [],
+    path: ws.path || "",
+    host: ws.headers?.Host || ws.headers?.host || "",
+    serviceName: grpc.serviceName || "",
+    authority: grpc.authority || ""
+  });
+}
+
+// Parse a subscription body (already base64-decoded by caller). In addition
+// to URI-per-line feeds, accept JSON exports containing URI strings, sing-box
+// outbounds or xray outbounds. Providers frequently wrap such JSON in base64.
 function parseSubscriptionText(rawText) {
-  const lines = String(rawText || "").split(/\r?\n/);
   const configs = [];
   const errors = [];
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("//") || trimmed.startsWith("#")) continue;
-    let result = null;
-    if (/^vless:\/\//i.test(trimmed)) result = parseVlessUri(trimmed);
-    else if (/^vmess:\/\//i.test(trimmed)) result = parseVmessUri(trimmed);
-    else if (/^(hysteria2|hy2):\/\//i.test(trimmed)) result = parseHysteria2Uri(trimmed);
-    else continue;
-    if (result.ok) configs.push(result.config);
-    else errors.push({ line: trimmed.slice(0, 80), error: result.error });
+  const seen = new Set();
+  const addConfig = (config) => {
+    if (!config) return;
+    const key = `${config.protocol}:${config.address}:${config.port}/${config.uuid || config.password || ""}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    configs.push(config);
+  };
+  const addUri = (value) => {
+    const result = parseSubscriptionUri(value);
+    if (!result) return;
+    if (result.ok) addConfig(result.config);
+    else errors.push({ line: String(value).slice(0, 80), error: result.error });
+  };
+  const visitJson = (value) => {
+    if (typeof value === "string") {
+      for (const part of value.split(/\r?\n/)) addUri(part.trim());
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(visitJson);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    addConfig(parseSingboxSubscriptionOutbound(value));
+    addConfig(parseXraySubscriptionOutbound(value));
+    Object.values(value).forEach(visitJson);
+  };
+
+  const text = String(rawText || "").trim();
+  try {
+    visitJson(JSON.parse(text));
+  } catch {
+    for (const line of text.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("//") || trimmed.startsWith("#")) continue;
+      addUri(trimmed);
+    }
   }
   return { configs, errors };
 }
@@ -3661,7 +3973,8 @@ function normalizeProxyEntry(entry) {
     id: sanitizeId(entry.id, "proxy"),
     name: String(entry.name || config.address || "Unnamed"),
     source: entry.source || "manual",
-    config
+    config,
+    stale: entry.stale === true
   };
 }
 
@@ -3673,7 +3986,14 @@ function normalizeSubscriptionEntry(entry) {
     id: sanitizeId(entry.id, "sub"),
     name: String(entry.name || url.replace(/^https?:\/\//, "").slice(0, 32)),
     url,
+    autoRefresh: entry.autoRefresh === true,
+    autoFailover: entry.autoRefresh === true && entry.autoFailover === true,
+    autoRefreshIntervalHours: Number(entry.autoRefreshIntervalHours) > 0 ? Number(entry.autoRefreshIntervalHours) : 6,
     lastFetched: Number.isFinite(entry.lastFetched) ? entry.lastFetched : null,
+    lastRefreshAttempt: Number.isFinite(entry.lastRefreshAttempt) ? entry.lastRefreshAttempt : null,
+    lastFailoverAt: Number.isFinite(entry.lastFailoverAt) ? entry.lastFailoverAt : null,
+    lastFailoverFrom: entry.lastFailoverFrom ? sanitizeId(entry.lastFailoverFrom, "proxy") : null,
+    lastFailoverTo: entry.lastFailoverTo ? sanitizeId(entry.lastFailoverTo, "proxy") : null,
     lastError: entry.lastError ? String(entry.lastError).slice(0, 200) : null
   };
 }
@@ -3779,6 +4099,43 @@ function splitLinesOrCsv(text) {
   );
 }
 
+// Import route sources without forcing users to hand-extract hundreds of
+// entries. Supports plain newline/CSV lists and JSON documents such as
+// iplist.opencck.org responses. Only values that pass the existing domain
+// or IPv4/CIDR validators are retained; IPv6 is intentionally excluded
+// because the current runtime routes IPv4 ipsets only.
+function parseRouteListText(text) {
+  const domains = [];
+  const cidrs = [];
+  const collect = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(collect);
+      return;
+    }
+    if (value && typeof value === "object") {
+      Object.values(value).forEach(collect);
+      return;
+    }
+    if (typeof value !== "string") return;
+    for (const item of splitLinesOrCsv(value)) {
+      if (looksLikeIpOrCidr(item)) cidrs.push(item);
+      else if (looksLikeDomain(item)) domains.push(item.toLowerCase());
+    }
+  };
+
+  const raw = String(text || "").trim();
+  if (!raw) return { domains: [], cidrs: [] };
+  try {
+    collect(JSON.parse(raw));
+  } catch {
+    collect(raw);
+  }
+  return {
+    domains: dedupeDomainsList(domains),
+    cidrs: dedupeCidrsList(cidrs)
+  };
+}
+
 function uniq(items) {
   return [...new Set((items || []).map((item) => String(item).trim()).filter(Boolean))];
 }
@@ -3804,15 +4161,20 @@ function downloadJson(fileName, data) {
 // True if string looks like a valid domain (one or more labels, dots,
 // no IP-like all-numeric labels, no slashes, no spaces).
 const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+const GEOSITE_RE = /^geosite:[a-z0-9][a-z0-9_!-]{0,63}(?:@!?[a-z0-9][a-z0-9_-]{0,63})*$/;
+const GEOIP_RE = /^geoip:[a-z0-9][a-z0-9_-]{0,63}$/;
+function isGeoSiteRule(str) { return GEOSITE_RE.test(String(str || "").trim().toLowerCase()); }
+function isGeoIpRule(str) { return GEOIP_RE.test(String(str || "").trim().toLowerCase()); }
 function looksLikeDomain(str) {
   const s = String(str || "").trim().toLowerCase();
   if (!s) return false;
+  if (isGeoSiteRule(s)) return true;
   if (/^\d+\.\d+\.\d+\.\d+(\/\d+)?$/.test(s)) return false;
   return DOMAIN_RE.test(s);
 }
 // True if string is a valid IP or IP/mask CIDR.
 function looksLikeIpOrCidr(str) {
-  return parseCidrEntry(str) !== null;
+  return isGeoIpRule(str) || parseCidrEntry(str) !== null;
 }
 
 // Split a list into {valid, invalid} based on a predicate.
@@ -3832,10 +4194,12 @@ function partitionList(list, isValid) {
 // in the same list. Match xray's default "domain" rule semantics — a
 // rule for foo.com matches foo.com itself plus any *.foo.com.
 function dedupeDomainsList(list) {
-  const cleaned = [...new Set((list || [])
+  const all = [...new Set((list || [])
     .map((d) => String(d || "").trim().toLowerCase())
     .filter(Boolean))];
-  if (cleaned.length <= 1) return cleaned;
+  const geoRules = all.filter(isGeoSiteRule);
+  const cleaned = all.filter((item) => !isGeoSiteRule(item));
+  if (cleaned.length <= 1) return [...cleaned, ...geoRules];
 
   const reversed = cleaned.map((d) => ({
     original: d,
@@ -3850,7 +4214,7 @@ function dedupeDomainsList(list) {
     );
     if (!covered) kept.push(item);
   }
-  return kept.map((item) => item.original);
+  return [...kept.map((item) => item.original), ...geoRules];
 }
 
 // Parse "1.2.3.4" or "1.2.3.0/24" into {network, mask}. Returns null
@@ -3889,12 +4253,17 @@ function dedupeCidrsList(list) {
   const seen = new Set();
   const valid = [];
   const invalid = [];
+  const geoRules = [];
   for (const entry of (list || [])) {
     const trimmed = String(entry || "").trim();
     if (!trimmed) continue;
     const key = trimmed.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
+    if (isGeoIpRule(key)) {
+      geoRules.push(key);
+      continue;
+    }
     const parsed = parseCidrEntry(trimmed);
     if (parsed) valid.push(parsed);
     else invalid.push(trimmed);
@@ -3909,7 +4278,7 @@ function dedupeCidrsList(list) {
     });
     if (!covered) kept.push(item);
   }
-  return [...kept.map((k) => k.original), ...invalid];
+  return [...kept.map((k) => k.original), ...geoRules, ...invalid];
 }
 
 function showFieldFlash(el, text) {
@@ -4016,6 +4385,9 @@ function applyTranslations() {
   if (els.previewTitle) els.previewTitle.textContent = T.previewTitle;
   if (els.groupsKicker) els.groupsKicker.textContent = T.groupsKicker;
   if (els.groupsTitle) els.groupsTitle.textContent = T.groupsTitle;
+  if (els.geodataTitle) els.geodataTitle.textContent = T.geodataTitle;
+  if (els.geodataHint) els.geodataHint.textContent = T.geodataHint;
+  if (els.updateGeodataBtn && !els.updateGeodataBtn.disabled) els.updateGeodataBtn.textContent = T.geodataUpdate;
 
   if (els.importStateBtn) els.importStateBtn.textContent = T.importBtn;
   if (els.exportStateBtn) els.exportStateBtn.textContent = T.exportBtn;

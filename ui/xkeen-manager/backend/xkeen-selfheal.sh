@@ -410,9 +410,12 @@ maybe_rotate_logs() {
   rotate_log_if_large "/opt/var/log/xkeen-selfheal.log"   5242880
   rotate_log_if_large "/opt/var/log/xkeen-health.log"    10485760
   rotate_log_if_large "/opt/var/log/xkeen-sysctl.log"     1048576
+  rotate_log_if_large "/opt/var/log/xkeen-geodata.log"    5242880
+  rotate_log_if_large "/opt/var/log/xkeen-subscription-refresh.log" 5242880
 
   trim_backups "/opt/etc/xray/configs"            "*.bak-ui-*" 5
   trim_backups "/opt/share/xkeen-manager"         "xkeen-ui-state.json.bak-ui-*" 5
+  trim_backups "/opt/share/xkeen-manager"         "xkeen-ui-state.json.bak-sub-auto-*" 5
 
   # Garbage-collect DNS cache in the same daily rotate — otherwise
   # /tmp/xkeen-dns-cache/ grows unbounded on tmpfs across subscription

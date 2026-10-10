@@ -100,6 +100,7 @@ UI и state:
 - `/opt/etc/xray/configs/03_inbounds.json`
 - `/opt/etc/xray/configs/04_outbounds.json` (генерируется backend-ом из state.json)
 - `/opt/etc/xray/configs/05_routing.json` (генерируется backend-ом из state.json)
+- `/opt/etc/xray/dat/geoip.dat`, `/opt/etc/xray/dat/geosite.dat` (атомарно обновляются `antigoblin-geodata.sh`)
 
 Конфиг `sing-box`:
 

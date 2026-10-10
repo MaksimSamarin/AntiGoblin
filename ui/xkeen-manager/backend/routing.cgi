@@ -18,6 +18,7 @@ TMP_AUTH_HEADERS="/tmp/xkeen-auth-headers-$$.txt"
 LOG_PATH="/opt/var/log/xray-manual.log"
 XRAY_BIN="/opt/sbin/xray"
 SELFHEAL_PATH="/opt/share/xkeen-manager/api/xkeen-selfheal.sh"
+GEODATA_SCRIPT="/opt/share/xkeen-manager/api/antigoblin-geodata.sh"
 TMP_RESTART_SCRIPT="/tmp/xkeen-apply-restart.sh"
 RUNTIME_DIR="/opt/share/xkeen-manager/runtime"
 XKEEN_MARK=""
@@ -204,7 +205,8 @@ restart_xray() {
 }
 
 validate_confdir() {
-  /opt/sbin/xray run -test -confdir /opt/etc/xray/configs >/dev/null 2>&1
+  XRAY_LOCATION_ASSET=/opt/etc/xray/dat \
+    /opt/sbin/xray run -test -confdir /opt/etc/xray/configs >/dev/null 2>&1
 }
 
 get_xray_pid() {
@@ -276,6 +278,12 @@ get_kind() {
       ;;
     kind=stack-info|*'&kind=stack-info'|kind=stack-info'&'*)
       printf 'stack-info'
+      ;;
+    kind=geodata-status|*'&kind=geodata-status'|kind=geodata-status'&'*)
+      printf 'geodata-status'
+      ;;
+    kind=geodata-update|*'&kind=geodata-update'|kind=geodata-update'&'*)
+      printf 'geodata-update'
       ;;
     kind=subscription-fetch|*'&kind=subscription-fetch'|kind=subscription-fetch'&'*)
       printf 'subscription-fetch'
@@ -380,11 +388,35 @@ emit_health() {
   VPN_HOST=""
   VPN_PORT=0
   VPN_IP=""
+  VPN_PROTOCOL=""
+  VPN_TRANSPORT="tcp"
+  VPN_PROCESS_NAME="xray"
+  VPN_PROCESS_PID="$XRAY_PID"
   VPN_ESTABLISHED=0
   VPN_FIN_WAIT=0
   VPN_ORPHAN_FIN=0
   VPN_TOTAL=0
-  if [ -f /opt/etc/xray/configs/04_outbounds.json ] && command -v /opt/bin/jq >/dev/null 2>&1; then
+  if [ -f "$STATE_PATH" ] && command -v /opt/bin/jq >/dev/null 2>&1; then
+    VPN_PROTOCOL="$(/opt/bin/jq -r '
+      (.activeProfileId // "") as $profile_id
+      | .profiles[]? | select(.id == $profile_id)
+      | (.activeProxyId // "") as $proxy_id
+      | .proxies[]? | select(.id == $proxy_id)
+      | .config.protocol // ""
+    ' "$STATE_PATH" 2>/dev/null | head -1)"
+  fi
+
+  if [ "$VPN_PROTOCOL" = "hysteria2" ] || [ "$VPN_PROTOCOL" = "hy2" ]; then
+    VPN_PROTOCOL="hysteria2"
+    VPN_TRANSPORT="udp"
+    VPN_PROCESS_NAME="sing-box"
+    VPN_PROCESS_PID="$SB_PID"
+    if [ -f /opt/etc/sing-box/xkeen.json ] && command -v /opt/bin/jq >/dev/null 2>&1; then
+      VPN_HOST="$(/opt/bin/jq -r '.outbounds[]?|select(.tag=="proxy" and .type=="hysteria2")|.server // ""' /opt/etc/sing-box/xkeen.json 2>/dev/null | head -1)"
+      VPN_PORT="$(/opt/bin/jq -r '.outbounds[]?|select(.tag=="proxy" and .type=="hysteria2")|.server_port // 0' /opt/etc/sing-box/xkeen.json 2>/dev/null | head -1)"
+    fi
+  elif [ -f /opt/etc/xray/configs/04_outbounds.json ] && command -v /opt/bin/jq >/dev/null 2>&1; then
+    [ -n "$VPN_PROTOCOL" ] || VPN_PROTOCOL="$(/opt/bin/jq -r '.outbounds[]?|select(.tag=="vless-reality")|.protocol // ""' /opt/etc/xray/configs/04_outbounds.json 2>/dev/null | head -1)"
     VPN_HOST="$(/opt/bin/jq -r '.outbounds[]?|select(.tag=="vless-reality")|.settings.vnext[0].address // ""' /opt/etc/xray/configs/04_outbounds.json 2>/dev/null | head -1)"
     VPN_PORT="$(/opt/bin/jq -r '.outbounds[]?|select(.tag=="vless-reality")|.settings.vnext[0].port // 0' /opt/etc/xray/configs/04_outbounds.json 2>/dev/null | head -1)"
   fi
@@ -396,12 +428,12 @@ emit_health() {
       VPN_IP="$(nslookup "$VPN_HOST" 2>/dev/null | /opt/bin/awk '/^Name:/{seen=1;next} seen&&/^Address [0-9]+:/{print $3;exit} seen&&/^Address:/{print $2;exit}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)"
     fi
   fi
-  if [ -n "$XRAY_PID" ] && [ -n "$VPN_IP" ] && [ "$VPN_PORT" -gt 0 ]; then
+  if [ -n "$VPN_PROCESS_PID" ] && [ -n "$VPN_IP" ] && [ "$VPN_PORT" -gt 0 ]; then
     # Match PID/xray exactly on the last netstat field — grep "$PID/xray"
     # would substring-match e.g. 4567/xray inside 14567/xray-something,
     # inflating counts once a similar PID appears on another socket.
-    SOCK_LINES="$(netstat -anp 2>/dev/null | /opt/bin/awk -v pid="$XRAY_PID" -v ep="${VPN_IP}:${VPN_PORT}" '
-      $NF == pid "/xray" && ($4 == ep || $5 == ep) { print }
+    SOCK_LINES="$(netstat -anp 2>/dev/null | /opt/bin/awk -v pid="$VPN_PROCESS_PID" -v process="$VPN_PROCESS_NAME" -v ep="${VPN_IP}:${VPN_PORT}" '
+      $NF == pid "/" process && ($4 == ep || $5 == ep) { print }
     ')"
     VPN_TOTAL="$(printf '%s\n' "$SOCK_LINES" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
     VPN_ESTABLISHED="$(printf '%s\n' "$SOCK_LINES" | grep -c 'ESTABLISHED' || true)"
@@ -468,6 +500,8 @@ emit_health() {
     --argjson vpn_orphan_fin "$VPN_ORPHAN_FIN" \
     --argjson vpn_total "$VPN_TOTAL" \
     --arg vpn_host "${VPN_HOST:-}" \
+    --arg vpn_protocol "${VPN_PROTOCOL:-}" \
+    --arg vpn_transport "$VPN_TRANSPORT" \
     --arg health_status "$HEALTH_STATUS" \
     '{
       ok: true,
@@ -488,6 +522,8 @@ emit_health() {
       conntrack: { count: $ct_count, max: $ct_max },
       vpnTunnel: {
         host: $vpn_host,
+        protocol: $vpn_protocol,
+        transport: $vpn_transport,
         established: $vpn_established,
         finWait: $vpn_fin_wait,
         orphanFin: $vpn_orphan_fin,
@@ -812,6 +848,11 @@ fetch_subscription() {
   HOST_PART="${HOST_PART%%\?*}"
   HOST_PART="${HOST_PART%%\#*}"
   HOST_PART="${HOST_PART##*@}"
+  if ! printf '%s' "$HOST_PART" | grep -Eq '^([A-Za-z0-9._-]+)(:[0-9]+)?$|^\[[0-9A-Fa-f:]+\](:[0-9]+)?$'; then
+    json_err "subscription url has an invalid host"
+    rm -f "$TMP_BODY"
+    exit 0
+  fi
   case "$HOST_PART" in
     '['*']:'*) HOST_ONLY="${HOST_PART%%]:*}]" ;;
     '['*']')   HOST_ONLY="$HOST_PART" ;;
@@ -861,7 +902,11 @@ fetch_subscription() {
     /opt/bin/curl -fsSL \
       --max-time 10 \
       --max-filesize 262144 \
-      -A 'AntiGoblin/1.0' \
+      -A 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36 AntiGoblin/1.0' \
+      -H 'Accept: application/json, text/plain, */*' \
+      -H 'Accept-Language: ru-RU,ru;q=0.9,en;q=0.8' \
+      -H "Origin: https://${HOST_PART}" \
+      -H "Referer: https://${HOST_PART}/" \
       -o "$TMP_FETCH" \
       "$URL" 2>"$TMP_FETCH_ERR"
     RC=$?
@@ -906,6 +951,83 @@ fetch_subscription() {
   exit 0
 }
 
+# Read one HTTP header from wget -S output. Header names are case-insensitive
+# and wget prefixes them with spaces, so exact grep/sed patterns are brittle
+# across firmware and BusyBox/Entware versions.
+auth_header_value() {
+  WANTED_HEADER="$1"
+  HEADER_BLOCK="$2"
+  printf '%s\n' "$HEADER_BLOCK" | /opt/bin/awk -v wanted="$WANTED_HEADER" '
+    {
+      line=$0
+      sub(/\r$/, "", line)
+      colon=index(line, ":")
+      if (!colon) next
+      name=substr(line, 1, colon-1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+      if (tolower(name) == tolower(wanted)) {
+        value=substr(line, colon+1)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        print value
+        exit
+      }
+    }
+  '
+}
+
+# Fallback for x-ndw2-interactive WWW-Authenticate parameters. Accept both
+# quoted and unquoted forms; models/firmware builds differ in formatting.
+auth_param_value() {
+  WANTED_PARAM="$1"
+  HEADER_BLOCK="$2"
+  printf '%s\n' "$HEADER_BLOCK" | /opt/bin/awk -v wanted="$WANTED_PARAM" '
+    {
+      line=$0
+      lower=tolower(line)
+      token=tolower(wanted) "="
+      start=index(lower, token)
+      if (!start) next
+      value=substr(line, start+length(token))
+      gsub(/^[[:space:]]+/, "", value)
+      if (substr(value,1,1) == "\"") {
+        value=substr(value,2)
+        quote=index(value,"\"")
+        if (quote) value=substr(value,1,quote-1)
+      } else {
+        sub(/[[:space:],;].*$/, "", value)
+      }
+      print value
+      exit
+    }
+  '
+}
+
+auth_set_cookie_pair() {
+  WANTED_COOKIE="$1"
+  HEADER_BLOCK="$2"
+  printf '%s\n' "$HEADER_BLOCK" | /opt/bin/awk -v wanted="$WANTED_COOKIE" '
+    {
+      line=$0
+      sub(/\r$/, "", line)
+      colon=index(line, ":")
+      if (!colon) next
+      header=substr(line, 1, colon-1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", header)
+      if (tolower(header) != "set-cookie") next
+      pair=substr(line, colon+1)
+      gsub(/^[[:space:]]+/, "", pair)
+      sub(/;.*/, "", pair)
+      eq=index(pair, "=")
+      if (!eq) next
+      name=substr(pair, 1, eq-1)
+      if (wanted == "" || name == wanted) {
+        print pair
+        exit
+      }
+    }
+  '
+}
+
 router_auth_login() {
   REQUEST_HOST="$(router_auth_endpoint)"
   REQUEST_UA="${HTTP_USER_AGENT:-xkeen-manager}"
@@ -933,13 +1055,41 @@ router_auth_login() {
     --header="User-Agent: $REQUEST_UA" \
     "http://$REQUEST_HOST/auth" 2>&1 | head -c 8192)"
 
-  REALM="$(printf '%s' "$AUTH_GET_HEADERS" | sed -n 's/.*realm="\([^"]*\)".*/\1/p' | head -n 1)"
-  CHALLENGE="$(printf '%s' "$AUTH_GET_HEADERS" | sed -n 's/.*challenge="\([^"]*\)".*/\1/p' | head -n 1)"
-  SESSION_ID="$(printf '%s' "$AUTH_GET_HEADERS" | sed -n 's/.*session_id="\([^"]*\)".*/\1/p' | head -n 1)"
-  SESSION_COOKIE="$(printf '%s' "$AUTH_GET_HEADERS" | sed -n 's/.*session_cookie="\([^"]*\)".*/\1/p' | head -n 1)"
+  REALM="$(auth_header_value 'X-NDM-Realm' "$AUTH_GET_HEADERS")"
+  CHALLENGE="$(auth_header_value 'X-NDM-Challenge' "$AUTH_GET_HEADERS")"
+  case "$REALM" in realm=*) REALM="$(auth_param_value realm "$REALM")" ;; esac
+  case "$CHALLENGE" in challenge=*) CHALLENGE="$(auth_param_value challenge "$CHALLENGE")" ;; esac
+  [ -n "$REALM" ] || REALM="$(auth_param_value realm "$AUTH_GET_HEADERS")"
+  [ -n "$CHALLENGE" ] || CHALLENGE="$(auth_param_value challenge "$AUTH_GET_HEADERS")"
+
+  SESSION_COOKIE_HINT="$(auth_param_value session_cookie "$AUTH_GET_HEADERS")"
+  COOKIE_PAIR="$(auth_set_cookie_pair "$SESSION_COOKIE_HINT" "$AUTH_GET_HEADERS")"
+  case "$COOKIE_PAIR" in
+    *=*)
+      SESSION_COOKIE="${COOKIE_PAIR%%=*}"
+      SESSION_ID="${COOKIE_PAIR#*=}"
+      ;;
+    *)
+      SESSION_COOKIE=""
+      SESSION_ID=""
+      ;;
+  esac
+  [ -n "$SESSION_COOKIE" ] || SESSION_COOKIE="$SESSION_COOKIE_HINT"
+  [ -n "$SESSION_ID" ] || SESSION_ID="$(auth_param_value session_id "$AUTH_GET_HEADERS")"
+
+  if ! printf '%s' "$SESSION_COOKIE" | grep -Eq '^[A-Za-z0-9_.-]+$' \
+      || ! printf '%s' "$SESSION_ID" | grep -Eq '^[A-Za-z0-9_+/=-]+$'; then
+    SESSION_COOKIE=""
+    SESSION_ID=""
+  fi
 
   if [ -z "$REALM" ] || [ -z "$CHALLENGE" ] || [ -z "$SESSION_ID" ] || [ -z "$SESSION_COOKIE" ]; then
-    json_err "failed to read router auth challenge"
+    MISSING=""
+    [ -n "$REALM" ] || MISSING="${MISSING} realm"
+    [ -n "$CHALLENGE" ] || MISSING="${MISSING} challenge"
+    [ -n "$SESSION_COOKIE" ] || MISSING="${MISSING} cookie-name"
+    [ -n "$SESSION_ID" ] || MISSING="${MISSING} cookie-value"
+    json_err "failed to read router auth challenge (missing:${MISSING})"
     rm -f "$TMP_BODY" "$TMP_AUTH_HEADERS"
     exit 0
   fi
@@ -1030,6 +1180,17 @@ case "$REQUEST_METHOD" in
     if [ "$KIND" = "stack-info" ]; then
       emit_stack_info
     fi
+    if [ "$KIND" = "geodata-status" ]; then
+      if [ -x "$GEODATA_SCRIPT" ]; then
+        STATUS_JSON="$($GEODATA_SCRIPT status 2>/dev/null)"
+        if printf '%s' "$STATUS_JSON" | jq -e '.ok == true' >/dev/null 2>&1; then
+          json_ok "$STATUS_JSON"
+          exit 0
+        fi
+      fi
+      json_ok '{"ok":true,"installed":false,"geoipSize":0,"geositeSize":0,"updatedAt":0,"autoUpdateDays":7}'
+      exit 0
+    fi
     emit_file "$ROUTING_PATH"
     ;;
   POST)
@@ -1058,12 +1219,28 @@ case "$REQUEST_METHOD" in
     fi
 
     case "$KIND" in
-      probe|subscription-fetch)
+      probe|subscription-fetch|geodata-update)
         ;;
       *)
         require_apply_lock
         ;;
     esac
+
+    if [ "$KIND" = "geodata-update" ]; then
+      if [ ! -x "$GEODATA_SCRIPT" ]; then
+        json_err "geodata updater is not installed"
+        rm -f "$TMP_BODY"
+        exit 0
+      fi
+      if UPDATE_MESSAGE="$($GEODATA_SCRIPT update 2>&1)"; then
+        UPDATE_JSON="$(jq -cn --arg message "$UPDATE_MESSAGE" '{ok:true,message:$message}')"
+        json_ok "$UPDATE_JSON"
+      else
+        json_err "geodata update failed; see /opt/var/log/xkeen-geodata.log"
+      fi
+      rm -f "$TMP_BODY"
+      exit 0
+    fi
 
     if [ "$KIND" = "state" ]; then
       if ! /opt/bin/jq -e 'type == "object" and has("profiles")' "$TMP_BODY" >/dev/null 2>&1; then
@@ -1159,6 +1336,27 @@ case "$REQUEST_METHOD" in
         json_err "invalid singbox payload (size=${BODY_SIZE:-0})"
         rm -f "$TMP_BODY"
         exit 0
+      fi
+
+      if jq -e '
+        (.activeProfileId // "") as $id
+        | .profiles[]? | select(.id == $id)
+        | any(.groups[]?;
+            (.enabled != false)
+            and (any(.domains[]?; test("^geosite:[a-z0-9]"; "i"))
+              or any(.cidrs[]?; test("^geoip:[a-z0-9]"; "i"))))
+      ' "$STATE_PATH" >/dev/null 2>&1; then
+        if [ ! -x "$GEODATA_SCRIPT" ]; then
+          json_err "geoip.dat/geosite.dat are required; update Geo databases first"
+          rm -f "$TMP_BODY"
+          exit 0
+        fi
+        if ! "$GEODATA_SCRIPT" render-singbox "$STATE_PATH" "$TMP_BODY" "$TMP_NEW"; then
+          json_err "failed to expand geo categories; verify category names"
+          rm -f "$TMP_BODY" "$TMP_NEW"
+          exit 0
+        fi
+        mv "$TMP_NEW" "$TMP_BODY"
       fi
 
       SINGBOX_PATH="/opt/etc/sing-box/xkeen.json"

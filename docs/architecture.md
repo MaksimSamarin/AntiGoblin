@@ -86,6 +86,8 @@ PREROUTING  UDP, dst ∈ xkeen_udp_route -> TPROXY :61221 (sing-box)
 
 Отдельного флага «UDP через VPN» у группы нет: UDP идёт в VPN автоматически за outbound группы.
 
+При наличии `geosite:`/`geoip:` runtime переводит `xkeen_udp_route` в catch-all для помеченных политикой устройств. Backend разворачивает выбранные protobuf-категории в правила sing-box (`domain`, `domain_suffix`, `domain_keyword`, `domain_regex`, `ip_cidr`), добавляет QUIC sniff и сохраняет порядок UI-групп. Профили без Geo-правил продолжают использовать выборочный destination-ipset.
+
 `bypass` и `direct` — **не одно и то же**. `bypass` — это `RETURN` ещё в `iptables`, поток вообще не доходит до `xray`. `direct` — поток вошёл в `xray`, но был выпущен наружу без VPN. Для локалки, discovery и части IoT cloud-сценариев нужен именно `bypass`, а не `direct`.
 
 ### SOCKS5-inbound для приложений с PC
