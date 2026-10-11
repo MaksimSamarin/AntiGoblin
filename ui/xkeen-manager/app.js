@@ -1,5 +1,5 @@
 const STORAGE_KEY = "xkeen-manager-state-v7";
-const APP_VERSION = "1.4.0";
+const APP_VERSION = "1.3.2";
 let appliedStateSnapshot = null;
 let currentApplyStep = "";
 let appUpdateTimer = null;

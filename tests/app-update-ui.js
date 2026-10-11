@@ -20,14 +20,14 @@ const ctx = { currentLang: "ru", currentApplyStep: "", appUpdateActive: false, a
   setTimeout: (fn, delay) => { timers.push({ fn, delay }); return timers.length; } };
 vm.createContext(ctx);
 for (const name of ["interfaceText", "appUpdateRequest", "showAppUpdateState", "pollAppUpdate", "updateApplication"]) vm.runInContext(extract(name), ctx);
-const idle = { currentVersion: "1.4.0", latestVersion: "1.4.0", running: false, updateAvailable: false, phase: "idle" };
+const idle = { currentVersion: "1.3.2", latestVersion: "1.3.2", running: false, updateAvailable: false, phase: "idle" };
 (async () => {
   responses = [idle]; await ctx.updateApplication();
   assert.equal(requests.length, 1); assert.equal(button.disabled, false);
-  responses = [{ ...idle, latestVersion: "1.5.0", updateAvailable: true }]; await ctx.updateApplication();
+  responses = [{ ...idle, latestVersion: "1.3.3", updateAvailable: true }]; await ctx.updateApplication();
   assert.equal(requests.length, 2, "cancelling confirmation must not start an update");
   confirmed = true;
-  responses = [{ ...idle, latestVersion: "1.5.0", updateAvailable: true }, { ...idle, running: true, phase: "installing" }];
+  responses = [{ ...idle, latestVersion: "1.3.3", updateAvailable: true }, { ...idle, running: true, phase: "installing" }];
   await ctx.updateApplication();
   assert(JSON.parse(requests.at(-1).options.body).confirm);
   assert(button.disabled && controls.saveApplyBtn.disabled && layout.inert);
@@ -37,8 +37,8 @@ const idle = { currentVersion: "1.4.0", latestVersion: "1.4.0", running: false, 
   assert.equal(layout.inert, false); assert.equal(button.disabled, false);
   assert.equal(toasts.at(-1).options.kind, "error"); assert.equal(reloads, 0);
   ctx.appUpdatePollingSince = Date.now();
-  responses = [{ ...idle, currentVersion: "1.5.0", phase: "succeeded" }]; await ctx.pollAppUpdate();
+  responses = [{ ...idle, currentVersion: "1.3.3", phase: "succeeded" }]; await ctx.pollAppUpdate();
   assert.equal(toasts.at(-1).options.kind, "success"); timers.at(-1).fn(); assert.equal(reloads, 1);
-  assert.equal(version.textContent, "v1.5.0");
+  assert.equal(version.textContent, "v1.3.3");
   console.log("PASS: updater confirmation, edit lock, reconnect retry, failure and successful reload");
 })().catch((error) => { console.error(error); process.exitCode = 1; });
