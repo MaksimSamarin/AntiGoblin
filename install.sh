@@ -321,8 +321,9 @@ seed_file() {
     return 0
   fi
 
-  cp "$SRC" "$DST"
-  chmod "$MODE" "$DST"
+  cp "$SRC" "$DST.new-$$"
+  chmod "$MODE" "$DST.new-$$"
+  mv "$DST.new-$$" "$DST"
   log "Seeded $DST"
 }
 
@@ -413,13 +414,14 @@ deploy_sources() {
   chmod 644 /opt/etc/antigoblin.conf
 
   log "Deploying UI"
-  cp "$UI/index.html"   /opt/share/xkeen-manager/index.html
-  cp "$UI/styles.css"   /opt/share/xkeen-manager/styles.css
-  cp "$UI/app.js"       /opt/share/xkeen-manager/app.js
+  deploy_file "$UI/styles.css" /opt/share/xkeen-manager/styles.css 644
+  deploy_file "$UI/app.js" /opt/share/xkeen-manager/app.js 644
+  deploy_file "$UI/service-catalog.js" /opt/share/xkeen-manager/service-catalog.js 644
   if [ -f "$UI/antigoblin-logo.png" ]; then
-    cp "$UI/antigoblin-logo.png" /opt/share/xkeen-manager/antigoblin-logo.png
+    deploy_file "$UI/antigoblin-logo.png" /opt/share/xkeen-manager/antigoblin-logo.png 644
   fi
-  chmod 644 /opt/share/xkeen-manager/index.html /opt/share/xkeen-manager/styles.css /opt/share/xkeen-manager/app.js 2>/dev/null || true
+  chmod 644 /opt/share/xkeen-manager/index.html /opt/share/xkeen-manager/styles.css /opt/share/xkeen-manager/app.js /opt/share/xkeen-manager/service-catalog.js 2>/dev/null || true
+  deploy_file "$UI/index.html" /opt/share/xkeen-manager/index.html 644
 
   log "Deploying backend"
   deploy_file "$BACKEND/routing.cgi"      /opt/share/xkeen-manager/api/routing.cgi
@@ -432,6 +434,7 @@ deploy_sources() {
   log "Deploying init and watchdog scripts"
   deploy_file "$SCRIPTS/antigoblin-selfheal-loop.sh" /opt/share/xkeen-manager/api/xkeen-selfheal-loop.sh
   deploy_file "$SCRIPTS/antigoblin-geodata.sh" /opt/share/xkeen-manager/api/antigoblin-geodata.sh
+  deploy_file "$SCRIPTS/antigoblin-app-update.sh" /opt/share/xkeen-manager/api/antigoblin-app-update.sh
   deploy_file "$SCRIPTS/antigoblin-subscription-refresh.sh" /opt/share/xkeen-manager/api/antigoblin-subscription-refresh.sh
   deploy_file "$SCRIPTS/antigoblin-sysctl.initd.sh"  /opt/etc/init.d/S20antigoblin-sysctl
   deploy_file "$SCRIPTS/antigoblin-singbox.initd.sh" /opt/etc/init.d/S24antigoblin-singbox
@@ -581,6 +584,11 @@ main() {
   deploy_sources
   install_singbox
   start_services
+  # Stamp the version only after deployment and service startup.
+  if [ -f "$SRC_DIR/ui/xkeen-manager/VERSION" ]; then
+    cp "$SRC_DIR/ui/xkeen-manager/VERSION" /opt/share/xkeen-manager/VERSION
+    chmod 644 /opt/share/xkeen-manager/VERSION
+  fi
   cleanup
   print_summary
 }

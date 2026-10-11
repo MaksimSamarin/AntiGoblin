@@ -33,3 +33,7 @@ helper_key
 /lab/
 /.dockerignore
 /issue*.patch
+
+# Python helper/test bytecode
+__pycache__/
+*.py[cod]

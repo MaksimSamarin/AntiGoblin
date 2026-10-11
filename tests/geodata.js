@@ -13,7 +13,7 @@ if (!appSource.includes("const SINGBOX_APPLY_TIMEOUT_MS = 90000;")
     || !/fetchWithTimeout\(SINGBOX_URL,[\s\S]*SINGBOX_APPLY_TIMEOUT_MS\)/.test(appSource)) {
   throw new Error("sing-box Geo apply must allow the router-side QuickJS expansion to finish");
 }
-if (!indexSource.includes("app.js?v=93") || !indexSource.includes("styles.css?v=93")) {
+if (!indexSource.includes("app.js?v=96") || !indexSource.includes("styles.css?v=96")) {
   throw new Error("Geo apply UI cache-buster was not updated");
 }
 if (!appSource.includes('tag: "xkeen-quic-tproxy"') || !appSource.includes("listen_port: SINGBOX_QUIC_TPROXY_PORT")) {

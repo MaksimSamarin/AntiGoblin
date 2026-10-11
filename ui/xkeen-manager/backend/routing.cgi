@@ -19,6 +19,7 @@ LOG_PATH="/opt/var/log/xray-manual.log"
 XRAY_BIN="/opt/sbin/xray"
 SELFHEAL_PATH="/opt/share/xkeen-manager/api/xkeen-selfheal.sh"
 GEODATA_SCRIPT="/opt/share/xkeen-manager/api/antigoblin-geodata.sh"
+APP_UPDATE_SCRIPT="/opt/share/xkeen-manager/api/antigoblin-app-update.sh"
 TMP_RESTART_SCRIPT="/tmp/xkeen-apply-restart.sh"
 RUNTIME_DIR="/opt/share/xkeen-manager/runtime"
 XKEEN_MARK=""
@@ -249,6 +250,9 @@ repair_runtime() {
 
 get_kind() {
   case "$QUERY_STRING" in
+    kind=app-update-status|*'&kind=app-update-status'|kind=app-update-status'&'*) printf 'app-update-status' ;;
+    kind=app-update-check|*'&kind=app-update-check'|kind=app-update-check'&'*) printf 'app-update-check' ;;
+    kind=app-update-start|*'&kind=app-update-start'|kind=app-update-start'&'*) printf 'app-update-start' ;;
     kind=state|*'&kind=state'|kind=state'&'*)
       printf 'state'
       ;;
@@ -1172,6 +1176,14 @@ case "$REQUEST_METHOD" in
   GET)
     require_router_session
     KIND="$(get_kind)"
+    if [ "$KIND" = "app-update-status" ]; then
+      if [ -x "$APP_UPDATE_SCRIPT" ] && UPDATE_JSON="$($APP_UPDATE_SCRIPT status 2>/dev/null)"; then
+        json_ok "$UPDATE_JSON"
+      else
+        json_err "application updater is not installed"
+      fi
+      exit 0
+    fi
     if [ "$KIND" = "state" ]; then
       emit_file "$STATE_PATH"
     fi
@@ -1223,6 +1235,34 @@ case "$REQUEST_METHOD" in
 
     if [ "$KIND" = "logout" ]; then
       router_auth_logout
+    fi
+
+    case "$KIND" in
+      app-update-check|app-update-start)
+        if [ ! -x "$APP_UPDATE_SCRIPT" ]; then
+          json_err "application updater is not installed"
+          rm -f "$TMP_BODY"; exit 0
+        fi
+        ACTION=check
+        if [ "$KIND" = "app-update-start" ]; then
+          if ! jq -e '.confirm == true' "$TMP_BODY" >/dev/null 2>&1; then
+            json_err "application update requires confirmation"
+            rm -f "$TMP_BODY"; exit 0
+          fi
+          ACTION=start
+        fi
+        if UPDATE_JSON="$($APP_UPDATE_SCRIPT "$ACTION" 2>/dev/null)"; then
+          json_ok "$UPDATE_JSON"
+        else
+          json_err "cannot check or start application update; check connectivity and retry"
+        fi
+        rm -f "$TMP_BODY"; exit 0
+        ;;
+    esac
+    if [ -d /opt/var/run/antigoblin-app-update.lock ] && [ -x "$APP_UPDATE_SCRIPT" ] \
+      && "$APP_UPDATE_SCRIPT" status | jq -e '.running == true' >/dev/null 2>&1; then
+      json_err "application update in progress"
+      rm -f "$TMP_BODY"; exit 0
     fi
 
     case "$KIND" in

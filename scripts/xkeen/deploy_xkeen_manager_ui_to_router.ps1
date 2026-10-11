@@ -17,7 +17,7 @@ $python = (Get-Command python -ErrorAction Stop).Source
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $uiRoot = Join-Path $repoRoot 'ui\xkeen-manager'
 $sshHelper = Join-Path $PSScriptRoot 'router_ssh.py'
-$files = @('index.html', 'app.js', 'styles.css', 'antigoblin-logo.png')
+$files = @('index.html', 'service-catalog.js', 'app.js', 'styles.css', 'antigoblin-logo.png', 'VERSION')
 
 function Invoke-RouterCommand {
   param(

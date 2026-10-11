@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AntiGoblin</title>
-  <link rel="stylesheet" href="./styles.css?v=93">
+  <link rel="stylesheet" href="./styles.css?v=96">
 </head>
 <body>
     <div id="authOverlay" class="auth-overlay" hidden>
@@ -35,7 +35,7 @@
     <header class="hero">
       <div class="hero-brand">
         <div class="hero-logo-wrap">
-          <img class="hero-logo" src="./antigoblin-logo.png" alt="AntiGoblin logo">
+          <img class="hero-logo" src="./antigoblin-logo.png?v=96" alt="AntiGoblin logo">
         </div>
         <div class="hero-copy">
           <div class="hero-copy-top">
@@ -55,19 +55,23 @@
           </select>
         </label>
       </div>
-      <div class="hero-actions-row">
+
+      <input id="importStateInput" type="file" accept=".json,application/json" hidden>
+    </header>
+    <div class="hero-actions-row">
         <div class="hero-actions hero-actions-left">
+          <button id="updateAppBtn" type="button">Обновить приложение</button>
+          <span id="appVersion" class="app-version"></span>
           <button id="importStateBtn" type="button">&#1048;&#1084;&#1087;&#1086;&#1088;&#1090;</button>
           <button id="exportStateBtn" type="button">&#1057;&#1082;&#1072;&#1095;&#1072;&#1090;&#1100;</button>
         </div>
         <div class="hero-actions hero-actions-right">
+          <span id="applyStatus" class="apply-status" role="status" aria-live="polite"></span>
           <button id="repairRuntimeBtn" type="button" class="warning">&#1056;&#1077;&#1089;&#1090;&#1072;&#1088;&#1090;</button>
           <button id="saveApplyBtn" type="button" class="primary">&#1057;&#1086;&#1093;&#1088;&#1072;&#1085;&#1080;&#1090;&#1100; &#1080; &#1087;&#1088;&#1080;&#1084;&#1077;&#1085;&#1080;&#1090;&#1100;</button>
           <button id="logoutBtn" type="button" class="danger-solid">&#1042;&#1099;&#1081;&#1090;&#1080;</button>
         </div>
       </div>
-      <input id="importStateInput" type="file" accept=".json,application/json" hidden>
-    </header>
 
     <main class="layout">
       <div class="stack-col">
@@ -90,46 +94,26 @@
             </label>
           </div>
 
-          <div class="profile-actions-row">
-            <div class="hero-actions compact-actions profile-actions-center">
-              <button id="addProfileBtn" type="button">&#1053;&#1086;&#1074;&#1099;&#1081;</button>
-              <button id="duplicateProfileBtn" type="button">&#1044;&#1091;&#1073;&#1083;&#1080;&#1088;&#1086;&#1074;&#1072;&#1090;&#1100;</button>
-              <button id="removeProfileBtn" type="button">&#1059;&#1076;&#1072;&#1083;&#1080;&#1090;&#1100;</button>
-              <button id="saveStateBtn" type="button">&#1057;&#1086;&#1093;&#1088;&#1072;&#1085;&#1080;&#1090;&#1100;</button>
-            </div>
-          </div>
-
-          <div class="grid two profile-settings-grid">
-            <label>
-              <span id="domainStrategyLabel">&#1057;&#1090;&#1088;&#1072;&#1090;&#1077;&#1075;&#1080;&#1103; &#1076;&#1086;&#1084;&#1077;&#1085;&#1086;&#1074;</span>
-              <select id="domainStrategy">
-                <option value="IPIfNonMatch">IPIfNonMatch</option>
-                <option value="AsIs">AsIs</option>
-                <option value="IPOnDemand">IPOnDemand</option>
-              </select>
-            </label>
-            <label>
-              <span id="fallbackLabel">&#1052;&#1072;&#1088;&#1096;&#1088;&#1091;&#1090; &#1087;&#1086; &#1091;&#1084;&#1086;&#1083;&#1095;&#1072;&#1085;&#1080;&#1102;</span>
-              <select id="fallbackOutbound">
-                <option value="direct">direct</option>
-                <option value="vless-reality">vless-reality</option>
-              </select>
-            </label>
-          </div>
-
           <div class="vless-panel">
             <div class="panel-header mini-header">
               <div>
                 <p class="panel-kicker">VLESS / VMess</p>
                 <h3 id="proxyTitle">Подписки и ключи</h3>
               </div>
-              <div class="hero-actions compact-actions proxy-actions">
-                <button id="addManualKeyBtn" type="button">+ Ручной ключ</button>
-                <button id="addSubscriptionBtn" type="button">+ Подписка</button>
-                <button id="probeProxyBtn" type="button">Проверить активный</button>
-              </div>
+
             </div>
 
+            <div class="hero-actions compact-actions proxy-actions connection-actions">
+              <button id="addManualKeyBtn" type="button">+ Ручной ключ</button>
+              <button id="addSubscriptionBtn" type="button">+ Подписка</button>
+              <button id="probeProxyBtn" type="button">Проверить активный</button>
+            </div>
+            <section class="key-block">
+              <h4 class="key-block-title" id="activeKeyHeading">Активный ключ</h4>
+              <ul id="activeProxyList" class="active-proxy-list" aria-live="polite"></ul>
+              <div id="proxyProbeStatus" class="probe-status" hidden></div>
+
+            </section>
             <section class="key-block">
               <h4 class="key-block-title" id="subsHeading">Подписки</h4>
               <ul id="subscriptionsList" class="cards-list" aria-live="polite"></ul>
@@ -138,12 +122,6 @@
             <section class="key-block">
               <h4 class="key-block-title" id="manualKeysHeading">Ручные ключи</h4>
               <ul id="manualKeysList" class="cards-list" aria-live="polite"></ul>
-            </section>
-
-            <section class="key-block">
-              <h4 class="key-block-title" id="activeKeyHeading">Активный ключ</h4>
-              <ul id="activeProxyList" class="active-proxy-list" aria-live="polite"></ul>
-              <div id="proxyProbeStatus" class="probe-status" hidden></div>
             </section>
 
             <div id="manualKeyForm" class="inline-form" hidden>
@@ -207,6 +185,34 @@
               </div>
             </div>
 
+          </div>
+          <details class="profile-details">
+            <summary id="profileDetailsSummary">Дополнительные настройки профиля</summary>
+            <div class="profile-actions-row">
+              <div class="hero-actions compact-actions profile-actions-center">
+                <button id="addProfileBtn" type="button">&#1053;&#1086;&#1074;&#1099;&#1081;</button>
+                <button id="duplicateProfileBtn" type="button">&#1044;&#1091;&#1073;&#1083;&#1080;&#1088;&#1086;&#1074;&#1072;&#1090;&#1100;</button>
+                <button id="removeProfileBtn" type="button">&#1059;&#1076;&#1072;&#1083;&#1080;&#1090;&#1100;</button>
+                <button id="saveStateBtn" type="button">&#1057;&#1086;&#1093;&#1088;&#1072;&#1085;&#1080;&#1090;&#1100;</button>
+              </div>
+            </div>
+            <div class="grid two profile-settings-grid">
+              <label>
+                <span id="domainStrategyLabel">&#1057;&#1090;&#1088;&#1072;&#1090;&#1077;&#1075;&#1080;&#1103; &#1076;&#1086;&#1084;&#1077;&#1085;&#1086;&#1074;</span>
+                <select id="domainStrategy">
+                  <option value="IPIfNonMatch">IPIfNonMatch</option>
+                  <option value="AsIs">AsIs</option>
+                  <option value="IPOnDemand">IPOnDemand</option>
+                </select>
+              </label>
+              <label>
+                <span id="fallbackLabel">&#1052;&#1072;&#1088;&#1096;&#1088;&#1091;&#1090; &#1087;&#1086; &#1091;&#1084;&#1086;&#1083;&#1095;&#1072;&#1085;&#1080;&#1102;</span>
+                <select id="fallbackOutbound">
+                  <option value="direct">direct</option>
+                  <option value="vless-reality">vless-reality</option>
+                </select>
+              </label>
+            </div>
             <div class="mux-settings">
               <div class="mux-settings-head">
                 <div>
@@ -239,7 +245,7 @@
                 </label>
               </div>
             </div>
-          </div>
+          </details>
         </section>
 
         <section class="panel health-panel" data-panel-id="health">
@@ -324,6 +330,7 @@
     </main>
   </div>
 
-  <script charset="utf-8" src="./app.js?v=93"></script>
+  <script charset="utf-8" src="./service-catalog.js?v=96"></script>
+  <script charset="utf-8" src="./app.js?v=96"></script>
 </body>
 </html>

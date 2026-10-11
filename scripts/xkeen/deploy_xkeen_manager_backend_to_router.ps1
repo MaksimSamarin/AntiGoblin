@@ -41,6 +41,7 @@ $localSelfHeal = Join-Path $repoRoot 'ui\xkeen-manager\backend\xkeen-selfheal.sh
 $localRuntime = Join-Path $repoRoot 'ui\xkeen-manager\backend\xkeen-runtime.sh'
 $localGeodataWorker = Join-Path $repoRoot 'ui\xkeen-manager\backend\geodata.js'
 $localGeodataScript = Join-Path $repoRoot 'scripts\xkeen\antigoblin-geodata.sh'
+$localAppUpdateScript = Join-Path $repoRoot 'scripts\xkeen\antigoblin-app-update.sh'
 $localSubscriptionWorker = Join-Path $repoRoot 'ui\xkeen-manager\backend\subscription-refresh.js'
 $localSubscriptionCandidate = Join-Path $repoRoot 'ui\xkeen-manager\backend\subscription-candidate.js'
 $localSubscriptionRefresh = Join-Path $repoRoot 'scripts\xkeen\antigoblin-subscription-refresh.sh'
@@ -172,6 +173,7 @@ Invoke-RouterCommand -Command "test -x /opt/bin/qjs && test -x /opt/bin/curl && 
 Send-RemoteFile -LocalPath $localApi -RemotePath "$RemoteApiDir/routing.cgi"
 Send-RemoteFile -LocalPath $localSelfHeal -RemotePath "$RemoteApiDir/xkeen-selfheal.sh"
 Send-RemoteFile -LocalPath $localRuntime -RemotePath "$RemoteApiDir/xkeen-runtime.sh"
+Send-RemoteFile -LocalPath $localAppUpdateScript -RemotePath "$RemoteApiDir/antigoblin-app-update.sh"
 Send-RemoteFile -LocalPath $localGeodataWorker -RemotePath $RemoteGeodataWorker -Mode '644'
 Send-RemoteFile -LocalPath $localGeodataScript -RemotePath $RemoteGeodataScript
 Send-RemoteFile -LocalPath $localSubscriptionWorker -RemotePath $RemoteSubscriptionWorker -Mode '644'

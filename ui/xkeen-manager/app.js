@@ -1,4 +1,144 @@
 const STORAGE_KEY = "xkeen-manager-state-v7";
+const APP_VERSION = "1.4.0";
+let appliedStateSnapshot = null;
+let currentApplyStep = "";
+let appUpdateTimer = null;
+let appUpdatePollingSince = 0;
+let appUpdateActive = false;
+
+function interfaceText(key) {
+  const strings = {
+    ru: { details: "Дополнительные настройки профиля", dirty: "Есть неприменённые изменения",
+      state: "Сохранение настроек…", outbounds: "Подготовка подключения…", "sing-box": "Обработка сервисов…", routing: "Применение маршрутов…",
+      update: "Обновить приложение", checking: "Проверка обновлений…", latest: "Установлена актуальная версия",
+      confirm: "Установить AntiGoblin {version}? Во время обновления VPN и панель могут ненадолго переподключиться.",
+      updating: "Обновление приложения…", updated: "Приложение обновлено. Перезагрузка панели…", failed: "Не удалось обновить приложение",
+      unknown: "Версия не определена", timeout: "Обновление ещё выполняется. Перезагрузи панель, чтобы проверить статус.",
+      all: "Весь трафик профиля", more: "ещё", domains: "Домены", ips: "IP-правила" },
+    en: { details: "Additional profile settings", dirty: "There are unapplied changes",
+      state: "Saving settings…", outbounds: "Preparing connection…", "sing-box": "Processing services…", routing: "Applying routes…",
+      update: "Update application", checking: "Checking for updates…", latest: "The latest version is installed",
+      confirm: "Install AntiGoblin {version}? The VPN and panel may briefly reconnect during the update.",
+      updating: "Updating application…", updated: "Application updated. Reloading the panel…", failed: "Application update failed",
+      unknown: "Unknown version", timeout: "The update is still running. Reload the panel to check its status.",
+      all: "All profile traffic", more: "more", domains: "Domains", ips: "IP rules" }
+  };
+  return strings[currentLang === "en" ? "en" : "ru"][key];
+}
+
+function renderApplyStatus() {
+  const label = document.getElementById("applyStatus");
+  if (!label) return;
+  label.textContent = currentApplyStep ? interfaceText(currentApplyStep) :
+    appliedStateSnapshot !== null && JSON.stringify(state) !== appliedStateSnapshot ? interfaceText("dirty") : "";
+}
+
+function renderGroupSummaries() {
+  const profile = getActiveProfile();
+  if (!profile) return;
+  document.querySelectorAll(".group-card[data-group-id]").forEach((card) => {
+    const group = profile.groups.find((item) => item.id === card.dataset.groupId);
+    const row = card.querySelector(".group-summary");
+    if (!group || !row) return;
+    const services = (group.serviceIds || []).map((id) => AntiGoblinServices.get(id)?.name).filter(Boolean);
+    const all = group.cidrs.includes("0.0.0.0/0") || (!group.domains.length && !group.cidrs.length);
+    const items = all ? interfaceText("all") : services.length ? services.slice(0, 4).join(" · ") +
+      (services.length > 4 ? ` · ${interfaceText("more")} ${services.length - 4}` : "") :
+      `${interfaceText("domains")}: ${group.domains.length} · ${interfaceText("ips")}: ${group.cidrs.length}`;
+    row.textContent = `${group.outboundTag === "bypass" ? T.trafficTypeBypass : T.trafficTypeVpn} · ${items}`;
+  });
+}
+
+async function appUpdateRequest(action, body) {
+  const response = await fetchWithTimeout(`./api/routing.cgi?kind=app-update-${action}`, body === undefined ?
+    { cache: "no-store" } : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, 45000);
+  const result = await parseResponseOrThrow(response);
+  if (!result.currentVersion) throw new Error("application updater is not installed");
+  return result;
+}
+
+function showAppUpdateState(info) {
+  const button = document.getElementById("updateAppBtn");
+  const version = document.getElementById("appVersion");
+  if (!button || !version) return;
+  version.textContent = info.currentVersion === "unknown" ? interfaceText("unknown") : `v${info.currentVersion}`;
+  appUpdateActive = info.running === true;
+  button.disabled = appUpdateActive;
+  button.textContent = interfaceText(appUpdateActive ? "updating" : "update");
+  // Updating application files must not race with profile/configuration edits.
+  const layout = document.querySelector(".layout");
+  if (layout) layout.inert = appUpdateActive || !!currentApplyStep;
+  els.saveApplyBtn.disabled = appUpdateActive || !!currentApplyStep;
+  els.repairRuntimeBtn.disabled = appUpdateActive;
+  els.importStateBtn.disabled = appUpdateActive;
+  if (appUpdateActive && !appUpdateTimer) {
+    if (!appUpdatePollingSince) appUpdatePollingSince = Date.now();
+    appUpdateTimer = setTimeout(pollAppUpdate, 2000);
+  }
+}
+
+async function pollAppUpdate() {
+  appUpdateTimer = null;
+  if (Date.now() - appUpdatePollingSince > 15 * 60 * 1000) {
+    showToast(interfaceText("timeout"), { kind: "error", ttl: 10000 });
+    return;
+  }
+  try {
+    const info = await appUpdateRequest("status");
+    showAppUpdateState(info);
+    if (!info.running) {
+      appUpdatePollingSince = 0;
+      if (info.phase === "succeeded") {
+        showToast(interfaceText("updated"), { kind: "success" });
+        setTimeout(() => location.reload(), 1500);
+      } else if (info.phase === "failed") {
+        showToast(`${interfaceText("failed")}: ${info.message || ""}`, { kind: "error", ttl: 10000 });
+      }
+    }
+  } catch (error) {
+    if (isAuthError(error)) {
+      appUpdatePollingSince = 0;
+      showAuthOverlay(AUTH_LOGIN_HINT);
+      return;
+    }
+    // uhttpd restarts during installation. Keep polling through that gap.
+    appUpdateTimer = setTimeout(pollAppUpdate, 3000);
+  }
+}
+
+async function updateApplication() {
+  if (currentApplyStep || appUpdateActive) return;
+  const button = document.getElementById("updateAppBtn");
+  button.disabled = true;
+  button.textContent = interfaceText("checking");
+  try {
+    const info = await appUpdateRequest("check", {});
+    showAppUpdateState(info);
+    if (info.running) return;
+    if (!info.updateAvailable) {
+      showToast(`${interfaceText("latest")} (${info.currentVersion})`, { kind: "success" });
+      return;
+    }
+    if (!window.confirm(interfaceText("confirm").replace("{version}", info.latestVersion))) return;
+    if (currentApplyStep) return;
+    showAppUpdateState({ ...info, running: true, phase: "starting" });
+    const job = await appUpdateRequest("start", { confirm: true });
+    showAppUpdateState(job);
+  } catch (error) {
+    // A lost start response does not prove the detached installer failed.
+    if (appUpdateActive) {
+      try {
+        const info = await appUpdateRequest("status");
+        showAppUpdateState(info);
+        if (info.running) return;
+      } catch { /* The panel may be restarting; the existing poll will retry. */ }
+    }
+    if (isAuthError(error)) showAuthOverlay(AUTH_LOGIN_HINT);
+    showToast(`${interfaceText("failed")}: ${error.message}`, { kind: "error", ttl: 8000 });
+  } finally {
+    if (!appUpdateActive) { button.disabled = false; button.textContent = interfaceText("update"); }
+  }
+}
 
 // Default timeout for router-side fetches. Without this, a stuck CGI
 // (waiting on lock, dead nslookup, etc) freezes Save/Apply/Restart
@@ -757,7 +897,8 @@ function setupPanelCollapse() {
     btn.className = "panel-collapse-toggle";
     btn.setAttribute("aria-expanded", "true");
     header.insertBefore(btn, header.firstChild);
-    const saved = localStorage.getItem(`panel-collapsed-${id}`);
+    const saved = localStorage.getItem(`panel-collapsed-${id}`) ??
+      (id === "health" || id === "preview" ? "1" : "0");
     btn.setAttribute("aria-label", T.panelCollapseAria);
     const apply = (collapsed) => {
       panel.classList.toggle("collapsed", collapsed);
@@ -777,6 +918,7 @@ async function bootstrap() {
   try {
     state = await loadRemoteState();
     await hydrateProxyConfigFromRemote();
+    appliedStateSnapshot = JSON.stringify(state);
     pushDebug(`loaded live state: profiles=${state.profiles.length}, activeGroups=${getActiveProfile()?.groups?.length ?? 0}`);
     hideAuthOverlay();
     persistAndRender();
@@ -784,6 +926,7 @@ async function bootstrap() {
     renderStackInfo().catch(() => {});
     renderGeodataStatus().catch(() => {});
     startExitIpCheck();
+    appUpdateRequest("status").then(showAppUpdateState).catch(() => {});
   } catch (error) {
     pushDebug(`bootstrap failed: ${error.message}`);
     if (isAuthError(error)) {
@@ -807,6 +950,7 @@ async function bootstrap() {
 }
 
 function bindTopLevel() {
+  document.getElementById("updateAppBtn")?.addEventListener("click", updateApplication);
   if (els.langSelect) {
     els.langSelect.value = currentLang;
     els.langSelect.addEventListener("change", () => {
@@ -1098,6 +1242,14 @@ function bindTopLevel() {
     profile.groups.unshift(createEmptyGroup());
     persistAndRender();
   });
+  if (typeof AntiGoblinServices !== "undefined") {
+    const button = document.createElement("button");
+    button.id = "addServicesBtn";
+    button.type = "button";
+    button.textContent = AntiGoblinServices.labels[currentLang].add;
+    button.addEventListener("click", () => openServicePicker());
+    els.addGroupBtn.before(button);
+  }
 
   els.addProfileBtn.addEventListener("click", () => {
     const profile = createEmptyProfile(T.profileAdded);
@@ -1272,16 +1424,20 @@ function bindTopLevel() {
 
   els.saveApplyBtn.addEventListener("click", async () => {
     els.saveApplyBtn.disabled = true;
+    const appliedSnapshot = JSON.stringify(state);
+    const layout = document.querySelector(".layout");
+    if (layout) layout.inert = true;
     const toast = showToast(T.toastSavingApplying || "Сохранение и применение...", { kind: "progress" });
     // Save is a 4-step pipeline. Each step can partially succeed on the
     // router; if step 3 fails, step 1+2 already committed. Tag the current
     // step so the user sees WHICH one failed, not a generic "Save failed".
     let step = "state";
     try {
-      step = "state";       await saveRemoteState();
-      step = "outbounds";   await saveRemoteOutbounds();
-      step = "sing-box";    await saveRemoteSingbox();
+      step = currentApplyStep = "state"; renderApplyStatus(); await saveRemoteState();
+      step = currentApplyStep = "outbounds"; renderApplyStatus(); await saveRemoteOutbounds();
+      step = currentApplyStep = "sing-box"; renderApplyStatus(); await saveRemoteSingbox();
       step = "routing";
+      currentApplyStep = step; renderApplyStatus();
       // Routing apply is the heaviest CGI call in the pipeline: validate the
       // whole confdir with `xray -test`, then a graceful xray restart (up to
       // ~8s waiting for the old PID + ~12s polling :61219 to come back up).
@@ -1295,6 +1451,7 @@ function bindTopLevel() {
       }, 45000);
       await parseResponseOrThrow(routingResponse);
       step = "done";
+      appliedStateSnapshot = appliedSnapshot;
       persistState();
       // Active key / VPN host might have changed by this apply; drop
       // cached exit-IP so the next tick can re-detect.
@@ -1318,6 +1475,9 @@ function bindTopLevel() {
       toast.update(formatMessage(T.saveApplyFailedStepFmt, { msg: T.saveApplyFailed, step: stepLabel, err: error.message }), "error");
       pushDebug(`saveApply failed at step=${step}: ${error.message}`);
     } finally {
+      currentApplyStep = "";
+      if (layout) layout.inert = appUpdateActive;
+      renderApplyStatus();
       els.saveApplyBtn.disabled = false;
     }
   });
@@ -1980,6 +2140,7 @@ function render() {
 
   renderGroups();
   renderPreview();
+  renderApplyStatus();
 }
 
 function renderProfiles() {
@@ -2003,6 +2164,146 @@ function renderProfiles() {
 // group doesn't collapse all previously-expanded cards.
 const groupExpanded = new Map();
 
+function serviceLabels() {
+  return AntiGoblinServices.labels[currentLang] || AntiGoblinServices.labels.ru;
+}
+
+async function openServicePicker(groupId) {
+  const profile = getActiveProfile();
+  if (!profile) return;
+  const group = profile.groups.find((g) => g.id === groupId);
+  const labels = serviceLabels();
+  const selected = new Set(group?.serviceIds || []);
+  let category = "all", showAll = false, geoReady = false;
+  const dialog = document.createElement("dialog");
+  dialog.className = "service-picker";
+  dialog.setAttribute("aria-labelledby", "servicePickerTitle");
+  dialog.innerHTML = `<form>
+    <div class="service-picker-head"><h2 id="servicePickerTitle">${escapeHtml(labels.title)}</h2><button type="button" data-cancel>${escapeHtml(labels.cancel)}</button></div>
+    <label><span>${escapeHtml(labels.search)}</span><input type="search" data-search autocomplete="off"></label>
+    <div class="service-categories">${["all","ai","social","media","games","work","ecosystems"].map((id) => `<button type="button" data-category="${id}" aria-pressed="${id === category}">${escapeHtml(labels[id])}</button>`).join("")}</div>
+    <div class="service-picker-grid" data-choices></div>
+    <button type="button" data-more>${escapeHtml(labels.more)}</button>
+    <div class="grid two service-picker-fields"><label><span>${escapeHtml(labels.name)}</span><input data-name value="${escapeHtml(group?.name || labels.group)}"></label>
+    <label><span>${escapeHtml(labels.route)}</span><select data-route><option value="vless-reality">${escapeHtml(labels.vpn)}</option><option value="bypass">${escapeHtml(labels.bypass)}</option></select></label></div>
+    <div data-voice-block hidden><label class="toggle"><input type="checkbox" data-voice><span>${escapeHtml(labels.voice)}</span></label><p class="service-hint">${escapeHtml(labels.voiceHint)}</p></div>
+    <p class="service-hint" data-geo role="status">${escapeHtml(labels.checking)}</p><button type="button" data-update hidden>${escapeHtml(T.geodataUpdate)}</button>
+    <div class="service-picker-footer"><span data-count aria-live="polite"></span><button class="primary" type="submit" data-submit disabled>${escapeHtml(group ? labels.apply : labels.add)}</button></div>
+    </form>`;
+  const form = dialog.querySelector("form");
+  const query = dialog.querySelector("[data-search]");
+  const voice = dialog.querySelector("[data-voice]");
+  voice.checked = group?.serviceVoiceEnabled !== false;
+  dialog.querySelector("[data-route]").value = group?.outboundTag === "bypass" ? "bypass" : "vless-reality";
+  const refresh = () => {
+    const search = query.value.trim().toLowerCase();
+    const items = AntiGoblinServices.catalog.filter((s) => (category === "all" || s.category === category)
+      && (!search || s.name.toLowerCase().includes(search))
+      && (category !== "all" || search || showAll || s.popular));
+    dialog.querySelector("[data-choices]").innerHTML = items.length ? items.map((s) => `<label class="service-choice"><input type="checkbox" data-service="${s.id}" ${selected.has(s.id) ? "checked" : ""}><span><strong>${escapeHtml(s.name)}</strong><small>${escapeHtml(AntiGoblinServices.scope(s, currentLang))}</small></span></label>`).join("") : `<p>${escapeHtml(labels.empty)}</p>`;
+    dialog.querySelectorAll("[data-category]").forEach((b) => b.setAttribute("aria-pressed", String(category === b.dataset.category)));
+    dialog.querySelector("[data-more]").hidden = showAll || category !== "all" || !!search;
+    dialog.querySelector("[data-count]").textContent = `${labels.selected}: ${selected.size}`;
+    dialog.querySelector("[data-voice-block]").hidden = !selected.has("discord");
+    dialog.querySelector("[data-submit]").disabled = !selected.size || !geoReady;
+  };
+  const checkGeo = async () => {
+    try {
+      const response = await fetchWithTimeout(GEODATA_STATUS_URL, { cache: "no-store" }, 15000);
+      const payload = await parseResponseOrThrow(response);
+      geoReady = payload.installed === true;
+      dialog.querySelector("[data-geo]").textContent = geoReady ? labels.geoReady : labels.geoMissing;
+      dialog.querySelector("[data-update]").hidden = geoReady;
+    } catch (error) {
+      geoReady = false;
+      dialog.querySelector("[data-geo]").textContent = `${labels.geoFailed} ${String(error.message || error).slice(0, 100)}`;
+      if (isAuthError(error)) { dialog.close(); showAuthOverlay(AUTH_LOGIN_HINT); }
+    }
+    refresh();
+  };
+  dialog.addEventListener("click", (event) => {
+    const button = event.target.closest("button");
+    if (!button) return;
+    if (button.hasAttribute("data-cancel")) dialog.close();
+    if (button.dataset.category) { category = button.dataset.category; refresh(); }
+    if (button.hasAttribute("data-more")) { showAll = true; refresh(); }
+  });
+  dialog.addEventListener("change", (event) => {
+    const id = event.target.dataset.service;
+    if (id) { event.target.checked ? selected.add(id) : selected.delete(id); refresh(); dialog.querySelector(`[data-service="${id}"]`)?.focus(); }
+  });
+  query.addEventListener("input", refresh);
+  dialog.querySelector("[data-update]").addEventListener("click", async (event) => {
+    event.target.disabled = true;
+    await updateGeodata();
+    if (dialog.isConnected) { await checkGeo(); event.target.disabled = false; }
+  });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!selected.size || !geoReady) return;
+    const current = state.profiles.find((p) => p.id === profile.id);
+    if (!current) { dialog.close(); return; }
+    const live = groupId ? current.groups.find((g) => g.id === groupId) : createEmptyGroup();
+    if (!live) { dialog.close(); return; }
+    const merged = AntiGoblinServices.selectServices(live, [...selected], {
+      voiceEnabled: voice.checked, voiceCidrs: AntiGoblinServices.localVoiceCidrs(current)
+    });
+    merged.name = dialog.querySelector("[data-name]").value.trim() || labels.group;
+    merged.outboundTag = dialog.querySelector("[data-route]").value;
+    if (groupId) current.groups = current.groups.map((g) => g.id === groupId ? merged : g);
+    else current.groups.unshift(merged);
+    groupExpanded.set(merged.id, true);
+    dialog.close();
+    persistAndRender();
+  });
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  document.body.appendChild(dialog);
+  refresh(); dialog.showModal(); query.focus();
+  await checkGeo();
+}
+
+function renderGroupServices(group, card) {
+  if (typeof AntiGoblinServices === "undefined") return;
+  const labels = serviceLabels();
+  const section = document.createElement("div");
+  section.className = "group-services";
+  const ids = group.serviceIds || [];
+  section.innerHTML = `<div class="service-chips">${ids.map((id) => `<button type="button" data-remove-service="${escapeHtml(id)}" aria-label="${escapeHtml(labels.remove + ' ' + (AntiGoblinServices.get(id)?.name || id))}">${escapeHtml(AntiGoblinServices.get(id)?.name || id)} ×</button>`).join("")}</div>
+    <button type="button" data-edit-services>${escapeHtml(ids.length ? labels.edit : labels.add)}</button>`;
+  section.querySelector("[data-edit-services]").addEventListener("click", () => openServicePicker(group.id));
+  section.querySelectorAll("[data-remove-service]").forEach((b) => b.addEventListener("click", () => {
+    const profile = getActiveProfile();
+    const live = profile?.groups.find((g) => g.id === group.id);
+    if (!live) return;
+    const next = AntiGoblinServices.selectServices(live, live.serviceIds.filter((id) => id !== b.dataset.removeService));
+    profile.groups = profile.groups.map((g) => g.id === group.id ? next : g);
+    persistAndRender();
+  }));
+  if (Array.isArray(group.serviceIds)) {
+    const rules = document.createElement("details");
+    rules.className = "service-rules";
+    rules.innerHTML = `<summary>${escapeHtml(labels.rules)}</summary><ul>${ids.map((id) => {
+      const service = AntiGoblinServices.get(id);
+      return `<li><strong>${escapeHtml(service?.name || id)}</strong> — ${escapeHtml(service ? AntiGoblinServices.scope(service, currentLang) : id)}</li>`;
+    }).join("")}</ul><pre></pre>`;
+    const manual = new Set([...(group.serviceManualDomains || []), ...(group.serviceManualCidrs || [])]);
+    rules.querySelector("pre").textContent = [...group.domains, ...group.cidrs].filter((v) => !manual.has(v)).join("\n");
+    section.appendChild(rules);
+    if (ids.includes("discord")) {
+      const note = document.createElement("p");
+      note.className = "service-hint";
+      note.textContent = labels.voiceHint;
+      section.appendChild(note);
+    }
+    const manualGrid = card.querySelector(".group-body > .grid:last-child");
+    const details = document.createElement("details");
+    details.className = "service-extra";
+    details.innerHTML = `<summary>${escapeHtml(labels.extra)}</summary>`;
+    manualGrid.replaceWith(details); details.appendChild(manualGrid);
+  }
+  card.querySelector(".group-body").prepend(section);
+}
+
 function renderGroups() {
   const profile = getActiveProfile();
   els.groups.innerHTML = "";
@@ -2016,6 +2317,7 @@ function renderGroups() {
   for (const group of profile.groups) {
     const card = document.createElement("article");
     card.className = "group-card";
+    card.dataset.groupId = group.id;
     card.innerHTML = `
       <div class="group-head">
         <div class="group-head-main">
@@ -2032,6 +2334,7 @@ function renderGroups() {
           <button class="danger remove-group" type="button">${escapeHtml(T.remove)}</button>
         </div>
       </div>
+      <div class="group-summary"></div>
       <div class="group-body">
         <div class="grid two">
           <label>
@@ -2087,13 +2390,17 @@ function renderGroups() {
     noteEl.value = group.note || "";
     enabledEl.checked = group.enabled;
     outboundEl.value = group.outboundTag;
-    domainsEl.value = group.domains.join("\n");
-    cidrsEl.value = group.cidrs.join("\n");
+    domainsEl.value = (group.serviceManualDomains || group.domains).join("\n");
+    cidrsEl.value = (group.serviceManualCidrs || group.cidrs).join("\n");
+    renderGroupServices(group, card);
 
     collapseBtn.addEventListener("click", () => setCollapsed(!collapsed));
     nameEl.addEventListener("input", () => updateGroup(group.id, { name: nameEl.value }));
     noteEl.addEventListener("input", () => updateGroup(group.id, { note: noteEl.value }));
-    enabledEl.addEventListener("change", () => updateGroup(group.id, { enabled: enabledEl.checked }));
+    enabledEl.addEventListener("change", () => {
+      updateGroup(group.id, { enabled: enabledEl.checked });
+      enabledEl.checked = profile.groups.find((g) => g.id === group.id)?.enabled !== false;
+    });
     outboundEl.addEventListener("change", () => updateGroup(group.id, { outboundTag: outboundEl.value }));
     domainsEl.addEventListener("input", () => updateGroup(group.id, { domains: splitLinesOrCsv(domainsEl.value) }));
     cidrsEl.addEventListener("input", () => updateGroup(group.id, { cidrs: splitLinesOrCsv(cidrsEl.value) }));
@@ -2108,8 +2415,9 @@ function renderGroups() {
           showToast(T.importRoutesEmpty, { kind: "error", ttl: 4500 });
           return;
         }
-        const domains = dedupeDomainsList([...(group.domains || []), ...imported.domains]);
-        const cidrs = dedupeCidrsList([...(group.cidrs || []), ...imported.cidrs]);
+        const live = profile.groups.find((g) => g.id === group.id) || group;
+        const domains = dedupeDomainsList([...(live.serviceManualDomains || live.domains || []), ...imported.domains]);
+        const cidrs = dedupeCidrsList([...(live.serviceManualCidrs || live.cidrs || []), ...imported.cidrs]);
         domainsEl.value = domains.join("\n");
         cidrsEl.value = cidrs.join("\n");
         updateGroup(group.id, { domains, cidrs });
@@ -2177,6 +2485,7 @@ function renderGroups() {
 
     els.groups.appendChild(card);
   }
+  renderGroupSummaries();
 }
 
 function renderPreview() {
@@ -2273,7 +2582,16 @@ function buildRoutingDocument(inputState) {
 function updateGroup(id, patch) {
   const profile = getActiveProfile();
   if (!profile) return;
-  profile.groups = profile.groups.map((group) => group.id === id ? { ...group, ...patch } : group);
+  profile.groups = profile.groups.map((group) => {
+    if (group.id !== id) return group;
+    const next = { ...group, ...patch };
+    if (typeof AntiGoblinServices !== "undefined" && Array.isArray(group.serviceIds)) {
+      if (Array.isArray(patch.domains)) next.serviceManualDomains = patch.domains;
+      if (Array.isArray(patch.cidrs)) next.serviceManualCidrs = patch.cidrs;
+      return AntiGoblinServices.normalizeGroup(next);
+    }
+    return next;
+  });
   persistState();
   renderPreview();
 }
@@ -2285,6 +2603,8 @@ function persistAndRender() {
 
 let persistQuotaWarned = false;
 function persistState() {
+  renderApplyStatus();
+  renderGroupSummaries();
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     persistQuotaWarned = false;
@@ -4020,7 +4340,8 @@ function normalizeSubscriptionEntry(entry) {
 }
 
 function normalizeProfile(profile) {
-  const groups = (Array.isArray(profile.groups) ? profile.groups : []).map((group) => ({
+  const groups = (Array.isArray(profile.groups) ? profile.groups : []).map((group) => {
+    const normalized = {
     id: group.id || newId(),
     name: group.name || T.newGroup,
     note: group.note || "",
@@ -4028,7 +4349,12 @@ function normalizeProfile(profile) {
     outboundTag: (group.outboundTag === "direct" ? "bypass" : (group.outboundTag || "vless-reality")),
     domains: uniq(Array.isArray(group.domains) ? group.domains : []),
     cidrs: uniq(Array.isArray(group.cidrs) ? group.cidrs : [])
-  }));
+    };
+    return typeof AntiGoblinServices !== "undefined" && Array.isArray(group.serviceIds)
+      ? AntiGoblinServices.normalizeGroup({ ...normalized, serviceIds: group.serviceIds,
+        serviceManualDomains: group.serviceManualDomains, serviceManualCidrs: group.serviceManualCidrs,
+        serviceVoiceEnabled: group.serviceVoiceEnabled, serviceVoiceCidrs: group.serviceVoiceCidrs }) : normalized;
+  });
 
   // New multi-key fields with shape normalization
   const proxies = (Array.isArray(profile.proxies) ? profile.proxies : [])
@@ -4347,6 +4673,14 @@ function pluralize(n, formsKey) {
 function applyTranslations() {
   document.documentElement.lang = currentLang;
   document.title = T.documentTitle;
+  const servicesButton = document.getElementById("addServicesBtn");
+  const details = document.getElementById("profileDetailsSummary");
+  if (details) details.textContent = interfaceText("details");
+  const updateButton = document.getElementById("updateAppBtn");
+  if (updateButton) updateButton.textContent = interfaceText(appUpdateActive ? "updating" : "update");
+  const version = document.getElementById("appVersion");
+  if (version && !version.textContent) version.textContent = `v${APP_VERSION}`;
+  if (servicesButton && typeof AntiGoblinServices !== "undefined") servicesButton.textContent = serviceLabels().add;
   AUTH_REQUIRED_MESSAGE = T.authRequiredMessage;
   AUTH_LOGIN_HINT = T.authLoginHint;
 
