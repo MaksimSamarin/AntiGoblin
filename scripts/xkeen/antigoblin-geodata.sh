@@ -9,6 +9,10 @@ META="$ASSET_DIR/antigoblin-geodata.json"
 LOG=/opt/var/log/xkeen-geodata.log
 RUNTIME=/opt/share/xkeen-manager/api/xkeen-runtime.sh
 GEODATA_WORKER=/opt/share/xkeen-manager/api/geodata.js
+RUNTIME_DIR=/opt/share/xkeen-manager/runtime
+VPN_IP_CACHE="$RUNTIME_DIR/geoip-vpn.cidrs"
+BYPASS_IP_CACHE="$RUNTIME_DIR/geoip-bypass.cidrs"
+CACHE_STATE_SHA="$RUNTIME_DIR/geodata-state.sha256"
 BASE_URL="${XKEEN_GEODATA_BASE_URL:-https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download}"
 MAX_SIZE=67108864
 UPDATE_INTERVAL=604800
@@ -129,6 +133,12 @@ update_assets() {
     log 'update failed: metadata write; rolled back'
     return 1
   fi
+  if profile_uses_geodata; then
+    render_ipsets "$STATE" || {
+      rm -f "$CACHE_STATE_SHA"
+      log 'update warning: failed to refresh GeoIP ipset cache'
+    }
+  fi
   touch /tmp/xkeen-needs-xray-restart
   rm -rf /tmp/xkeen-geodata-cache-* 2>/dev/null || true
   log "update complete geoip=$(file_size "$ASSET_DIR/geoip.dat") geosite=$(file_size "$ASSET_DIR/geosite.dat")"
@@ -148,21 +158,55 @@ render_singbox() {
         and (any(.domains[]?; ascii_downcase | startswith("geosite:"))
           or any(.cidrs[]?; ascii_downcase | startswith("geoip:"))))
   ' "$RENDER_STATE" >/dev/null 2>&1; then
-    cp "$RENDER_INPUT" "$RENDER_OUTPUT"
-    return $?
+    cp "$RENDER_INPUT" "$RENDER_OUTPUT" || return 1
+    EMPTY_RULES="/tmp/xkeen-geodata-empty-$$.json"
+    printf '%s\n' '{"vpnCidrs":[],"bypassCidrs":[]}' > "$EMPTY_RULES"
+    write_ipset_caches "$RENDER_STATE" "$EMPTY_RULES" || { rm -f "$EMPTY_RULES"; return 1; }
+    rm -f "$EMPTY_RULES"
+    return 0
   fi
   [ -x /opt/bin/qjs ] && [ -f "$GEODATA_WORKER" ] \
     && [ -s "$ASSET_DIR/geoip.dat" ] && [ -s "$ASSET_DIR/geosite.dat" ] || return 1
   RULES="/tmp/xkeen-geodata-render-$$.json"
-  trap 'rm -f "$RULES"' EXIT INT TERM
   /opt/bin/qjs --std "$GEODATA_WORKER" singbox "$RENDER_STATE" \
     "$ASSET_DIR/geoip.dat" "$ASSET_DIR/geosite.dat" "$RULES" >/dev/null 2>&1 || return 1
+  write_ipset_caches "$RENDER_STATE" "$RULES" || { rm -f "$RULES"; return 1; }
   jq --slurpfile geo "$RULES" \
     '.route.rules = $geo[0].rules | .route.final = $geo[0].final' \
     "$RENDER_INPUT" > "$RENDER_OUTPUT" || return 1
   /opt/sbin/sing-box check -c "$RENDER_OUTPUT" >/dev/null 2>&1 || return 1
   rm -f "$RULES"
-  trap - EXIT INT TERM
+}
+
+write_ipset_caches() {
+  CACHE_STATE="$1"
+  CACHE_RULES="$2"
+  mkdir -p "$RUNTIME_DIR" || return 1
+  VPN_NEW="$VPN_IP_CACHE.new-$$"
+  BYPASS_NEW="$BYPASS_IP_CACHE.new-$$"
+  SHA_NEW="$CACHE_STATE_SHA.new-$$"
+  jq -r '.vpnCidrs[]?' "$CACHE_RULES" | sed '/^[[:space:]]*$/d' | sort -u > "$VPN_NEW" \
+    && jq -r '.bypassCidrs[]?' "$CACHE_RULES" | sed '/^[[:space:]]*$/d' | sort -u > "$BYPASS_NEW" \
+    && sha256sum "$CACHE_STATE" | awk '{print $1}' > "$SHA_NEW" \
+    && mv "$VPN_NEW" "$VPN_IP_CACHE" \
+    && mv "$BYPASS_NEW" "$BYPASS_IP_CACHE" \
+    && mv "$SHA_NEW" "$CACHE_STATE_SHA" \
+    || { rm -f "$VPN_NEW" "$BYPASS_NEW" "$SHA_NEW"; return 1; }
+  chmod 644 "$VPN_IP_CACHE" "$BYPASS_IP_CACHE" "$CACHE_STATE_SHA" 2>/dev/null || true
+}
+
+render_ipsets() {
+  RENDER_STATE="$1"
+  [ -f "$RENDER_STATE" ] || return 1
+  [ -x /opt/bin/qjs ] && [ -f "$GEODATA_WORKER" ] \
+    && [ -s "$ASSET_DIR/geoip.dat" ] && [ -s "$ASSET_DIR/geosite.dat" ] || return 1
+  RULES="/tmp/xkeen-geodata-ipsets-$$.json"
+  /opt/bin/qjs --std "$GEODATA_WORKER" singbox "$RENDER_STATE" \
+    "$ASSET_DIR/geoip.dat" "$ASSET_DIR/geosite.dat" "$RULES" >/dev/null 2>&1 || return 1
+  write_ipset_caches "$RENDER_STATE" "$RULES"
+  RC=$?
+  rm -f "$RULES"
+  return "$RC"
 }
 
 case "$MODE" in
@@ -171,6 +215,10 @@ case "$MODE" in
   render-singbox)
     [ "$#" -eq 4 ] || { echo "usage: $0 render-singbox STATE INPUT OUTPUT" >&2; exit 2; }
     render_singbox "$2" "$3" "$4"
+    ;;
+  render-ipsets)
+    [ "$#" -eq 2 ] || { echo "usage: $0 render-ipsets STATE" >&2; exit 2; }
+    render_ipsets "$2"
     ;;
   cron)
     profile_uses_geodata || exit 0
@@ -184,5 +232,5 @@ case "$MODE" in
     printf '%s\n' "$NOW" > "$ATTEMPT_STAMP"
     update_assets >/dev/null 2>&1 || true
     ;;
-  *) echo "usage: $0 {status|update|cron|render-singbox}" >&2; exit 2 ;;
+  *) echo "usage: $0 {status|update|cron|render-singbox|render-ipsets}" >&2; exit 2 ;;
 esac

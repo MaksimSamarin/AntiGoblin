@@ -13,8 +13,11 @@ if (!appSource.includes("const SINGBOX_APPLY_TIMEOUT_MS = 90000;")
     || !/fetchWithTimeout\(SINGBOX_URL,[\s\S]*SINGBOX_APPLY_TIMEOUT_MS\)/.test(appSource)) {
   throw new Error("sing-box Geo apply must allow the router-side QuickJS expansion to finish");
 }
-if (!indexSource.includes("app.js?v=92") || !indexSource.includes("styles.css?v=92")) {
+if (!indexSource.includes("app.js?v=97") || !indexSource.includes("styles.css?v=97")) {
   throw new Error("Geo apply UI cache-buster was not updated");
+}
+if (!appSource.includes('tag: "xkeen-quic-tproxy"') || !appSource.includes("listen_port: SINGBOX_QUIC_TPROXY_PORT")) {
+  throw new Error("sing-box config is missing the dedicated selective QUIC inbound");
 }
 
 function varint(value) {
@@ -80,16 +83,33 @@ let run = spawnSync(process.execPath, [worker, "singbox", statePath, geoipPath, 
 if (run.status !== 0) throw new Error(run.stderr || run.stdout);
 let result = JSON.parse(fs.readFileSync(outputPath, "utf8"));
 if (!result.hasGeo || result.stats.expandedEntries !== 6) throw new Error("geo expansion stats are incorrect");
-if (!result.rules.some((rule) => rule.action === "sniff")) throw new Error("UDP sniff action missing");
+if (!result.quicEnabled || result.fullTunnel) throw new Error("selective GeoSite must use QUIC-only interception");
+if (!result.rules.some((rule) => rule.action === "sniff" && rule.inbound?.includes("xkeen-quic-tproxy"))) throw new Error("QUIC sniff action missing");
 if (!result.rules.some((rule) => rule.domain_suffix?.includes("youtube.com") && rule.outbound === "proxy")) throw new Error("geosite domain suffix missing");
 if (!result.rules.some((rule) => rule.domain?.includes("www.youtube.com"))) throw new Error("geosite full domain missing");
 if (!result.rules.some((rule) => rule.domain_keyword?.includes("googlevideo"))) throw new Error("geosite keyword missing");
 if (!result.rules.some((rule) => rule.domain_regex?.includes("^yt[0-9]+\\.googleusercontent\\.com$"))) throw new Error("geosite regexp missing");
-if (!result.rules.some((rule) => rule.ip_cidr?.includes("8.8.8.0/24") && rule.ip_cidr?.includes("2001:4860:0:0:0:0:0:0/32"))) throw new Error("geoip CIDRs missing");
+if (!result.vpnCidrs.includes("8.8.8.0/24") || result.vpnCidrs.some((cidr) => cidr.includes(":"))) throw new Error("IPv4 GeoIP cache is incorrect");
+if (result.rules.some((rule) => (rule.ip_cidr || []).length)) throw new Error("GeoIP must stay in kernel ipset, not sing-box rules");
 if (!result.rules.some((rule) => rule.domain_suffix?.includes("example.org") && rule.outbound === "direct")) throw new Error("bypass domain rule missing");
 
+state.profiles[0].fallbackOutbound = "vless-reality";
+state.profiles[0].groups[0].cidrs = [];
+state.profiles[0].groups[1].cidrs = ["geoip:google"];
+fs.writeFileSync(statePath, JSON.stringify(state));
+run = spawnSync(process.execPath, [worker, "singbox", statePath, geoipPath, geositePath, outputPath], { encoding: "utf8" });
+if (run.status !== 0) throw new Error(run.stderr || run.stdout);
+result = JSON.parse(fs.readFileSync(outputPath, "utf8"));
+if (!result.fullTunnel || result.quicEnabled) throw new Error("full tunnel must not create a second QUIC interception path");
+if (!result.bypassCidrs.includes("8.8.8.0/24") || result.vpnCidrs.length) throw new Error("GeoIP bypass cache is incorrect");
+if (!result.rules.some((rule) => rule.inbound?.includes("xkeen-udp-tproxy") && rule.outbound === "proxy")) {
+  throw new Error("full tunnel final proxy rule missing");
+}
+
+state.profiles[0].fallbackOutbound = "direct";
 state.profiles[0].groups[0].domains = ["geosite:youtube@cn"];
 state.profiles[0].groups[0].cidrs = [];
+state.profiles[0].groups[1].cidrs = ["203.0.113.0/24"];
 fs.writeFileSync(statePath, JSON.stringify(state));
 run = spawnSync(process.execPath, [worker, "singbox", statePath, geoipPath, geositePath, outputPath], { encoding: "utf8" });
 if (run.status !== 0) throw new Error(run.stderr || run.stdout);

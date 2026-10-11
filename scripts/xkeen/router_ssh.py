@@ -2,6 +2,7 @@
 import argparse
 import os
 import posixpath
+import shlex
 import stat
 import sys
 
@@ -73,7 +74,9 @@ def upload_file(args: argparse.Namespace) -> int:
     client = open_client(args)
     try:
         remote_dir = posixpath.dirname(args.remote)
-        mkdir_stdin = client.exec_command(f"mkdir -p '{remote_dir}'", timeout=args.timeout)
+        mkdir_stdin = client.exec_command(
+            f"mkdir -p -- {shlex.quote(remote_dir)}", timeout=args.timeout
+        )
         mkdir_exit = mkdir_stdin[1].channel.recv_exit_status()
         if mkdir_exit != 0:
             raise SystemExit(f"Failed to create remote directory: {remote_dir}")
@@ -86,7 +89,7 @@ def upload_file(args: argparse.Namespace) -> int:
         if not getattr(args, "binary", False):
             payload = payload.replace(b"\r\n", b"\n")
         stdin, stdout, stderr = client.exec_command(
-            f"cat > '{args.remote}'", timeout=args.timeout
+            f"cat > {shlex.quote(args.remote)}", timeout=args.timeout
         )
         stdin.channel.sendall(payload)
         stdin.channel.shutdown_write()
@@ -97,7 +100,8 @@ def upload_file(args: argparse.Namespace) -> int:
 
         if args.mode:
             _, stdout, stderr = client.exec_command(
-                f"chmod {args.mode} '{args.remote}'", timeout=args.timeout
+                f"chmod -- {shlex.quote(args.mode)} {shlex.quote(args.remote)}",
+                timeout=args.timeout,
             )
             exit_code = stdout.channel.recv_exit_status()
             err = stderr.read().decode("utf-8", errors="replace")
@@ -105,7 +109,7 @@ def upload_file(args: argparse.Namespace) -> int:
                 raise SystemExit(err or f"Failed to chmod {args.remote}")
 
         _, stdout, stderr = client.exec_command(
-            f"wc -c < '{args.remote}'", timeout=args.timeout
+            f"wc -c < {shlex.quote(args.remote)}", timeout=args.timeout
         )
         exit_code = stdout.channel.recv_exit_status()
         err = stderr.read().decode("utf-8", errors="replace")

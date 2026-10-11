@@ -92,6 +92,8 @@ UI и state:
 - `/opt/share/xkeen-manager/` — UI-файлы и backend.
 - `/opt/share/xkeen-manager/xkeen-ui-state.json` — единственный источник истины.
 - `/opt/share/xkeen-manager/api/` — `routing.cgi`, `xkeen-runtime.sh`, `xkeen-selfheal.sh`, `xkeen-selfheal-loop.sh`.
+- `/opt/share/xkeen-manager/runtime/geoip-vpn.cidrs` и `geoip-bypass.cidrs` — скомпилированные IPv4 GeoIP-категории для быстрой загрузки в kernel ipset.
+- `/opt/share/xkeen-manager/runtime/geodata-state.sha256` — привязка GeoIP-cache к текущему state; при несовпадении cache пересобирается.
 
 Конфиги `xray`:
 

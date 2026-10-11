@@ -502,9 +502,20 @@ check_runtime() {
   if udp_route_config_enabled && ! has_rule ipset list "$UDP_ROUTE_SET"; then
     needs_repair=1
   fi
-  if has_rule ipset list "$UDP_ROUTE_SET" && udp_route_has_entries; then
+  HAS_TARGETED_UDP=0
+  has_rule ipset list "$UDP_ROUTE_SET" && udp_route_has_entries && HAS_TARGETED_UDP=1
+  HAS_QUIC_UDP=0
+  type xkeen_quic_config_enabled >/dev/null 2>&1 && xkeen_quic_config_enabled && HAS_QUIC_UDP=1
+  if [ "$HAS_TARGETED_UDP" = "1" ]; then
     [ -n "$XKEEN_MARK" ] && has_rule iptables -t mangle -C PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -p udp -m set --match-set "$UDP_ROUTE_SET" dst -j xkeen_udp_route || needs_repair=1
+  fi
+  if [ "$HAS_QUIC_UDP" = "1" ]; then
+    [ -n "$XKEEN_MARK" ] && has_rule iptables -t mangle -C PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -p udp --dport 443 -j xkeen_quic_route || needs_repair=1
+    iptables -t mangle -S PREROUTING 2>/dev/null | tail -n 1 | grep -q 'xkeen_quic_route' || needs_repair=1
+  elif [ "$HAS_TARGETED_UDP" = "1" ]; then
     iptables -t mangle -S PREROUTING 2>/dev/null | tail -n 1 | grep -q 'xkeen_udp_route' || needs_repair=1
+  fi
+  if [ "$HAS_TARGETED_UDP" = "1" ] || [ "$HAS_QUIC_UDP" = "1" ]; then
     ip rule show | grep -qE "fwmark ${XKEEN_UDP_MARK:-0x111}(/${XKEEN_UDP_MARK:-0x111})? (lookup|table) ${XKEEN_UDP_TABLE:-111}" || needs_repair=1
     xray_relay_ready || needs_repair=1
     tproxy_ready || needs_repair=1

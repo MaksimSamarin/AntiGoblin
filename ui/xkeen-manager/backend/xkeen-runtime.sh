@@ -13,7 +13,12 @@ PATH="/opt/bin:/opt/sbin:/sbin:/usr/sbin:/bin:/usr/bin:$PATH"
 : "${XKEEN_UDP_MARK:=0x111}"
 : "${XKEEN_UDP_TABLE:=111}"
 : "${XKEEN_TPROXY_PORT:=61221}"
+: "${XKEEN_QUIC_TPROXY_PORT:=61222}"
 : "${XKEEN_REDIRECT_PORT:=61219}"
+: "${XKEEN_GEODATA_SCRIPT:=/opt/share/xkeen-manager/api/antigoblin-geodata.sh}"
+: "${XKEEN_GEOIP_VPN_CACHE:=${RUNTIME_DIR}/geoip-vpn.cidrs}"
+: "${XKEEN_GEOIP_BYPASS_CACHE:=${RUNTIME_DIR}/geoip-bypass.cidrs}"
+: "${XKEEN_GEOIP_CACHE_SHA:=${RUNTIME_DIR}/geodata-state.sha256}"
 # Shared mkdir-based lock: selfheal, netfilter-hook, remount-hook and CGI
 # apply all serialise on the same LOCK_DIR to avoid clobbering each other's
 # iptables/ipset rebuilds. Every caller sources this file and uses
@@ -476,6 +481,32 @@ xkeen_add_cidrs_to_set() {
   done
 }
 
+# GeoIP caches can contain several thousand prefixes. Forking one `ipset add`
+# process per line is expensive on a router, so load the trusted, parser-made
+# cache in one restore transaction and fall back to the portable loop only on
+# older ipset builds.
+xkeen_add_cidr_cache_to_set() {
+  SET_NAME="$1"
+  CACHE_FILE="$2"
+  [ -s "$CACHE_FILE" ] || return 0
+  RESTORE_FILE="/tmp/xkeen-ipset-restore-$$"
+  awk -v set="$SET_NAME" '
+    NF == 0 { next }
+    $1 == "0.0.0.0/0" {
+      print "add " set " 0.0.0.0/1 -exist"
+      print "add " set " 128.0.0.0/1 -exist"
+      next
+    }
+    { print "add " set " " $1 " -exist" }
+  ' "$CACHE_FILE" > "$RESTORE_FILE" || return 1
+  if ! ipset restore < "$RESTORE_FILE" 2>/dev/null; then
+    rm -f "$RESTORE_FILE"
+    xkeen_add_cidrs_to_set "$SET_NAME" < "$CACHE_FILE"
+    return $?
+  fi
+  rm -f "$RESTORE_FILE"
+}
+
 xkeen_swap_set() {
   TARGET="$1"
   TMP="$2"
@@ -485,6 +516,69 @@ xkeen_swap_set() {
     return 1
   fi
   ipset destroy "$TMP" 2>/dev/null || true
+}
+
+xkeen_profile_full_tunnel() {
+  xkeen_has_cmd jq || return 1
+  [ -f "$STATE_PATH" ] || return 1
+  jq -e '
+    (.activeProfileId // "") as $id
+    | .profiles[]? | select(.id == $id) as $p
+    | ($p.fallbackOutbound == "vless-reality")
+      or any($p.groups[]?;
+        (.enabled != false)
+        and (.outboundTag != "direct")
+        and (.outboundTag != "bypass")
+        and (((.domains // []) | length) == 0 and ((.cidrs // []) | length) == 0
+          or any(.cidrs[]?; . == "0.0.0.0/0")))
+  ' "$STATE_PATH" >/dev/null 2>&1
+}
+
+xkeen_quic_config_enabled() {
+  xkeen_profile_full_tunnel && return 1
+  xkeen_has_cmd jq || return 1
+  [ -f "$STATE_PATH" ] || return 1
+  jq -e '
+    (.activeProfileId // "") as $id
+    | .profiles[]? | select(.id == $id)
+    | any(.groups[]?;
+        (.enabled != false)
+        and (.outboundTag != "direct")
+        and (.outboundTag != "bypass")
+        and any(.domains[]?; ascii_downcase | startswith("geosite:")))
+  ' "$STATE_PATH" >/dev/null 2>&1
+}
+
+xkeen_geoip_config_present() {
+  xkeen_has_cmd jq || return 1
+  [ -f "$STATE_PATH" ] || return 1
+  jq -e '
+    (.activeProfileId // "") as $id
+    | .profiles[]? | select(.id == $id)
+    | any(.groups[]?;
+        (.enabled != false)
+        and any(.cidrs[]?; ascii_downcase | startswith("geoip:")))
+  ' "$STATE_PATH" >/dev/null 2>&1
+}
+
+xkeen_geoip_cache_valid() {
+  [ -f "$XKEEN_GEOIP_VPN_CACHE" ] || return 1
+  [ -f "$XKEEN_GEOIP_BYPASS_CACHE" ] || return 1
+  [ -f "$XKEEN_GEOIP_CACHE_SHA" ] || return 1
+  CURRENT_SHA="$(sha256sum "$STATE_PATH" 2>/dev/null | awk '{print $1}')"
+  CACHED_SHA="$(cat "$XKEEN_GEOIP_CACHE_SHA" 2>/dev/null)"
+  [ -n "$CURRENT_SHA" ] && [ "$CURRENT_SHA" = "$CACHED_SHA" ]
+}
+
+xkeen_ensure_geoip_cache() {
+  xkeen_geoip_config_present || return 0
+  xkeen_geoip_cache_valid && return 0
+  [ -x "$XKEEN_GEODATA_SCRIPT" ] || return 1
+  "$XKEEN_GEODATA_SCRIPT" render-ipsets "$STATE_PATH" >/dev/null 2>&1 || {
+    xkeen_runtime_log "geoip_cache_rebuild_failed"
+    return 1
+  }
+  xkeen_geoip_cache_valid
 }
 
 xkeen_build_bypass_ipset() {
@@ -516,6 +610,10 @@ xkeen_build_bypass_ipset() {
       | .cidrs[]?
       | select((ascii_downcase | startswith("geoip:")) | not)
     ' "$STATE_PATH" 2>/dev/null | sed '/^[[:space:]]*$/d' | xkeen_add_cidrs_to_set "$TMP_SET"
+
+    if xkeen_ensure_geoip_cache && [ -s "$XKEEN_GEOIP_BYPASS_CACHE" ]; then
+      xkeen_add_cidr_cache_to_set "$TMP_SET" "$XKEEN_GEOIP_BYPASS_CACHE"
+    fi
   fi
 
   xkeen_swap_set "$XKEEN_BYPASS_SET" "$TMP_SET"
@@ -552,23 +650,12 @@ xkeen_build_udp_route_ipset() {
   ipset destroy "$TMP_SET" 2>/dev/null || true
   ipset create "$TMP_SET" hash:net family inet -exist
 
-  # Catch-all path: when the profile's fallback outbound is vless-reality,
-  # TCP that doesn't match any group ends up going through the VPN. UDP
-  # must follow — otherwise Discord voice (TCP handshake via VPN, UDP via
-  # WAN) trips a NAT flap and drops the call every few seconds. hash:net
-  # rejects 0.0.0.0/0, so split into the two halves. The chain's bypass
-  # RETURN still exempts local nets + user bypass list before TPROXY.
+  # Catch-all is reserved for an explicitly full-tunnel profile. Geo rules
+  # alone must never turn every UDP packet into userspace traffic: selective
+  # GeoIP uses this kernel ipset and GeoSite QUIC uses a separate UDP/443
+  # inbound. hash:net rejects 0.0.0.0/0, so split full IPv4 into two halves.
   IS_CATCHALL=0
-  if xkeen_has_cmd jq && [ -f "$STATE_PATH" ] && jq -e '
-    (.activeProfileId // "") as $id
-    | .profiles[]? | select(.id == $id)
-    | . as $p
-    | ($p.fallbackOutbound == "vless-reality")
-      or any($p.groups[]?;
-        (.enabled != false)
-        and (any(.domains[]?; ascii_downcase | startswith("geosite:"))
-          or any(.cidrs[]?; ascii_downcase | startswith("geoip:"))))
-  ' "$STATE_PATH" >/dev/null 2>&1; then
+  if xkeen_profile_full_tunnel; then
     IS_CATCHALL=1
     ipset add "$TMP_SET" 0.0.0.0/1 -exist 2>/dev/null || true
     ipset add "$TMP_SET" 128.0.0.0/1 -exist 2>/dev/null || true
@@ -612,6 +699,11 @@ xkeen_build_udp_route_ipset() {
       esac
       printf '%s\n' "$cidr"
     done | xkeen_add_cidrs_to_set "$TMP_SET"
+
+    if [ "$IS_CATCHALL" = "0" ] && xkeen_ensure_geoip_cache \
+        && [ -s "$XKEEN_GEOIP_VPN_CACHE" ]; then
+      xkeen_add_cidr_cache_to_set "$TMP_SET" "$XKEEN_GEOIP_VPN_CACHE"
+    fi
   fi
 
   xkeen_swap_set "$XKEEN_UDP_ROUTE_SET" "$TMP_SET"
@@ -640,8 +732,11 @@ xkeen_cleanup_retired_udp() {
 
 xkeen_cleanup_udp_route() {
   xkeen_delete_jumps mangle PREROUTING xkeen_udp_route
+  xkeen_delete_jumps mangle PREROUTING xkeen_quic_route
   iptables -t mangle -F xkeen_udp_route 2>/dev/null || true
   iptables -t mangle -X xkeen_udp_route 2>/dev/null || true
+  iptables -t mangle -F xkeen_quic_route 2>/dev/null || true
+  iptables -t mangle -X xkeen_quic_route 2>/dev/null || true
   ipset destroy "$XKEEN_UDP_ROUTE_SET" 2>/dev/null || true
   while ip rule show | grep -qE "fwmark $XKEEN_UDP_MARK(/$XKEEN_UDP_MARK)? (lookup|table) $XKEEN_UDP_TABLE"; do
     ip rule del fwmark "$XKEEN_UDP_MARK/$XKEEN_UDP_MARK" table "$XKEEN_UDP_TABLE" 2>/dev/null \
@@ -687,22 +782,36 @@ xkeen_apply_udp_route() {
   fi
 
   xkeen_build_udp_route_ipset || return 1
-  if ! xkeen_ipset_has_members "$XKEEN_UDP_ROUTE_SET"; then
+  HAS_TARGETED=0
+  xkeen_ipset_has_members "$XKEEN_UDP_ROUTE_SET" && HAS_TARGETED=1
+  QUIC_ENABLED=0
+  xkeen_quic_config_enabled && QUIC_ENABLED=1
+  if [ "$HAS_TARGETED" = "0" ] && [ "$QUIC_ENABLED" = "0" ]; then
     xkeen_cleanup_udp_route
     return 0
   fi
 
   xkeen_ensure_tproxy_module || return 1
-  iptables -t mangle -N xkeen_udp_route 2>/dev/null || true
-  iptables -t mangle -F xkeen_udp_route 2>/dev/null || true
-  # Bypass UDP for hosts in the bypass ipset before TPROXY. Mirrors the TCP
-  # bypass-RETURN that lives in the nat `xkeen` chain. Without this, a host
-  # added to bypass via UI only escapes REDIRECT (TCP); its UDP still goes
-  # to sing-box -> xray -> VPN, which adds full VPN RTT to realtime traffic
-  # (e.g. game servers, voice). Same set is used so UI bypass groups cover
-  # both protocols with one toggle, matching the project's intent.
-  iptables -t mangle -A xkeen_udp_route -m set --match-set "$XKEEN_BYPASS_SET" dst -j RETURN 2>/dev/null || true
-  iptables -t mangle -A xkeen_udp_route -p udp -j TPROXY --on-port "$XKEEN_TPROXY_PORT" --tproxy-mark "$XKEEN_UDP_MARK/$XKEEN_UDP_MARK" 2>/dev/null || return 1
+  if [ "$HAS_TARGETED" = "1" ]; then
+    iptables -t mangle -N xkeen_udp_route 2>/dev/null || true
+    iptables -t mangle -F xkeen_udp_route 2>/dev/null || true
+    # Explicit CIDR, resolved domains and GeoIP are classified in kernel.
+    iptables -t mangle -A xkeen_udp_route -m set --match-set "$XKEEN_BYPASS_SET" dst -j RETURN 2>/dev/null || true
+    iptables -t mangle -A xkeen_udp_route -p udp -j TPROXY --on-port "$XKEEN_TPROXY_PORT" --tproxy-mark "$XKEEN_UDP_MARK/$XKEEN_UDP_MARK" 2>/dev/null || return 1
+  else
+    iptables -t mangle -F xkeen_udp_route 2>/dev/null || true
+    iptables -t mangle -X xkeen_udp_route 2>/dev/null || true
+  fi
+
+  if [ "$QUIC_ENABLED" = "1" ]; then
+    iptables -t mangle -N xkeen_quic_route 2>/dev/null || true
+    iptables -t mangle -F xkeen_quic_route 2>/dev/null || true
+    iptables -t mangle -A xkeen_quic_route -m set --match-set "$XKEEN_BYPASS_SET" dst -j RETURN 2>/dev/null || true
+    iptables -t mangle -A xkeen_quic_route -p udp --dport 443 -j TPROXY --on-port "$XKEEN_QUIC_TPROXY_PORT" --tproxy-mark "$XKEEN_UDP_MARK/$XKEEN_UDP_MARK" 2>/dev/null || return 1
+  else
+    iptables -t mangle -F xkeen_quic_route 2>/dev/null || true
+    iptables -t mangle -X xkeen_quic_route 2>/dev/null || true
+  fi
 
   while ip rule show | grep -qE "fwmark $XKEEN_UDP_MARK(/$XKEEN_UDP_MARK)? (lookup|table) $XKEEN_UDP_TABLE"; do
     ip rule del fwmark "$XKEEN_UDP_MARK/$XKEEN_UDP_MARK" table "$XKEEN_UDP_TABLE" 2>/dev/null \
@@ -715,9 +824,18 @@ xkeen_apply_udp_route() {
   ip route replace local 0.0.0.0/0 dev lo table "$XKEEN_UDP_TABLE" 2>/dev/null || true
 
   xkeen_delete_jumps mangle PREROUTING xkeen_udp_route
-  if ! iptables -t mangle -A PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -p udp -m set --match-set "$XKEEN_UDP_ROUTE_SET" dst -j xkeen_udp_route 2>/dev/null; then
-    xkeen_runtime_log "iptables_fail: mangle PREROUTING -> xkeen_udp_route (mark=0x$XKEEN_MARK)"
-    return 1
+  xkeen_delete_jumps mangle PREROUTING xkeen_quic_route
+  if [ "$HAS_TARGETED" = "1" ]; then
+    if ! iptables -t mangle -A PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -p udp -m set --match-set "$XKEEN_UDP_ROUTE_SET" dst -j xkeen_udp_route 2>/dev/null; then
+      xkeen_runtime_log "iptables_fail: mangle PREROUTING -> xkeen_udp_route (mark=0x$XKEEN_MARK)"
+      return 1
+    fi
+  fi
+  if [ "$QUIC_ENABLED" = "1" ]; then
+    if ! iptables -t mangle -A PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -p udp --dport 443 -j xkeen_quic_route 2>/dev/null; then
+      xkeen_runtime_log "iptables_fail: mangle PREROUTING -> xkeen_quic_route (mark=0x$XKEEN_MARK)"
+      return 1
+    fi
   fi
 }
 
@@ -850,5 +968,8 @@ xkeen_repair_hooks() {
 }
 
 xkeen_tproxy_ready() {
-  netstat -lnpu 2>/dev/null | grep -q ":$XKEEN_TPROXY_PORT "
+  netstat -lnpu 2>/dev/null | grep -q ":$XKEEN_TPROXY_PORT " || return 1
+  if xkeen_quic_config_enabled; then
+    netstat -lnpu 2>/dev/null | grep -q ":$XKEEN_QUIC_TPROXY_PORT " || return 1
+  fi
 }

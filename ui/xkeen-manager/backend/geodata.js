@@ -305,10 +305,10 @@
   }
 
   function unique(values) { return [...new Set(values.filter(Boolean))]; }
-  function routeRule(field, values, outbound) {
+  function routeRule(inbound, field, values, outbound) {
     const items = unique(values);
     return items.length ? {
-      inbound: ["xkeen-udp-tproxy"],
+      inbound: [inbound],
       [field]: items,
       action: "route",
       outbound
@@ -343,17 +343,36 @@
     if (!ips.get(spec.token).length) throw new Error(`geoip category not found: ${spec.token}`);
   }
 
-  const rules = [
-    { inbound: ["xkeen-udp-tproxy"], action: "sniff" },
-    { inbound: ["xkeen-udp-tproxy"], ip_is_private: true, action: "route", outbound: "direct" }
-  ];
+  const isBypass = (group) => group.outboundTag === "direct" || group.outboundTag === "bypass";
+  const groupIsCatchAll = (group) => {
+    const domains = Array.isArray(group.domains) ? group.domains.filter(Boolean) : [];
+    const cidrs = Array.isArray(group.cidrs) ? group.cidrs.filter(Boolean) : [];
+    return (!domains.length && !cidrs.length) || cidrs.includes("0.0.0.0/0");
+  };
+  const fullTunnel = profile.fallbackOutbound === "vless-reality"
+    || groups.some((group) => !isBypass(group) && groupIsCatchAll(group));
+  const quicEnabled = !fullTunnel && groups.some((group) =>
+    !isBypass(group) && (group.domains || []).some((value) => parseGeoToken(value, "geosite"))
+  );
+  const routeInbound = fullTunnel ? "xkeen-udp-tproxy" : "xkeen-quic-tproxy";
+  const rules = [{
+    inbound: ["xkeen-udp-tproxy", "xkeen-quic-tproxy"],
+    ip_is_private: true,
+    action: "route",
+    outbound: "direct"
+  }];
+  if (siteSpecs.length && (fullTunnel || quicEnabled)) {
+    rules.push({ inbound: [routeInbound], action: "sniff" });
+  }
+  const vpnCidrs = [];
+  const bypassCidrs = [];
   let expandedEntries = 0;
   const MAX_EXPANDED_ENTRIES = 100000;
   for (const group of groups) {
-    const outbound = group.outboundTag === "direct" || group.outboundTag === "bypass" ? "direct" : "proxy";
+    const bypass = isBypass(group);
+    const outbound = bypass ? "direct" : "proxy";
     const plainDomains = [];
-    const plainCidrs = [];
-    const expanded = { domain: [], domain_suffix: [], domain_keyword: [], domain_regex: [], ip_cidr: [] };
+    const expanded = { domain: [], domain_suffix: [], domain_keyword: [], domain_regex: [] };
     for (const value of group.domains || []) {
       const spec = parseGeoToken(value, "geosite");
       if (!spec) plainDomains.push(String(value).toLowerCase());
@@ -366,39 +385,58 @@
     }
     for (const value of group.cidrs || []) {
       const spec = parseGeoToken(value, "geoip");
-      if (!spec) plainCidrs.push(String(value));
-      else expanded.ip_cidr.push(...ips.get(spec.token));
+      if (!spec) continue;
+      (bypass ? bypassCidrs : vpnCidrs).push(
+        ...ips.get(spec.token).filter((cidr) => !String(cidr).includes(":"))
+      );
     }
-    expandedEntries += Object.values(expanded).reduce((sum, values) => sum + values.length, 0);
+    expandedEntries += Object.values(expanded).reduce((sum, values) => sum + values.length, 0)
+      + (group.cidrs || []).reduce((sum, value) => {
+        const spec = parseGeoToken(value, "geoip");
+        return sum + (spec ? ips.get(spec.token).length : 0);
+      }, 0);
     if (expandedEntries > MAX_EXPANDED_ENTRIES) throw new Error("selected geo categories exceed 100000 expanded rules");
-    const hasCriteria = plainDomains.length || plainCidrs.length
-      || Object.values(expanded).some((values) => values.length);
-    if (!hasCriteria || plainCidrs.includes("0.0.0.0/0")) {
-      rules.push({ inbound: ["xkeen-udp-tproxy"], action: "route", outbound });
-      continue;
-    }
-    for (const [field, values] of [
-      ["domain_suffix", plainDomains],
-      ["domain", expanded.domain],
-      ["domain_suffix", expanded.domain_suffix],
-      ["domain_keyword", expanded.domain_keyword],
-      ["domain_regex", expanded.domain_regex],
-      ["ip_cidr", [...plainCidrs, ...expanded.ip_cidr]]
-    ]) {
-      const rule = routeRule(field, values, outbound);
-      if (rule) rules.push(rule);
+
+    // In full-tunnel mode every UDP packet already uses the proxy. Only
+    // bypass GeoSite rules need to be materialized. In selective mode the
+    // separate :61222 inbound sees UDP/443 and applies both VPN and bypass
+    // GeoSite rules before sending an unmatched QUIC flow direct.
+    if ((!fullTunnel || bypass) && (fullTunnel || quicEnabled)) {
+      for (const [field, values] of [
+        ["domain_suffix", plainDomains],
+        ["domain", expanded.domain],
+        ["domain_suffix", expanded.domain_suffix],
+        ["domain_keyword", expanded.domain_keyword],
+        ["domain_regex", expanded.domain_regex]
+      ]) {
+        const rule = routeRule(routeInbound, field, values, outbound);
+        if (rule) rules.push(rule);
+      }
     }
   }
-  rules.push({
-    inbound: ["xkeen-udp-tproxy"],
-    action: "route",
-    outbound: profile.fallbackOutbound === "vless-reality" ? "proxy" : "direct"
-  });
+  if (fullTunnel) {
+    rules.push({ inbound: ["xkeen-udp-tproxy"], action: "route", outbound: "proxy" });
+  } else if (quicEnabled) {
+    rules.push({ inbound: ["xkeen-quic-tproxy"], action: "route", outbound: "direct" });
+  }
   const result = {
     hasGeo: true,
     rules,
     final: "proxy",
-    stats: { geositeCategories: siteSpecs.length, geoipCategories: ipSpecs.length, expandedEntries }
+    fullTunnel,
+    quicEnabled,
+    vpnCidrs: unique(vpnCidrs),
+    bypassCidrs: unique(bypassCidrs),
+    stats: {
+      geositeCategories: siteSpecs.length,
+      geoipCategories: ipSpecs.length,
+      expandedEntries,
+      singboxEntries: rules.reduce((sum, rule) => sum + [
+        "domain", "domain_suffix", "domain_keyword", "domain_regex", "ip_cidr"
+      ].reduce((count, field) => count + (rule[field] || []).length, 0), 0),
+      vpnIpEntries: unique(vpnCidrs).length,
+      bypassIpEntries: unique(bypassCidrs).length
+    }
   };
   const serialized = JSON.stringify(result, null, 2) + "\n";
   if (serialized.length > 16 * 1024 * 1024) throw new Error("expanded sing-box rules exceed 16 MiB");

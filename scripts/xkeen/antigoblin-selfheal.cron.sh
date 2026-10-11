@@ -1,6 +1,7 @@
 #!/bin/sh
 
 PATH=/opt/bin:/opt/sbin:/sbin:/bin:/usr/sbin:/usr/bin
+[ ! -d /opt/var/run/antigoblin-app-update.lock ] || exit 0
 
 SELFHEAL="/opt/share/xkeen-manager/api/xkeen-selfheal.sh"
 GEODATA="/opt/share/xkeen-manager/api/antigoblin-geodata.sh"
