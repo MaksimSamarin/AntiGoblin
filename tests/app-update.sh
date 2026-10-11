@@ -30,7 +30,7 @@ case "$url" in
 esac
 CURL
 chmod 755 /opt/bin/curl
-printf '1.3.2\n' > "$root/VERSION"
+printf '1.3.2\r\n' > "$root/VERSION"
 printf '{"activeProfileId":"keep","profiles":[{"id":"keep","subscriptions":[{"id":"sub","url":"https://example.test/private-token"}]}]}' > "$root/xkeen-ui-state.json"
 cp "$root/xkeen-ui-state.json" "$testdir/state-before"
 rm -rf "$dir" /opt/var/run/antigoblin-app-update.lock
@@ -48,7 +48,7 @@ if "$updater" check >/dev/null 2>&1; then echo 'failed fetch reported success'; 
 rm "$testdir/network-fail"
 release v1.3.3
 mkdir -p "$testdir/source/AntiGoblin-1.3.3/ui/xkeen-manager"
-printf '1.3.3\n' > "$testdir/source/AntiGoblin-1.3.3/ui/xkeen-manager/VERSION"
+printf '1.3.3\r\n' > "$testdir/source/AntiGoblin-1.3.3/ui/xkeen-manager/VERSION"
 cat > "$testdir/source/AntiGoblin-1.3.3/install.sh" <<'INSTALL'
 #!/bin/sh
 test "$ANTIGOBLIN_FORCE" = 0

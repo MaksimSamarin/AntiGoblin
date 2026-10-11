@@ -586,8 +586,9 @@ main() {
   start_services
   # Stamp the version only after deployment and service startup.
   if [ -f "$SRC_DIR/ui/xkeen-manager/VERSION" ]; then
-    cp "$SRC_DIR/ui/xkeen-manager/VERSION" /opt/share/xkeen-manager/VERSION
-    chmod 644 /opt/share/xkeen-manager/VERSION
+    tr -d '\r' < "$SRC_DIR/ui/xkeen-manager/VERSION" > /opt/share/xkeen-manager/VERSION.new-$$
+    chmod 644 /opt/share/xkeen-manager/VERSION.new-$$
+    mv /opt/share/xkeen-manager/VERSION.new-$$ /opt/share/xkeen-manager/VERSION
   fi
   cleanup
   print_summary

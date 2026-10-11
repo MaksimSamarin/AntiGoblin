@@ -13,7 +13,7 @@ chmod 700 "$DIR"
 
 valid_version() { printf '%s\n' "$1" | awk 'BEGIN{ok=0} /^[0-9]+\.[0-9]+\.[0-9]+$/{ok=1} END{exit !ok}'; }
 current_version() {
-  value="$(head -n 1 "$ROOT/VERSION" 2>/dev/null || true)"
+  value="$(head -n 1 "$ROOT/VERSION" 2>/dev/null | tr -d '\r' || true)"
   if valid_version "$value"; then printf '%s' "$value"; else printf unknown; fi
 }
 is_newer() {
@@ -139,7 +139,7 @@ worker() {
   tar -xzf "$work/source.tar.gz" -C "$work/source" || return 1
   src="$work/source/AntiGoblin-$target"
   [ -f "$src/install.sh" ] && [ -f "$src/ui/xkeen-manager/VERSION" ] || return 1
-  [ "$(cat "$src/ui/xkeen-manager/VERSION")" = "$target" ] || return 1
+  [ "$(tr -d '\r' < "$src/ui/xkeen-manager/VERSION")" = "$target" ] || return 1
   # Snapshot only application-owned files; never touch unrelated server/router data.
   : > "$work/backup-files"
   for path in share/xkeen-manager etc/xray/configs etc/sing-box/xkeen.json etc/antigoblin.conf \
