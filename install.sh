@@ -507,7 +507,22 @@ install_singbox() {
   rm -rf /tmp/antigoblin-sing-box /tmp/antigoblin-sing-box.tar.gz
 }
 
+prepare_cron_permissions() {
+  CRON_TABLE="${1:-/opt/etc/crontab}"
+  [ -f "$CRON_TABLE" ] || return 0
+  # Entware Vixie cron rejects a crontab whose mode is not exactly 0600.
+  # Files copied to USB from Windows can retain group-writable permissions.
+  # Restore the mode before restarting cron so it reloads the unchanged table.
+  chmod 600 "$CRON_TABLE" || return 1
+  # Some USB filesystems report chmod success without changing the mode.
+  case "$(ls -ld "$CRON_TABLE" 2>/dev/null)" in
+    -rw-------*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 start_services() {
+  prepare_cron_permissions || log "WARN: cannot secure crontab; scheduled updates may not run"
   log "Starting cron"
   for candidate in /opt/etc/init.d/S10cron /opt/etc/init.d/S05crond; do
     [ -x "$candidate" ] && "$candidate" restart >/dev/null 2>&1 || true
