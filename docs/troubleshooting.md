@@ -324,3 +324,24 @@ sed -i -E 's#ARGS="run -confdir /opt/etc/(xray|\$PROCS)"#ARGS="run -confdir /opt
 XRAY_LOCATION_ASSET=/opt/etc/xray/dat XRAY_LOCATION_CONFDIR=/opt/etc/xray/configs \
   /opt/sbin/start-stop-daemon -S -b -m -p /opt/var/run/xray-ui.pid -x /opt/sbin/xray -- run
 ```
+
+### Подписка не обновляется автоматически, удалённые серверы остаются в списке
+
+Если автообновление включено, но дата последней загрузки не меняется и журнал
+`/opt/var/log/xkeen-subscription-refresh.log` не появляется, проверьте запуск cron.
+Наличие процесса `cron` само по себе не подтверждает выполнение расписания.
+
+Entware Vixie cron принимает `/opt/etc/crontab` только с правами `0600`. После
+копирования файлов на USB с Windows файл может иметь `0775`; cron тогда
+игнорирует его, включая задания обновления подписок и Geo-баз.
+
+```sh
+ls -l /opt/etc/crontab
+chmod 600 /opt/etc/crontab
+/opt/etc/init.d/S10cron restart
+```
+
+Ожидаемый режим — `-rw-------`. Содержимое расписания сохраняется, перезапуск
+xray/sing-box не требуется. Если подписка уже просрочена, ближайший минутный
+запуск обновит её; проверьте дату загрузки и журнал, затем перезагрузите панель.
+Установщик восстанавливает этот режим перед запуском cron.
