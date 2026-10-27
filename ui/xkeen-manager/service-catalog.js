@@ -1,18 +1,11 @@
 (function (root) {
   "use strict";
-  // Confirmed voice and stream destinations as of 2026-10-12. Keep exact
-  // host routes: the surrounding Cloudflare ranges serve other applications.
+  // Retain network coverage from the working legacy profile. Discord changes
+  // media IPs between connections; a fixed list of observed /32s is incomplete.
+  // These ranges are not an exclusive or exhaustive allocation for Discord.
   const discordMediaCidrs = Object.freeze([
     "66.22.192.0/18",
-    "104.29.149.49/32",
-    "104.29.155.176/32",
-    "104.29.155.181/32",
-    "104.29.155.185/32",
-    "104.29.155.187/32",
-    "104.29.155.196/32",
-    "104.29.155.201/32",
-    "104.29.155.204/32",
-    "104.29.158.3/32"
+    "104.29.0.0/16"
   ]);
   const rows = [
     ["chatgpt", "ChatGPT", "ai", "openai", true],
@@ -123,14 +116,14 @@
     ru: { all: "Все", ai: "AI", social: "Общение", media: "Видео и музыка", games: "Игры", work: "Работа", ecosystems: "Экосистемы",
       title: "Популярные сервисы", search: "Поиск сервиса", add: "Добавить сервисы", edit: "Изменить сервисы", cancel: "Отмена",
       name: "Название группы", route: "Направление", vpn: "Через VPN", bypass: "Мимо VPN", selected: "Выбрано", extra: "Свои дополнительные правила",
-      voice: "Голос и стримы Discord", voiceHint: "Добавляет известные медиа-адреса. Discord может менять IP; свои дополнительные правила сохраняются.",
+      voice: "Голос и стримы Discord", voiceHint: "Добавляет медиа-сети для голоса и стримов. Общие адреса могут использоваться и другими сервисами; свои правила сохраняются.",
       rules: "Правила выбранных сервисов", quick: "Популярные сервисы", more: "Показать весь каталог", empty: "Сервис не найден",
       group: "Мои сервисы", remove: "Убрать", geoMissing: "Сначала установите базу сервисов кнопкой обновления Geo-баз.",
       geoFailed: "Не удалось проверить базу сервисов.", checking: "Проверяем базу сервисов…", geoReady: "База сервисов установлена", apply: "Добавить в группу" },
     en: { all: "All", ai: "AI", social: "Social", media: "Video and music", games: "Games", work: "Work", ecosystems: "Ecosystems",
       title: "Popular services", search: "Search services", add: "Add services", edit: "Edit services", cancel: "Cancel",
       name: "Group name", route: "Direction", vpn: "Via VPN", bypass: "Bypass VPN", selected: "Selected", extra: "Additional custom rules",
-      voice: "Discord voice and streams", voiceHint: "Includes known media destinations. Discord IPs may change; your additional custom rules are retained.",
+      voice: "Discord voice and streams", voiceHint: "Includes voice and stream networks. Shared addresses may serve other applications; your custom rules are retained.",
       rules: "Selected service rules", quick: "Popular services", more: "Show all services", empty: "Service not found",
       group: "My services", remove: "Remove", geoMissing: "Install service databases with the Geo database update button first.",
       geoFailed: "Cannot check service databases.", checking: "Checking service databases…", geoReady: "Service databases installed", apply: "Add to group" }

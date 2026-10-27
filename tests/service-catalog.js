@@ -6,8 +6,30 @@ assert.equal(C.catalog.length, 32);
 assert.equal(C.catalog.filter((s) => s.popular).length, 12);
 assert.equal(new Set(C.catalog.map((s) => s.id)).size, 32);
 assert.deepEqual(C.get("copilot").domains, ["geosite:github-copilot"]);
+const ipv4 = (value) => value.split(".").reduce((acc, octet) => (acc * 256 + Number(octet)) >>> 0, 0);
+const containsIp = (cidr, address) => {
+  const [network, prefix] = cidr.split("/");
+  const mask = (0xffffffff << (32 - Number(prefix))) >>> 0;
+  return (ipv4(network) & mask) === (ipv4(address) & mask);
+};
+for (const address of ["104.29.0.0", "104.29.255.255", "104.29.149.57", "104.29.149.250", "104.29.136.15", "104.29.155.250", "104.29.155.205", "104.29.149.28", "104.29.136.201", "104.29.149.21", "104.29.149.25", "104.29.155.203", "104.29.149.31", "66.22.192.0", "66.22.255.255", "66.22.200.1"]) {
+  assert(C.get("discord").cidrs.some((cidr) => containsIp(cidr, address)), "media coverage must include newly assigned addresses, not just recorded hosts");
+}
+for (const address of ["104.28.255.255", "104.30.0.0", "66.22.191.255", "66.23.0.0", "34.158.72.125", "172.64.1.1", "162.158.1.1"]) {
+  assert(!C.get("discord").cidrs.some((cidr) => containsIp(cidr, address)), "Discord must not capture the legacy broad cloud networks");
+}
+const legacyDiscord = C.normalizeGroup({ id: "legacy", enabled: true, serviceIds: ["discord"],
+  serviceManualDomains: [], serviceManualCidrs: ["104.29.149.25/32"],
+  serviceVoiceCidrs: ["104.29.155.203/32"],
+  domains: ["geosite:discord"], cidrs: ["66.22.192.0/18", "104.29.149.25/32", "104.29.155.203/32"] });
+assert(legacyDiscord.cidrs.some((cidr) => containsIp(cidr, "104.29.149.57")), "saved catalog groups adopt range coverage on normalization");
+assert.deepEqual(C.normalizeGroup(JSON.parse(JSON.stringify(legacyDiscord))), legacyDiscord, "migrated Discord groups survive export/reload");
+const legacyDiscordNoMedia = C.selectServices(legacyDiscord, ["discord"], { voiceEnabled: false });
+assert(legacyDiscordNoMedia.cidrs.includes("104.29.149.25/32"), "manual host rules survive disabling range coverage");
+assert(!legacyDiscordNoMedia.cidrs.includes("104.29.155.203/32"), "automatically imported host rules follow the media toggle");
 const voice = ["203.0.113.7/32", "203.0.113.8/32"];
 const old = { id: "group", name: "Existing", enabled: true, outboundTag: "bypass", domains: ["example.org", "geosite:discord"], cidrs: ["198.51.100.0/24"] };
+assert.strictEqual(C.normalizeGroup(old), old, "plain manual groups are not silently migrated");
 const first = C.selectServices(old, ["discord", "telegram"], { voiceCidrs: voice });
 assert.equal(first.outboundTag, "bypass");
 assert(first.domains.includes("example.org"));
