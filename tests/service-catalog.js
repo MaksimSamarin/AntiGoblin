@@ -2,9 +2,9 @@ const assert = require("assert");
 const fs = require("fs");
 const vm = require("vm");
 const C = require("../ui/xkeen-manager/service-catalog.js");
-assert.equal(C.catalog.length, 31);
+assert.equal(C.catalog.length, 32);
 assert.equal(C.catalog.filter((s) => s.popular).length, 12);
-assert.equal(new Set(C.catalog.map((s) => s.id)).size, 31);
+assert.equal(new Set(C.catalog.map((s) => s.id)).size, 32);
 assert.deepEqual(C.get("copilot").domains, ["geosite:github-copilot"]);
 const voice = ["203.0.113.7/32", "203.0.113.8/32"];
 const old = { id: "group", name: "Existing", enabled: true, outboundTag: "bypass", domains: ["example.org", "geosite:discord"], cidrs: ["198.51.100.0/24"] };
@@ -31,6 +31,25 @@ assert(!C.get("discord").cidrs.some((v) => noVoice.cidrs.includes(v)), "disablin
 assert(noVoice.domains.includes("geosite:discord"), "Discord websites stay selected when media routing is disabled");
 assert(noVoice.cidrs.includes("198.51.100.0/24"));
 const blank = { id: "new", enabled: true, domains: [], cidrs: [] };
+const nad = C.get("nad-bluos");
+const nadOnly = C.selectServices(blank, ["nad-bluos"]);
+assert.equal(nadOnly.enabled, true, "the NAD preset must materialize nonempty selective rules");
+assert.equal(nad.category, "media");
+for (const host of ["ca2.upgrade.bluos.net", "1.ntp.bluos.net", "main.news.bluos.net",
+  "upgrade.nadelectronics.com", "d27y2nb09d21cl.cloudfront.net"]) {
+  assert(nadOnly.domains.some((domain) => host === domain || host.endsWith(`.${domain}`)),
+    `the NAD preset must cover its observed endpoint: ${host}`);
+}
+assert.equal(nad.cidrs.length, 0, "shared CDN IP ranges must not be captured by the NAD preset");
+assert(!nad.domains.some((domain) => ["cloudfront.net", "amazonaws.com"].includes(domain)
+  || domain.startsWith("geosite:")), "NAD uses vendor domains and its exact CDN, not broad or nonexistent categories");
+assert(!nadOnly.domains.includes("geosite:spotify"), "Spotify is selected independently");
+const nadWithSpotify = C.selectServices({ ...blank, domains: ["bluos.net", "example.org"] }, ["nad-bluos", "spotify"]);
+const nadRemoved = C.selectServices(nadWithSpotify, ["spotify"]);
+assert(nadRemoved.domains.includes("bluos.net"), "manual rules overlapping NAD must survive deselection");
+assert(nadRemoved.domains.includes("example.org") && nadRemoved.domains.includes("geosite:spotify"));
+assert(!nadRemoved.domains.includes("d27y2nb09d21cl.cloudfront.net"), "removing NAD removes its owned CDN route");
+assert.deepEqual(C.normalizeGroup(JSON.parse(JSON.stringify(nadWithSpotify))), nadWithSpotify);
 const lastRemoved = C.selectServices(C.selectServices(blank, ["chatgpt"]), []);
 assert.equal(lastRemoved.enabled, false, "removing the last service must never create a full tunnel");
 const manualFullTunnel = C.normalizeGroup(blank);

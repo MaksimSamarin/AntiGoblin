@@ -1,5 +1,7 @@
 # AntiGoblin
 
+Версия **1.4.0** — [изменения релиза](docs/releases/v1.4.0.md).
+
 <p align="center">
   <img src="docs/screenshots/ui-overview.png" alt="AntiGoblin UI" width="900">
 </p>
@@ -264,7 +266,7 @@ exec sh                    # выйти из NDM CLI в обычный shell
 # Версия зашивается внутрь как /opt/share/antigoblin-staged/VERSION.
 ```
 
-Билд-скрипт запускается на Linux или WSL (Ubuntu/Debian хватает), требует `bash`, `curl`, `tar`, `gzip`, `awk`. Ничего не кросс-компилирует — только скачивает готовые бинарники и репаковывает. На голом Windows Git-Bash **не работает** — не умеет создавать symlink'и, которых полно в Entware installer; используй WSL. Автоматическая сборка на GitHub Actions описана в `.github/workflows/release-usb-installer.yml` — при пуше тега `v*` собираются aarch64 и armv7, публикуются в Release.
+Билд-скрипт запускается на Linux или WSL (Ubuntu/Debian хватает), требует `bash`, `curl`, `tar`, `gzip`, `awk`. Ничего не кросс-компилирует — только скачивает готовые бинарники и репаковывает. На голом Windows Git-Bash **не работает** — не умеет создавать symlink'и, которых полно в Entware installer; используй WSL. Автоматическая сборка на GitHub Actions описана в `.github/workflows/release-usb-installer.yml` — при пуше тега `v*` собирается aarch64 и публикуется в Release.
 
 **Ограничения:**
 

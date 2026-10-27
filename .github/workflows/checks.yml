@@ -1,0 +1,35 @@
+name: Checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install paramiko
+      - name: JavaScript regressions
+        run: |
+          set -eu
+          for test in tests/*.js; do node "$test"; done
+      - name: Shell regressions
+        run: |
+          set -eu
+          for test in firstboot-no-reboot runtime-recovery cron-permissions router-auth-headers jq-no-oniguruma; do
+            bash "tests/$test.sh"
+          done
+          bash -n scripts/xkeen/build-usb-installer.sh
+      - name: SSH upload regressions
+        run: python tests/router-ssh-upload.py

@@ -1,9 +1,33 @@
 # Service catalog
 
-The traffic rules panel offers a searchable catalog of 31 service presets with
-12 shortcuts. Presets use the installed GeoSite/GeoIP databases. The catalog
+The traffic rules panel offers a searchable catalog of 32 service presets with
+12 shortcuts. Most presets use the installed GeoSite/GeoIP databases. The catalog
 requires installed databases; update them before adding services when absent.
 The router-side Geo compiler validates category presence during apply.
+
+## NAD / BluOS
+
+`NAD / BluOS` is in **Video and music** and can be found by searching for
+`NAD` or `BluOS`. It uses explicit vendor domains rather than a nonexistent
+GeoSite category. It covers BluOS online services, firmware checks/downloads,
+the BluOS website and NAD/Bluesound support. Spotify remains a separate preset;
+other music providers and arbitrary radio streams are outside this preset.
+Local player discovery and control keep using the router's existing LAN bypass.
+
+Vendor domains: `bluos.net`, `bluos.io`, `bluesound.com`, `nadelectronics.com`.
+On 2026-10-27, the actual C700 V2 updater used `ca2.upgrade.bluos.net`
+(confirmed by the destination's TLS certificate), covered by `bluos.net`.
+Its diagnostic log also confirmed `upgrade.nadelectronics.com`,
+`main.news.bluos.net`, `1.ntp.bluos.net` and the firmware data host
+`d27y2nb09d21cl.cloudfront.net`. That exact CloudFront distribution is included
+alongside the vendor domains. A future CDN change may require a catalog update.
+Do not add all of `cloudfront.net`, `amazonaws.com`, AWS networks or a catch-all
+route: shared CDN infrastructure also hosts unrelated applications.
+
+Sources: [BluOS downloads](https://bluos.io/downloads/),
+[BluOS update instructions](https://support.bluos.net/hc/en-us/articles/360000205287-How-to-identify-and-update-the-current-BluOS-firmware-version-on-my-BluOS-Player).
+
+## Preset ownership and coverage
 
 Selecting services creates an ordinary routing group. Existing groups can also
 receive presets. `domains` and `cidrs` remain the materialized routing fields
