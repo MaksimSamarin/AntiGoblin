@@ -107,7 +107,7 @@ log "work-dir=$WORK_DIR"
 # ---- 1. Download and unpack upstream Entware installer ----
 ENTWARE_URL="$ENTWARE_MIRROR/$ENTWARE_ARCH/installer/${ARCH}-installer.tar.gz"
 log "Fetching Entware installer: $ENTWARE_URL"
-curl -fsSL --retry 3 -o "$WORK_DIR/entware.tar.gz" "$ENTWARE_URL"
+curl -fsSL --connect-timeout 15 --max-time 180 --retry 3 --retry-max-time 360 -o "$WORK_DIR/entware.tar.gz" "$ENTWARE_URL"
 
 STAGE="$WORK_DIR/stage"
 mkdir -p "$STAGE"
@@ -129,7 +129,7 @@ SB_INSTALLED=""
 for sb_arch in $SB_CANDIDATES; do
   URL="https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-${sb_arch}.tar.gz"
   log "  trying $sb_arch"
-  if curl -fsSL --retry 2 -o "$SB_TARBALL" "$URL" 2>/dev/null; then
+  if curl -fsSL --connect-timeout 15 --max-time 180 --retry 2 --retry-max-time 360 -o "$SB_TARBALL" "$URL" 2>/dev/null; then
     SB_INSTALLED="$sb_arch"
     break
   fi

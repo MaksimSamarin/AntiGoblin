@@ -47,11 +47,25 @@
     ["microsoft", "Microsoft", "ecosystems", "microsoft"],
     ["apple", "Apple", "ecosystems", "apple"]
   ];
+  // BluOS has no GeoSite category. Keep its own domains explicit rather
+  // than sending unrelated AWS/CloudFront customers through this preset.
+  const nadBluos = Object.freeze({
+    id: "nad-bluos", name: "NAD / BluOS", category: "media", popular: false,
+    domains: Object.freeze([
+      "bluos.net",
+      "bluos.io",
+      "bluesound.com",
+      "nadelectronics.com",
+      // C700 V2 stage2 diagnostics, verified 2026-10-27.
+      "d27y2nb09d21cl.cloudfront.net"
+    ]),
+    cidrs: Object.freeze([])
+  });
   const catalog = Object.freeze(rows.map(([id, name, category, code, popular, geoip]) => Object.freeze({
     id, name, category, popular: !!popular,
     domains: Object.freeze([`geosite:${code}`]),
     cidrs: Object.freeze(geoip ? [`geoip:${geoip}`] : id === "discord" ? discordMediaCidrs : [])
-  })));
+  })).concat(nadBluos));
   const get = (id) => catalog.find((s) => s.id === id);
   const unique = (items) => [...new Set((Array.isArray(items) ? items : []).filter((v) => typeof v === "string" && v.trim()).map((v) => v.trim()))];
   function isIPv4Cidr(value) {
@@ -98,6 +112,7 @@
   }
   function scope(service, lang) {
     const ru = lang !== "en";
+    if (service.id === "nad-bluos") return ru ? "BluOS · обновления" : "BluOS · updates";
     if (service.id === "discord") return ru ? "Чаты · голос и стримы" : "Chats · voice and streams";
     if (service.id === "whatsapp" || service.id === "zoom") return ru ? "Сайты · звонки отдельно" : "Websites · calls need IP rules";
     if (service.category === "games") return ru ? "Магазин · игры отдельно" : "Store · games need IP rules";

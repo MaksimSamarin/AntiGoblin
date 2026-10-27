@@ -1359,3 +1359,9 @@ input, select, textarea { border-color: #3c607e; padding: 13px 16px; }
 }
 
 .app-version { align-self: center; font-size: 14px; color: var(--muted); }
+
+/* Keep filled profile panels inside their assigned grid column. */
+.layout > *,
+.stack-col > .panel { min-width: 0; }
+.grid > * { min-width: 0; }
+input, select, textarea { min-width: 0; }

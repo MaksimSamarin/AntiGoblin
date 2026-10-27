@@ -345,3 +345,56 @@ chmod 600 /opt/etc/crontab
 xray/sing-box не требуется. Если подписка уже просрочена, ближайший минутный
 запуск обновит её; проверьте дату загрузки и журнал, затем перезагрузите панель.
 Установщик восстанавливает этот режим перед запуском cron.
+
+
+<a id="instagram-nxdomain"></a>
+## Instagram: `DNS_PROBE_FINISHED_NXDOMAIN` при рабочем VPN
+
+Если DNS роутера отвечает «имя не существует», добавление домена в VPN-группу
+не помогает: клиенту ещё некуда устанавливать соединение. Сначала сравните
+обычный DNS с запросом через SOCKS роутера:
+
+```powershell
+Resolve-DnsName www.instagram.com -Server <router-ip> -Type A
+curl.exe --noproxy "" --proxy socks5h://<router-ip>:61080 -I https://www.instagram.com/
+```
+
+NXDOMAIN при обычном запросе и рабочий HTTP через SOCKS указывают на отдельную
+проблему разрешения имён. Проверьте защищённый DNS (DoH/DoT) на роутере.
+Не подменяйте DNS для всей сети без необходимости; Keenetic поддерживает
+отдельный сервер для выбранных доменных зон.
+
+Если штатного компонента DoH нет, проверенный вариант Entware —
+`https-dns-proxy`: HTTPS upstream `https://1.1.1.1/dns-query`, отдельный
+TCP/UDP-порт `61553` на LAN-адресе роутера, штатный init
+`/opt/etc/init.d/S09https-dns-proxy`. Настройки находятся в
+`/opt/etc/config/https-dns-proxy`; перед изменением сохраните существующий файл.
+Для нового, ещё не настроенного экземпляра параметры запуска:
+
+```text
+OPTIONS="-a <router-ip> -p 61553 -r https://1.1.1.1/dns-query -4 -l /opt/var/log/https-dns-proxy.log"
+```
+
+После проверки ответа локального прокси добавьте в штатной CLI Keenetic
+доменное направление (замените `<router-ip>` на LAN-IP своего роутера):
+
+```text
+ip name-server <router-ip>:61553 instagram.com
+ip name-server <router-ip>:61553 cdninstagram.com
+ip name-server <router-ip>:61553 igcdn.com
+ip name-server <router-ip>:61553 ig.me
+ip name-server <router-ip>:61553 fbcdn.net
+ip name-server <router-ip>:61553 facebook.net
+system configuration save
+```
+
+На некоторых версиях прошивки `127.0.0.1` не принимается командой
+`ip name-server`; используйте проверенный LAN-IP и не публикуйте этот порт
+через WAN. Остальные зоны сохраняют прежние DNS. Эти настройки применяются
+отдельно от AntiGoblin и сохраняются при его штатном обновлении.
+
+После исправления очистите клиентский DNS-кэш и проверьте обычный запрос к
+сайту без явного SOCKS. Откат доменного направления:
+`no ip name-server <router-ip>:61553 <domain>` для каждой добавленной зоны,
+затем `system configuration save`; остановите локальный прокси только после
+удаления использующих его правил.
