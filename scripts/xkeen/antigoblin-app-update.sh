@@ -67,6 +67,15 @@ check() {
   status
 }
 unlock() { rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null || true; }
+launch_worker() {
+  # Base Entware need not provide nohup. Ignored SIGHUP survives exec,
+  # while all standard streams are detached from the CGI request here.
+  (
+    trap '' HUP
+    exec "$SHELL_BIN" "$work/worker.sh" worker "$work"
+  ) > "$DIR/update.log" 2>&1 </dev/null &
+  echo $! > "$LOCK/pid"
+}
 start() {
   if running; then status; return 0; fi
   # Never discard another start while it is creating its child.
@@ -93,8 +102,10 @@ start() {
   printf '%s\n' "$target" > "$work/target"
   write_status starting
   # Execute an immutable copy: installation replaces the live updater script.
-  nohup "$SHELL_BIN" "$work/worker.sh" worker "$work" > "$DIR/update.log" 2>&1 </dev/null &
-  echo $! > "$LOCK/pid"
+  launch_worker
+  # Give the child time to exec the identifiable worker command before
+  # status() checks its PID; otherwise a healthy start can look failed.
+  sleep 1
   status
 }
 restart_owned_services() {

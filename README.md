@@ -1,6 +1,6 @@
 # AntiGoblin
 
-Версия **1.4.0** — [изменения релиза](docs/releases/v1.4.0.md).
+Версия **1.4.1** — [исправление обновлялки](docs/releases/v1.4.1.md), [изменения 1.4.0](docs/releases/v1.4.0.md).
 
 <p align="center">
   <img src="docs/screenshots/ui-overview.png" alt="AntiGoblin UI" width="900">
