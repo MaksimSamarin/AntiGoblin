@@ -153,7 +153,7 @@ worker() {
   [ "$(tr -d '\r' < "$src/ui/xkeen-manager/VERSION")" = "$target" ] || return 1
   # Snapshot only application-owned files; never touch unrelated server/router data.
   : > "$work/backup-files"
-  for path in share/xkeen-manager etc/xray/configs etc/sing-box/xkeen.json etc/antigoblin.conf \
+  for path in share/xkeen-manager etc/xray/configs etc/sing-box/xkeen.json etc/antigoblin.conf etc/antigoblin-device-policy.json \
     etc/init.d/S20antigoblin-sysctl etc/init.d/S24antigoblin-singbox etc/init.d/S24xray \
     etc/init.d/S25antigoblin-selfheal etc/init.d/S26antigoblin etc/cron.1min/50-antigoblin-selfheal \
     etc/ndm/netfilter.d/50-antigoblin.sh etc/ndm/usb.d/50-antigoblin.sh; do

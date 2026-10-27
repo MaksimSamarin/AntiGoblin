@@ -430,6 +430,8 @@ deploy_sources() {
   deploy_file "$BACKEND/geodata.js" /opt/share/xkeen-manager/api/geodata.js 644
   deploy_file "$BACKEND/subscription-refresh.js" /opt/share/xkeen-manager/api/subscription-refresh.js 644
   deploy_file "$BACKEND/subscription-candidate.js" /opt/share/xkeen-manager/api/subscription-candidate.js 644
+  deploy_file "$BACKEND/device-policy-config.awk" /opt/share/xkeen-manager/api/device-policy-config.awk 644
+  deploy_file "$SCRIPTS/antigoblin-device-policy.sh" /opt/share/xkeen-manager/api/antigoblin-device-policy.sh
 
   log "Deploying init and watchdog scripts"
   deploy_file "$SCRIPTS/antigoblin-selfheal-loop.sh" /opt/share/xkeen-manager/api/xkeen-selfheal-loop.sh
@@ -597,6 +599,10 @@ main() {
   mkdirs
   ensure_xkeen_policy
   deploy_sources
+  # Only create the unused exception policy. Assigning devices remains opt-in.
+  if ! /opt/bin/sh /opt/share/xkeen-manager/api/antigoblin-device-policy.sh ensure >/dev/null; then
+    log "WARN: could not create no_vpn; existing device assignments were kept"
+  fi
   install_singbox
   start_services
   # Stamp the version only after deployment and service startup.

@@ -33,3 +33,5 @@ jobs:
           bash -n scripts/xkeen/build-usb-installer.sh
       - name: SSH upload regressions
         run: python tests/router-ssh-upload.py
+      - name: Device policy transactions
+        run: python tests/device-policy.py

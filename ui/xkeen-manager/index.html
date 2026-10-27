@@ -94,6 +94,12 @@
             </label>
           </div>
 
+          <div class="key-block device-policy-settings">
+            <label class="toggle"><input id="defaultVpnPolicy" type="checkbox" disabled aria-describedby="defaultVpnPolicyHelp defaultVpnPolicyStatus"><span id="defaultVpnPolicyLabel">VPN-группа по умолчанию</span></label>
+            <p id="defaultVpnPolicyHelp" class="service-hint">Домашние устройства используют правила AntiGoblin. Устройства в no_vpn остаются исключениями. Применяется сразу.</p>
+            <p id="defaultVpnPolicyStatus" class="service-hint" role="status" aria-live="polite"></p>
+          </div>
+
           <div class="vless-panel">
             <div class="panel-header mini-header">
               <div>
@@ -331,6 +337,6 @@
   </div>
 
   <script charset="utf-8" src="./service-catalog.js?v=142"></script>
-  <script charset="utf-8" src="./app.js?v=97"></script>
+  <script charset="utf-8" src="./app.js?v=144"></script>
 </body>
 </html>
