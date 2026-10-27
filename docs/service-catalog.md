@@ -42,27 +42,39 @@ reload preserve the metadata. Unknown future preset IDs retain their compiled
 rules. Removing the last preset from an otherwise empty group disables the
 group so it cannot accidentally enable the runtime's full-tunnel semantics.
 
-The Discord voice-and-stream option includes `66.22.192.0/18` and these exact
-media destinations confirmed on 2026-10-12:
+The Discord voice-and-stream option includes these media ranges, restored
+from a working legacy router profile on 2026-10-23:
 
-- `104.29.149.49/32`
-- `104.29.155.176/32`
-- `104.29.155.181/32`
-- `104.29.155.185/32`
-- `104.29.155.187/32`
-- `104.29.155.196/32`
-- `104.29.155.201/32`
-- `104.29.155.204/32`
-- `104.29.158.3/32` (screen-share destination)
+- `66.22.192.0/18`
+- `104.29.0.0/16`
+
+Discord supplies the UDP destination during connection setup; clients must
+not assume the next voice or stream connection will reuse an observed IP.
+See [Discord's voice connection documentation](https://github.com/discord/discord-api-docs/blob/main/developers/topics/voice-connections.mdx).
+The previous per-host list repeatedly missed new destinations inside
+`104.29.0.0/16`, so it was replaced by the range rather than another `/32`.
+All media destinations observed during the October incidents and the newly
+encountered stream destination fit inside these ranges.
+
+This is practical network coverage, not an official exclusive Discord IP
+allocation or a guarantee that future regions will stay inside these ranges.
+Shared addresses can route other services through the selected outbound.
+The legacy profile's much broader Google and Cloudflare CIDRs are not part of
+the preset. Routing still preserves explicit bypass groups.
 
 Additional local destinations are imported from the active profile's
 `discord-voice-observed` group and retained as profile-owned CIDRs. They are
-deduplicated against the preset; arbitrary profile observations do not modify
-the shared catalog. These endpoints do not constitute universal Discord
-coverage; reconnecting or changing region may require additional addresses.
-Broader Cloudflare ranges are not included. Disabling the media option removes
+deduplicated against the preset by exact value; arbitrary profile observations
+do not modify the shared catalog. Existing host observations and manually
+entered rules remain profile-owned, including ones now covered by a range.
+Disabling the media option removes
 its preset-owned routes while retaining Discord GeoSite, custom rules and
 other groups.
+
+Existing groups selected from the catalog adopt the current preset when the UI
+loads their service metadata. Save and apply to activate the updated rules.
+Plain manually created groups are unchanged; add Discord to an existing group
+with the service picker if it should receive catalog-managed coverage.
 
 Store/launcher presets do not imply routing every game server. Website presets
 for calling applications do not imply complete voice/media coverage. Scope is
