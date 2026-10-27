@@ -1,10 +1,11 @@
 const STORAGE_KEY = "xkeen-manager-state-v7";
-const APP_VERSION = "1.4.3";
+const APP_VERSION = "1.4.4";
 let appliedStateSnapshot = null;
 let currentApplyStep = "";
 let appUpdateTimer = null;
 let appUpdatePollingSince = 0;
 let appUpdateActive = false;
+let appUpdatePhase = "starting";
 let devicePolicyInfo = null;
 let devicePolicyBusy = false;
 let devicePolicyDesired = null;
@@ -133,12 +134,57 @@ async function appUpdateRequest(action, body) {
   return result;
 }
 
+function showAppUpdateProgress(info, visible) {
+  const region = document.getElementById("appUpdateProgress");
+  if (!region) return;
+  const ru = currentLang !== "en";
+  const phase = info.phase || "starting";
+  const stages = ["starting", "downloading", "installing", "verifying"];
+  const names = ru ? ["Подготовка", "Скачивание", "Установка", "Проверка"] : ["Preparing", "Downloading", "Installing", "Verifying"];
+  const messages = {
+    checking: ru ? ["Проверяем обновления…", "Запрашиваем последнюю стабильную версию."] : ["Checking for updates…", "Looking for the latest stable version."],
+    starting: ru ? ["Подготавливаем обновление…", "Запускаем обновление приложения."] : ["Preparing the update…", "Starting the application update."],
+    downloading: ru ? ["Скачиваем новую версию…", "Роутер загружает и распаковывает файлы релиза."] : ["Downloading the new version…", "The router is downloading and unpacking the release."],
+    installing: ru ? ["Устанавливаем обновление…", "Сохраняем настройки, устанавливаем файлы и перезапускаем службы. Этот этап может занять несколько минут."] : ["Installing the update…", "Saving settings, installing files and restarting services. This step may take a few minutes."],
+    verifying: ru ? ["Проверяем результат…", "Проверяем установленную версию и доступность панели."] : ["Verifying the update…", "Checking the installed version and panel availability."],
+    reconnecting: ru ? ["Переподключаемся к панели…", "Панель временно недоступна во время перезапуска. Продолжаем проверять статус обновления."] : ["Reconnecting to the panel…", "The panel is temporarily unavailable while restarting. Update status checks continue."],
+    waiting: ru ? ["Обновление занимает больше времени…", "Продолжаем проверять статус. Можно обновить страницу, чтобы подключиться к выполняющемуся обновлению."] : ["The update is taking longer…", "Status checks continue. Reloading the page reconnects to the running update."],
+    succeeded: ru ? ["Обновление завершено", "Новая версия установлена. Сейчас панель перезагрузится."] : ["Update complete", "The new version is installed. The panel will reload shortly."],
+    failed: ru ? ["Не удалось завершить обновление", "Проверьте подключение и повторите попытку."] : ["Update did not complete", "Check the connection and retry."]
+  };
+  region.hidden = !visible;
+  if (!visible) return;
+  const text = messages[phase] || messages.starting;
+  const title = document.getElementById("appUpdateProgressTitle");
+  const detail = document.getElementById("appUpdateProgressDetail");
+  const detailText = phase === "failed" && info.message ? info.message : text[1];
+  // Repeated status polls must not repeatedly announce identical live content.
+  if (region.dataset.phase === phase && title.textContent === text[0] && detail.textContent === detailText) return;
+  region.dataset.phase = phase;
+  title.textContent = text[0];
+  detail.textContent = detailText;
+  const knownPhase = phase === "reconnecting" || phase === "waiting" ? appUpdatePhase : phase;
+  const index = phase === "succeeded" ? 4 : phase === "checking" ? 0 : Math.max(0, stages.indexOf(knownPhase));
+  const list = document.getElementById("appUpdateProgressSteps");
+  list.hidden = phase === "failed";
+  list.setAttribute("aria-label", ru ? "Этапы обновления" : "Update steps");
+  for (let i = 0; i < 4; i++) {
+    const step = document.getElementById(`appUpdateStep${i}`);
+    step.textContent = names[i];
+    step.dataset.state = i < index ? "done" : i === index ? "current" : "next";
+    if (i === index) step.setAttribute("aria-current", "step"); else step.removeAttribute("aria-current");
+  }
+}
+
 function showAppUpdateState(info) {
   const button = document.getElementById("updateAppBtn");
   const version = document.getElementById("appVersion");
   if (!button || !version) return;
   version.textContent = info.currentVersion === "unknown" ? interfaceText("unknown") : `v${info.currentVersion}`;
+  const wasActive = appUpdateActive;
   appUpdateActive = info.running === true;
+  if (appUpdateActive && info.phase) appUpdatePhase = info.phase;
+  showAppUpdateProgress(info, appUpdateActive || wasActive || appUpdatePollingSince > 0 || info.phase === "failed");
   button.disabled = appUpdateActive;
   button.textContent = interfaceText(appUpdateActive ? "updating" : "update");
   // Updating application files must not race with profile/configuration edits.
@@ -156,12 +202,12 @@ function showAppUpdateState(info) {
 async function pollAppUpdate() {
   appUpdateTimer = null;
   if (Date.now() - appUpdatePollingSince > 15 * 60 * 1000) {
-    showToast(interfaceText("timeout"), { kind: "error", ttl: 10000 });
-    return;
+    showAppUpdateProgress({ phase: "waiting" }, true);
   }
   try {
     const info = await appUpdateRequest("status");
     showAppUpdateState(info);
+    if (info.running && Date.now() - appUpdatePollingSince > 15 * 60 * 1000) showAppUpdateProgress({ phase: "waiting" }, true);
     if (!info.running) {
       appUpdatePollingSince = 0;
       if (info.phase === "succeeded") {
@@ -178,6 +224,7 @@ async function pollAppUpdate() {
       return;
     }
     // uhttpd restarts during installation. Keep polling through that gap.
+    showAppUpdateProgress({ phase: "reconnecting" }, true);
     appUpdateTimer = setTimeout(pollAppUpdate, 3000);
   }
 }
@@ -187,6 +234,7 @@ async function updateApplication() {
   const button = document.getElementById("updateAppBtn");
   button.disabled = true;
   button.textContent = interfaceText("checking");
+  showAppUpdateProgress({ phase: "checking" }, true);
   try {
     const info = await appUpdateRequest("check", {});
     showAppUpdateState(info);
@@ -210,6 +258,7 @@ async function updateApplication() {
       } catch { /* The panel may be restarting; the existing poll will retry. */ }
     }
     if (isAuthError(error)) showAuthOverlay(AUTH_LOGIN_HINT);
+    showAppUpdateProgress({ phase: "failed", message: error.message }, true);
     showToast(`${interfaceText("failed")}: ${error.message}`, { kind: "error", ttl: 8000 });
   } finally {
     if (!appUpdateActive) { button.disabled = false; button.textContent = interfaceText("update"); }

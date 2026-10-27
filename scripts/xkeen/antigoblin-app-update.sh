@@ -45,7 +45,7 @@ status() {
   running && active=true
   phase="$(jq -r '.phase // "idle"' "$DIR/status.json" 2>/dev/null || echo idle)"
   message="$(jq -r '.message // empty' "$DIR/status.json" 2>/dev/null || true)"
-  case "$phase" in starting|downloading|installing)
+  case "$phase" in starting|downloading|installing|verifying)
     if [ "$active" = false ]; then phase=failed; message='Update worker stopped; check the application and retry'; fi ;;
   esac
   jq -cn --arg currentVersion "$current" --arg latestVersion "$latest" \
@@ -168,6 +168,7 @@ worker() {
   # Offline staged mode pins the complete source tree to the checked release.
   ANTIGOBLIN_SRC_DIR="$src" ANTIGOBLIN_FORCE=0 ANTIGOBLIN_UI_PORT="$port" \
     ANTIGOBLIN_WORK_DIR="$work/install-work" "$SHELL_BIN" "$src/install.sh" || return 1
+  write_status verifying
   [ "$(current_version)" = "$target" ] || return 1
   curl --noproxy '*' -fsS --connect-timeout 3 --max-time 10 "http://127.0.0.1:$port/" >/dev/null || return 1
   success=1

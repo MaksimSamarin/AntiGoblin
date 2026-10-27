@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AntiGoblin</title>
-  <link rel="stylesheet" href="./styles.css?v=140">
+  <link rel="stylesheet" href="./styles.css?v=145">
 </head>
 <body>
     <div id="authOverlay" class="auth-overlay" hidden>
@@ -72,6 +72,14 @@
           <button id="logoutBtn" type="button" class="danger-solid">&#1042;&#1099;&#1081;&#1090;&#1080;</button>
         </div>
       </div>
+
+    <section id="appUpdateProgress" class="app-update-progress" role="status" aria-live="polite" aria-atomic="true" hidden>
+      <div class="app-update-heading"><span class="app-update-spinner" aria-hidden="true"></span><strong id="appUpdateProgressTitle"></strong></div>
+      <p id="appUpdateProgressDetail"></p>
+      <ol class="app-update-steps" aria-label="Этапы обновления" id="appUpdateProgressSteps">
+        <li id="appUpdateStep0">Подготовка</li><li id="appUpdateStep1">Скачивание</li><li id="appUpdateStep2">Установка</li><li id="appUpdateStep3">Проверка</li>
+      </ol>
+    </section>
 
     <main class="layout">
       <div class="stack-col">
@@ -337,6 +345,6 @@
   </div>
 
   <script charset="utf-8" src="./service-catalog.js?v=142"></script>
-  <script charset="utf-8" src="./app.js?v=144"></script>
+  <script charset="utf-8" src="./app.js?v=145"></script>
 </body>
 </html>

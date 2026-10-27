@@ -37,6 +37,10 @@ rm -rf "$dir" /opt/var/run/antigoblin-app-update.lock
 
 release() { jq -cn --arg tag "$1" '{tag_name:$tag,draft:false,prerelease:false}' > "$testdir/release.json"; }
 release v1.3.1
+mkdir -p "$dir"
+printf '{"phase":"verifying","message":""}' > "$dir/status.json"
+"$updater" status | jq -e '.running==false and .phase=="failed"' >/dev/null
+rm -f "$dir/status.json"
 "$updater" check | jq -e '.currentVersion=="1.3.2" and .updateAvailable==false' >/dev/null
 "$updater" start | jq -e '.running==false' >/dev/null
 test ! -d /opt/var/run/antigoblin-app-update.lock

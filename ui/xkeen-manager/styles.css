@@ -1295,7 +1295,7 @@ body {
 .hero .lede { font-size: 18px; }
 .panel { padding: 22px; }
 .panel h2 { font-size: 28px; }
-.hero-actions-row { position: sticky; top: 0; z-index: 25; padding: 12px 0; margin-bottom: 28px; background: rgba(11,19,29,.96); border: 0; border-radius: 0; }
+.hero-actions-row { position: static; padding: 12px 0; margin-bottom: 28px; background: transparent; border: 0; border-radius: 0; }
 .apply-status { align-self: center; color: var(--muted); font-size: 14px; max-width: 280px; }
 button { min-height: 48px; padding: 12px 18px; background: #142334; border-color: #466d91; color: #d8ecfa; }
 button:hover { background-color: #213952; border-color: #739cc2; }
@@ -1359,6 +1359,23 @@ input, select, textarea { border-color: #3c607e; padding: 13px 16px; }
 }
 
 .app-version { align-self: center; font-size: 14px; color: var(--muted); }
+.app-update-progress { margin: -8px 0 28px; padding: 0 0 20px; border-bottom: 1px solid var(--line); }
+.app-update-progress[hidden], .app-update-steps[hidden] { display: none; }
+.app-update-heading { display: flex; align-items: center; gap: 12px; color: var(--text); }
+.app-update-progress p { margin: 10px 0 16px; color: var(--muted); line-height: 1.5; }
+.app-update-spinner { width: 18px; height: 18px; flex: 0 0 18px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: app-update-spin .9s linear infinite; }
+.app-update-steps { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 0; padding: 0; list-style: none; counter-reset: update-step; font-size: 15px; color: var(--muted); }
+.app-update-steps li { counter-increment: update-step; display: flex; align-items: center; gap: 8px; }
+.app-update-steps li::before { content: counter(update-step); display: inline-grid; place-items: center; width: 24px; height: 24px; border: 1px solid var(--line); border-radius: 50%; font-size: 13px; }
+.app-update-steps li[data-state="current"] { color: var(--text); font-weight: 700; }
+.app-update-steps li[data-state="current"]::before { border-color: var(--accent); color: var(--accent); }
+.app-update-steps li[data-state="done"]::before { content: "✓"; border-color: var(--accent); color: var(--accent); }
+.app-update-progress[data-phase="failed"] .app-update-heading { color: #ffb7b7; }
+.app-update-progress[data-phase="failed"] .app-update-spinner,
+.app-update-progress[data-phase="succeeded"] .app-update-spinner { display: none; }
+@keyframes app-update-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .app-update-spinner { animation: none; } }
+@media (max-width: 760px) { .app-update-steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; } }
 
 /* Keep filled profile panels inside their assigned grid column. */
 .layout > *,
