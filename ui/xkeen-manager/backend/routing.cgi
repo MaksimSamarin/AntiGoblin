@@ -20,6 +20,7 @@ XRAY_BIN="/opt/sbin/xray"
 SELFHEAL_PATH="/opt/share/xkeen-manager/api/xkeen-selfheal.sh"
 GEODATA_SCRIPT="/opt/share/xkeen-manager/api/antigoblin-geodata.sh"
 APP_UPDATE_SCRIPT="/opt/share/xkeen-manager/api/antigoblin-app-update.sh"
+DEVICE_POLICY_SCRIPT="/opt/share/xkeen-manager/api/antigoblin-device-policy.sh"
 TMP_RESTART_SCRIPT="/tmp/xkeen-apply-restart.sh"
 RUNTIME_DIR="/opt/share/xkeen-manager/runtime"
 XKEEN_MARK=""
@@ -250,6 +251,7 @@ repair_runtime() {
 
 get_kind() {
   case "$QUERY_STRING" in
+    kind=device-policy|*'&kind=device-policy'|kind=device-policy'&'*) printf 'device-policy' ;;
     kind=app-update-status|*'&kind=app-update-status'|kind=app-update-status'&'*) printf 'app-update-status' ;;
     kind=app-update-check|*'&kind=app-update-check'|kind=app-update-check'&'*) printf 'app-update-check' ;;
     kind=app-update-start|*'&kind=app-update-start'|kind=app-update-start'&'*) printf 'app-update-start' ;;
@@ -1176,6 +1178,14 @@ case "$REQUEST_METHOD" in
   GET)
     require_router_session
     KIND="$(get_kind)"
+    if [ "$KIND" = "device-policy" ]; then
+      if POLICY_JSON="$(/opt/bin/sh "$DEVICE_POLICY_SCRIPT" status 2>/dev/null)"; then
+        json_ok "$POLICY_JSON"
+      else
+        json_err "cannot read device policies"
+      fi
+      exit 0
+    fi
     if [ "$KIND" = "app-update-status" ]; then
       if [ -x "$APP_UPDATE_SCRIPT" ] && UPDATE_JSON="$($APP_UPDATE_SCRIPT status 2>/dev/null)"; then
         json_ok "$UPDATE_JSON"
@@ -1272,6 +1282,21 @@ case "$REQUEST_METHOD" in
         require_apply_lock
         ;;
     esac
+
+    if [ "$KIND" = "device-policy" ]; then
+      if ! jq -e 'type=="object" and (.enabled|type=="boolean")' "$TMP_BODY" >/dev/null 2>&1; then
+        json_err "device policy requires a boolean enabled value"
+        rm -f "$TMP_BODY"; exit 0
+      fi
+      ACTION=disable
+      [ "$(jq -r '.enabled' "$TMP_BODY")" != true ] || ACTION=enable
+      if POLICY_JSON="$(ANTIGOBLIN_POLICY_LOCK_HELD=1 /opt/bin/sh "$DEVICE_POLICY_SCRIPT" "$ACTION" 2>> "$LOG_PATH")"; then
+        json_ok "$POLICY_JSON"
+      else
+        json_err "cannot change device policy; check the runtime log"
+      fi
+      rm -f "$TMP_BODY"; exit 0
+    fi
 
     if [ "$KIND" = "geodata-update" ]; then
       if [ ! -x "$GEODATA_SCRIPT" ]; then

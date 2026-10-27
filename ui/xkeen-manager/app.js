@@ -1,10 +1,13 @@
 const STORAGE_KEY = "xkeen-manager-state-v7";
-const APP_VERSION = "1.3.2";
+const APP_VERSION = "1.4.3";
 let appliedStateSnapshot = null;
 let currentApplyStep = "";
 let appUpdateTimer = null;
 let appUpdatePollingSince = 0;
 let appUpdateActive = false;
+let devicePolicyInfo = null;
+let devicePolicyBusy = false;
+let devicePolicyDesired = null;
 
 function interfaceText(key) {
   const strings = {
@@ -26,7 +29,80 @@ function interfaceText(key) {
   return strings[currentLang === "en" ? "en" : "ru"][key];
 }
 
+function devicePolicyText(key) {
+  const ru = currentLang !== "en";
+  const labels = {
+    title: ru ? "VPN-группа по умолчанию" : "Default VPN group",
+    help: ru ? "Подключать домашние устройства к xkeen автоматически. Исключение — no_vpn. Применяется сразу."
+      : "Enroll home devices in xkeen automatically. no_vpn stays excluded. Applied immediately.",
+    busy: ru ? "Применение политики устройств…" : "Applying device policy…",
+    unavailable: ru ? "Не удалось прочитать политики роутера." : "Cannot read router policies.",
+    ready: ru ? "Сначала добавьте ключ и сохраните настройки." : "Add a proxy key and save settings first.",
+    dirty: ru ? "Сначала сохраните и примените изменения профиля." : "Save and apply profile changes first.",
+    on: ru ? "Автоматическое подключение домашней сети включено." : "Automatic home network enrollment is enabled.",
+    off: ru ? "Автоматическое подключение выключено. Индивидуальные политики сохраняются." : "Automatic enrollment is off. Individual policies are retained.",
+    failed: ru ? "Не удалось изменить политику устройств" : "Cannot change device policy"
+  };
+  return labels[key];
+}
+
+function renderDevicePolicy() {
+  const box = document.getElementById("defaultVpnPolicy");
+  const status = document.getElementById("defaultVpnPolicyStatus");
+  if (!box || !status) return;
+  document.getElementById("defaultVpnPolicyLabel").textContent = devicePolicyText("title");
+  document.getElementById("defaultVpnPolicyHelp").textContent = devicePolicyText("help");
+  const dirty = appliedStateSnapshot !== null && JSON.stringify(state) !== appliedStateSnapshot;
+  box.checked = devicePolicyBusy && devicePolicyDesired !== null ? devicePolicyDesired : devicePolicyInfo?.enabled === true;
+  box.disabled = devicePolicyBusy || appUpdateActive || !!currentApplyStep || dirty || !devicePolicyInfo || (!box.checked && !devicePolicyInfo.ready);
+  status.textContent = devicePolicyText(devicePolicyBusy ? "busy" : !devicePolicyInfo ? "unavailable" : dirty ? "dirty" : !box.checked && !devicePolicyInfo.ready ? "ready" : box.checked ? "on" : "off");
+}
+
+async function devicePolicyRequest(body) {
+  const response = await fetchWithTimeout("./api/routing.cgi?kind=device-policy", body === undefined ?
+    { cache: "no-store" } : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, 90000);
+  const info = await parseResponseOrThrow(response);
+  if (typeof info.enabled !== "boolean") throw new Error("Invalid device policy response");
+  return info;
+}
+
+async function loadDevicePolicy() {
+  try { devicePolicyInfo = await devicePolicyRequest(); }
+  catch (error) { devicePolicyInfo = null; if (isAuthError(error)) showAuthOverlay(AUTH_LOGIN_HINT); }
+  renderDevicePolicy();
+}
+
+async function changeDevicePolicy(event) {
+  const enabled = event.target.checked;
+  if (devicePolicyBusy || currentApplyStep || appUpdateActive || !devicePolicyInfo) { renderDevicePolicy(); return; }
+  if (appliedStateSnapshot !== null && JSON.stringify(state) !== appliedStateSnapshot) { renderDevicePolicy(); return; }
+  devicePolicyBusy = true;
+  devicePolicyDesired = enabled;
+  renderDevicePolicy();
+  try {
+    try { devicePolicyInfo = await devicePolicyRequest({ enabled }); }
+    catch (error) {
+      if (isAuthError(error)) throw error;
+      // Keenetic can reset an HTTP connection while rebuilding its policies.
+      let recovered = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          devicePolicyInfo = await devicePolicyRequest();
+          if (devicePolicyInfo.enabled === enabled) { recovered = true; break; }
+        } catch (retryError) { if (isAuthError(retryError)) throw retryError; }
+        if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      if (!recovered) throw error;
+    }
+    showToast(devicePolicyText(devicePolicyInfo.enabled ? "on" : "off"), { kind: "success" });
+  } catch (error) {
+    if (isAuthError(error)) showAuthOverlay(AUTH_LOGIN_HINT);
+    showToast(`${devicePolicyText("failed")}: ${error.message}`, { kind: "error", ttl: 8000 });
+  } finally { devicePolicyBusy = false; devicePolicyDesired = null; renderDevicePolicy(); }
+}
+
 function renderApplyStatus() {
+  renderDevicePolicy();
   const label = document.getElementById("applyStatus");
   if (!label) return;
   label.textContent = currentApplyStep ? interfaceText(currentApplyStep) :
@@ -926,6 +1002,7 @@ async function bootstrap() {
     renderStackInfo().catch(() => {});
     renderGeodataStatus().catch(() => {});
     startExitIpCheck();
+    loadDevicePolicy();
     appUpdateRequest("status").then(showAppUpdateState).catch(() => {});
   } catch (error) {
     pushDebug(`bootstrap failed: ${error.message}`);
@@ -950,6 +1027,7 @@ async function bootstrap() {
 }
 
 function bindTopLevel() {
+  document.getElementById("defaultVpnPolicy")?.addEventListener("change", changeDevicePolicy);
   document.getElementById("updateAppBtn")?.addEventListener("click", updateApplication);
   if (els.langSelect) {
     els.langSelect.value = currentLang;
@@ -1386,6 +1464,7 @@ function bindTopLevel() {
       els.repairRuntimeBtn.disabled = false;
       renderHealth().catch(() => {});
       renderStackInfo().catch(() => {});
+      loadDevicePolicy();
       return;
     } catch (error) {
       if (isAuthError(error)) showAuthOverlay(AUTH_LOGIN_HINT);
@@ -4671,6 +4750,7 @@ function pluralize(n, formsKey) {
 }
 
 function applyTranslations() {
+  renderDevicePolicy();
   document.documentElement.lang = currentLang;
   document.title = T.documentTitle;
   const servicesButton = document.getElementById("addServicesBtn");
