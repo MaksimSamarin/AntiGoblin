@@ -27,7 +27,7 @@ jobs:
       - name: Shell regressions
         run: |
           set -eu
-          for test in firstboot-no-reboot runtime-recovery cron-permissions router-auth-headers jq-no-oniguruma app-update-worker; do
+          for test in firstboot-no-reboot runtime-recovery udp-dns-bypass cron-permissions router-auth-headers jq-no-oniguruma app-update-worker; do
             bash "tests/$test.sh"
           done
           bash -n scripts/xkeen/build-usb-installer.sh

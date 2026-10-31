@@ -523,7 +523,16 @@ prepare_cron_permissions() {
   esac
 }
 
+prepare_udp_dns_bypass() {
+  # On upgrade, protect DNS before restarting the relay: the old chain can
+  # still be active until the forced self-heal pass rebuilds it below.
+  iptables -t mangle -S xkeen_udp_route >/dev/null 2>&1 || return 0
+  iptables -t mangle -C xkeen_udp_route -p udp --dport 53 -j RETURN 2>/dev/null ||
+    iptables -t mangle -I xkeen_udp_route 1 -p udp --dport 53 -j RETURN 2>/dev/null
+}
+
 start_services() {
+  prepare_udp_dns_bypass || return 1
   prepare_cron_permissions || log "WARN: cannot secure crontab; scheduled updates may not run"
   log "Starting cron"
   for candidate in /opt/etc/init.d/S10cron /opt/etc/init.d/S05crond; do

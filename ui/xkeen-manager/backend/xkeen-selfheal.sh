@@ -508,6 +508,7 @@ check_runtime() {
   type xkeen_quic_config_enabled >/dev/null 2>&1 && xkeen_quic_config_enabled && HAS_QUIC_UDP=1
   if [ "$HAS_TARGETED_UDP" = "1" ]; then
     [ -n "$XKEEN_MARK" ] && has_rule iptables -t mangle -C PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -p udp -m set --match-set "$UDP_ROUTE_SET" dst -j xkeen_udp_route || needs_repair=1
+    has_rule iptables -t mangle -C xkeen_udp_route -p udp --dport 53 -j RETURN || needs_repair=1
   fi
   if [ "$HAS_QUIC_UDP" = "1" ]; then
     [ -n "$XKEEN_MARK" ] && has_rule iptables -t mangle -C PREROUTING -m connmark --mark "0x$XKEEN_MARK" -m conntrack ! --ctstate INVALID -p udp --dport 443 -j xkeen_quic_route || needs_repair=1
