@@ -795,6 +795,9 @@ xkeen_apply_udp_route() {
   if [ "$HAS_TARGETED" = "1" ]; then
     iptables -t mangle -N xkeen_udp_route 2>/dev/null || true
     iptables -t mangle -F xkeen_udp_route 2>/dev/null || true
+    # Keenetic redirects DNS after mangle. Keep its resolver traffic out of
+    # TPROXY so the relay cannot bind the router's DNS address after DNAT.
+    iptables -t mangle -A xkeen_udp_route -p udp --dport 53 -j RETURN 2>/dev/null || return 1
     # Explicit CIDR, resolved domains and GeoIP are classified in kernel.
     iptables -t mangle -A xkeen_udp_route -m set --match-set "$XKEEN_BYPASS_SET" dst -j RETURN 2>/dev/null || true
     iptables -t mangle -A xkeen_udp_route -p udp -j TPROXY --on-port "$XKEEN_TPROXY_PORT" --tproxy-mark "$XKEEN_UDP_MARK/$XKEEN_UDP_MARK" 2>/dev/null || return 1

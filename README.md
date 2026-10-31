@@ -1,6 +1,6 @@
 # AntiGoblin
 
-Версия **1.4.4** — [прогресс обновления и панель кнопок](docs/releases/v1.4.4.md), [VPN-группа по умолчанию 1.4.3](docs/releases/v1.4.3.md), [исправление Discord 1.4.2](docs/releases/v1.4.2.md), [исправление обновлялки 1.4.1](docs/releases/v1.4.1.md).
+Версия **1.4.5** — [исправление DNS при UDP-маршрутизации](docs/releases/v1.4.5.md), [прогресс обновления и панель кнопок 1.4.4](docs/releases/v1.4.4.md), [VPN-группа по умолчанию 1.4.3](docs/releases/v1.4.3.md), [исправление Discord 1.4.2](docs/releases/v1.4.2.md), [исправление обновлялки 1.4.1](docs/releases/v1.4.1.md).
 
 <p align="center">
   <img src="docs/screenshots/ui-overview.png" alt="AntiGoblin UI" width="900">
