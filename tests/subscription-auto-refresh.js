@@ -79,6 +79,11 @@ hy2State.profiles[0].proxies.push({
   source: "sub-1",
   config: { protocol: "hysteria2", address: "hy2.example", port: 443, password: "secret", serverName: "hy2.example", insecure: false }
 });
+const copy = JSON.parse(JSON.stringify(hy2State.profiles[0]));
+copy.id = "profile-copy";
+copy.proxies.find((proxy) => proxy.id === "hy2").config.address = "active-copy.example";
+hy2State.profiles.push(copy);
+hy2State.activeProfileId = copy.id;
 fs.writeFileSync(candidateStatePath, JSON.stringify(hy2State));
 const hy2Dir = path.join(tmp, "candidate-hy2");
 fs.mkdirSync(hy2Dir);
@@ -88,6 +93,9 @@ const hy2Candidate = JSON.parse(fs.readFileSync(path.join(hy2Dir, "candidate.jso
 const singbox = JSON.parse(fs.readFileSync(path.join(hy2Dir, "singbox.json"), "utf8"));
 if (hy2Candidate.protocol !== "hysteria2") throw new Error("HY2 candidate protocol missing");
 if (!singbox.outbounds.some((item) => item.type === "hysteria2")) throw new Error("HY2 candidate sing-box config missing");
+if (!singbox.outbounds.some((item) => item.type === "hysteria2" && item.server === "active-copy.example")) {
+  throw new Error("failover selected a key from a different profile with the same proxy ID");
+}
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log("PASS: scheduled refresh merges safely and candidate configs use the browser builders");

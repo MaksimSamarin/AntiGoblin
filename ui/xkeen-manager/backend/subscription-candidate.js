@@ -35,14 +35,14 @@
   globalThis.eval(source);
 
   const state = JSON.parse(readText(statePath));
-  const profile = (state.profiles || []).find((item) => (item.proxies || []).some((proxy) => proxy.id === proxyId));
-  if (!profile) throw new Error("proxy not found");
+  const profile = (state.profiles || []).find((item) => item.id === state.activeProfileId);
+  const proxy = (profile?.proxies || []).find((item) => item.id === proxyId);
+  if (!proxy) throw new Error("proxy not found in active profile");
   profile.groups = Array.isArray(profile.groups) ? profile.groups : [];
   profile.muxConfig = profile.muxConfig && typeof profile.muxConfig === "object"
     ? profile.muxConfig
     : { mode: "off" };
   profile.activeProxyId = proxyId;
-  const proxy = profile.proxies.find((item) => item.id === proxyId);
   writeText(`${outputDir}/outbounds.json`, JSON.stringify(__agBuilders.buildOutboundsDocument(profile), null, 2) + "\n");
   writeText(`${outputDir}/singbox.json`, JSON.stringify(__agBuilders.buildSingboxDocument(profile), null, 2) + "\n");
   writeText(`${outputDir}/routing.json`, JSON.stringify(__agBuilders.buildRoutingDocument(profile), null, 2) + "\n");

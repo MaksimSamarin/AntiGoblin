@@ -47,6 +47,7 @@ XRAY_FD_CRITICAL_STREAK_FILE="/tmp/xkeen-xray-fd-critical-streak"
 XRAY_REMOTE_FIN_WAIT_STREAK_FILE="/tmp/xkeen-xray-remote-fin-wait-streak"
 XRAY_START_FAIL_STREAK_FILE="/tmp/xkeen-xray-start-fail-streak"
 XRAY_START_BACKOFF_STAMP_FILE="/tmp/xkeen-xray-start-backoff.ts"
+XRAY_FAILOVER_RECOVERY_FILE="/tmp/xkeen-xray-failover-recovery"
 
 XKEEN_RUNTIME_LOG="$LOG_PATH"
 if [ -f "/opt/share/xkeen-manager/api/xkeen-runtime.sh" ]; then
@@ -521,6 +522,7 @@ check_runtime() {
     xray_relay_ready || needs_repair=1
     tproxy_ready || needs_repair=1
   fi
+  [ ! -f "$XRAY_FAILOVER_RECOVERY_FILE" ] || needs_repair=1
   xray_ready || needs_repair=1
   capture_health_metrics
   maybe_log_health
@@ -707,6 +709,19 @@ restart_singbox() {
 repair_runtime() {
   log "repair start"
   ensure_xray_init_confdir
+
+  # The failover job already restored the old configs on disk. Give
+  # those configs one immediate start before rebuilding network hooks.
+  # A failed recovery returns to the usual restart backoff.
+  if [ -f "$XRAY_FAILOVER_RECOVERY_FILE" ]; then
+    rm -f "$XRAY_FAILOVER_RECOVERY_FILE" || return 1
+    XRAY_PID="$(get_xray_pid)"
+    HEALTH_STATUS="failover_rollback"
+    if ! restart_xray; then
+      log "repair failed: xray did not recover after failover rollback"
+      return 1
+    fi
+  fi
 
   if ! cron_running; then
     CRON_INIT="$(find_cron_init 2>/dev/null || true)"
