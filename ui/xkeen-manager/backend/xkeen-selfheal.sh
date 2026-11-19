@@ -154,22 +154,40 @@ get_xray_pid() {
 ensure_xray_init_confdir() {
   INIT="/opt/etc/init.d/S24xray"
   [ -f "$INIT" ] || return 0
-  grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$INIT" 2>/dev/null && return 0
   # The stock Entware init ships ARGS="run -confdir /opt/etc/$PROCS" — the
   # path is spelled through the $PROCS variable, not as a literal "xray".
   # Matching only the literal form silently skipped the patch on every such
   # router, leaving S24xray pointing at /opt/etc/xray where no *.json lives
   # (they are in configs/), so xray could not be started via its init script
-  # and did not survive a reboot. Accept both spellings.
-  grep -qE 'ARGS="run -confdir /opt/etc/(xray|\$PROCS)"' "$INIT" 2>/dev/null || return 0
-  cp "$INIT" "$INIT.bak-antigoblin-confdir" 2>/dev/null || true
+  # and did not survive a reboot. Accept both spellings; leave custom paths.
+  grep -qE 'ARGS="run -confdir /opt/etc/(xray|\$PROCS|xray/configs)"' "$INIT" 2>/dev/null || return 0
+  # The init must also export the Geo asset directory before rc.func starts
+  # Xray. Otherwise a profile with geosite:/geoip: rules exits on a missing
+  # /opt/sbin/geosite.dat, and boot or `S24xray restart` leaves TCP down.
+  ADD_ASSETS=0
+  if ! grep -qx 'export XRAY_LOCATION_ASSET=/opt/etc/xray/dat' "$INIT" 2>/dev/null \
+      && grep -q '^\. /opt/etc/init\.d/rc\.func' "$INIT" 2>/dev/null; then
+    ADD_ASSETS=1
+  fi
+  if grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$INIT" 2>/dev/null && [ "$ADD_ASSETS" = 0 ]; then
+    return 0
+  fi
+  # Keep the first backup: it is the stock init before any AntiGoblin patch.
+  [ -e "$INIT.bak-antigoblin-confdir" ] || cp "$INIT" "$INIT.bak-antigoblin-confdir" 2>/dev/null || true
   # Atomic swap via mv. The old `cat tmp > INIT` did truncate+write in two
   # steps; if killed between them, INIT would be left empty and xray would
   # not start on next boot. `mv` is atomic within a filesystem.
-  if sed -E 's#ARGS="run -confdir /opt/etc/(xray|\$PROCS)"#ARGS="run -confdir /opt/etc/xray/configs"#' "$INIT" > "$INIT.tmp" \
+  # The pipeline status is awk's: verify the result so a failed sed can
+  # never replace the init with an empty file.
+  if sed -E 's#ARGS="run -confdir /opt/etc/(xray|\$PROCS)"#ARGS="run -confdir /opt/etc/xray/configs"#' "$INIT" \
+      | awk -v add="$ADD_ASSETS" '
+          add == 1 && /^\. \/opt\/etc\/init\.d\/rc\.func/ { print "export XRAY_LOCATION_ASSET=/opt/etc/xray/dat"; add = 0 }
+          { print }
+        ' > "$INIT.tmp" \
+      && grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$INIT.tmp" \
       && chmod 755 "$INIT.tmp" 2>/dev/null \
       && mv "$INIT.tmp" "$INIT"; then
-    health_log "action=xray_init_confdir file=$INIT value=/opt/etc/xray/configs"
+    health_log "action=xray_init_patch file=$INIT confdir=/opt/etc/xray/configs assets=/opt/etc/xray/dat"
   else
     rm -f "$INIT.tmp" 2>/dev/null || true
   fi

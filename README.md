@@ -1,6 +1,6 @@
 # AntiGoblin
 
-Версия **1.4.7** — [автопереключение сервера на Geo-профилях](docs/releases/v1.4.7.md), [восстановление после сбоя VPN 1.4.6](docs/releases/v1.4.6.md), [исправление DNS 1.4.5](docs/releases/v1.4.5.md), [прогресс обновления и панель кнопок 1.4.4](docs/releases/v1.4.4.md), [VPN-группа по умолчанию 1.4.3](docs/releases/v1.4.3.md), [исправление Discord 1.4.2](docs/releases/v1.4.2.md), [исправление обновлялки 1.4.1](docs/releases/v1.4.1.md).
+Версия **1.4.8** — [запуск Xray через init на Geo-профилях](docs/releases/v1.4.8.md), [автопереключение сервера на Geo-профилях 1.4.7](docs/releases/v1.4.7.md), [восстановление после сбоя VPN 1.4.6](docs/releases/v1.4.6.md), [исправление DNS 1.4.5](docs/releases/v1.4.5.md), [прогресс обновления и панель кнопок 1.4.4](docs/releases/v1.4.4.md), [VPN-группа по умолчанию 1.4.3](docs/releases/v1.4.3.md), [исправление Discord 1.4.2](docs/releases/v1.4.2.md), [исправление обновлялки 1.4.1](docs/releases/v1.4.1.md).
 
 <p align="center">
   <img src="docs/screenshots/ui-overview.png" alt="AntiGoblin UI" width="900">

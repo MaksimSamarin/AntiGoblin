@@ -311,11 +311,20 @@ LD_LIBRARY_PATH=/opt/lib:/opt/usr/lib:/lib:/usr/lib ndmc -c 'show version'   # �
 
 Стоковый Entware-init `/opt/etc/init.d/S24xray` содержит `ARGS="run -confdir /opt/etc/$PROCS"` — путь задан через переменную. Он раскрывается в `/opt/etc/xray`, где лежит только `config.json.example`; рабочие конфиги — в `/opt/etc/xray/configs/`. Такой xray стартует с пустым конфигом и сразу выходит: `/opt/etc/init.d/S24xray restart` **гасит** рабочий xray и не поднимает новый.
 
-Selfheal и remount-hook чинят это автоматически (`ensure_xray_init_confdir`); backend deploy также исправляет init-скрипт. Старые версии искали в файле литерал `/opt/etc/xray` и молча пропускали форму с `$PROCS`. Проверить и починить руками:
+Второе условие — путь к Geo-базам. Init запускает xray без `XRAY_LOCATION_ASSET`, и xray ищет `geosite.dat` рядом с бинарником. Если в профиле есть правила `geosite:`/`geoip:`, такой запуск завершается ошибкой `open /opt/sbin/geosite.dat: no such file or directory`. Рабочий xray к этому моменту уже остановлен. Так ведут себя загрузка роутера, `S24xray restart` и откат неудачного обновления: TCP устройств VPN-политики пропадает, пока xray не поднимет self-heal.
+
+Selfheal и remount-hook чинят оба условия автоматически (`ensure_xray_init_confdir`); backend deploy также исправляет init-скрипт. Перед строкой `. /opt/etc/init.d/rc.func` добавляется `export XRAY_LOCATION_ASSET=/opt/etc/xray/dat`, исходный init сохраняется в `S24xray.bak-antigoblin-confdir`. Init со своим путём в `ARGS` не трогается. Старые версии искали в файле литерал `/opt/etc/xray` и молча пропускали форму с `$PROCS`, а путь к Geo-базам до 1.4.8 не добавляли. Проверить:
 
 ```sh
-grep -n 'ARGS=' /opt/etc/init.d/S24xray          # должно быть: run -confdir /opt/etc/xray/configs
-sed -i -E 's#ARGS="run -confdir /opt/etc/(xray|\$PROCS)"#ARGS="run -confdir /opt/etc/xray/configs"#' /opt/etc/init.d/S24xray
+grep -n 'ARGS=\|XRAY_LOCATION_ASSET' /opt/etc/init.d/S24xray
+# должно быть: ARGS="run -confdir /opt/etc/xray/configs"
+# и export XRAY_LOCATION_ASSET=/opt/etc/xray/dat выше строки . /opt/etc/init.d/rc.func
+```
+
+Починить руками — штатным проходом self-heal, он применит обе правки:
+
+```sh
+/opt/share/xkeen-manager/api/xkeen-selfheal.sh --force
 ```
 
 Поднять xray без init-скрипта, так же как это делает selfheal:

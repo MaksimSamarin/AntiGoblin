@@ -37,12 +37,27 @@ cron_running() {
 
 ensure_xray_init_confdir() {
   [ -f "$XRAY_INIT" ] || return 0
-  grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$XRAY_INIT" 2>/dev/null && return 0
-  grep -qE 'ARGS="run -confdir /opt/etc/(xray|\$PROCS)"' "$XRAY_INIT" 2>/dev/null || return 0
-  cp "$XRAY_INIT" "$XRAY_INIT.bak-antigoblin-confdir" 2>/dev/null || true
+  grep -qE 'ARGS="run -confdir /opt/etc/(xray|\$PROCS|xray/configs)"' "$XRAY_INIT" 2>/dev/null || return 0
+  # Same contract as self-heal: configs/ in ARGS and the Geo asset directory
+  # exported before rc.func, or geosite:/geoip: profiles cannot start.
+  ADD_ASSETS=0
+  if ! grep -qx 'export XRAY_LOCATION_ASSET=/opt/etc/xray/dat' "$XRAY_INIT" 2>/dev/null \
+      && grep -q '^\. /opt/etc/init\.d/rc\.func' "$XRAY_INIT" 2>/dev/null; then
+    ADD_ASSETS=1
+  fi
+  if grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$XRAY_INIT" 2>/dev/null && [ "$ADD_ASSETS" = 0 ]; then
+    return 0
+  fi
+  [ -e "$XRAY_INIT.bak-antigoblin-confdir" ] || cp "$XRAY_INIT" "$XRAY_INIT.bak-antigoblin-confdir" 2>/dev/null || true
   # Atomic swap: sed → tmp → mv. `cat > INIT` truncates then writes in
-  # two steps; a kill between them leaves the init script empty.
-  if sed -E 's#ARGS="run -confdir /opt/etc/(xray|\$PROCS)"#ARGS="run -confdir /opt/etc/xray/configs"#' "$XRAY_INIT" > "$XRAY_INIT.tmp" \
+  # two steps; a kill between them leaves the init script empty. The
+  # pipeline status is awk's, so verify the result before replacing.
+  if sed -E 's#ARGS="run -confdir /opt/etc/(xray|\$PROCS)"#ARGS="run -confdir /opt/etc/xray/configs"#' "$XRAY_INIT" \
+      | awk -v add="$ADD_ASSETS" '
+          add == 1 && /^\. \/opt\/etc\/init\.d\/rc\.func/ { print "export XRAY_LOCATION_ASSET=/opt/etc/xray/dat"; add = 0 }
+          { print }
+        ' > "$XRAY_INIT.tmp" \
+      && grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$XRAY_INIT.tmp" \
       && chmod 755 "$XRAY_INIT.tmp" 2>/dev/null \
       && mv "$XRAY_INIT.tmp" "$XRAY_INIT"; then
     :

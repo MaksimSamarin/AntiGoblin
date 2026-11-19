@@ -12,6 +12,7 @@ extract_function() {
 
 init="$tmpdir/S24xray"
 target='ARGS="run -confdir /opt/etc/xray/configs"'
+asset='export XRAY_LOCATION_ASSET=/opt/etc/xray/dat'
 for helper in selfheal remount deploy; do
   case "$helper" in
     selfheal)
@@ -32,19 +33,43 @@ for helper in selfheal remount deploy; do
       ;;
   esac
   for path in '/opt/etc/xray' '/opt/etc/$PROCS' '/opt/etc/xray/configs' '/custom/configs'; do
-    printf '#!/bin/sh\nPROCS=xray\nARGS="run -confdir %s"\n' "$path" > "$init"
-    cp "$init" "$tmpdir/before"
-    XRAY_INIT="$init" sh -c 'health_log() { :; }; . "$1"' sh "$tmpdir/helper.sh"
-    if [ "$path" = '/custom/configs' ]; then
-      cmp "$init" "$tmpdir/before"
-    else
-      grep -Fxq "$target" "$init"
-    fi
-    cp "$init" "$tmpdir/after"
-    XRAY_INIT="$init" sh -c 'health_log() { :; }; . "$1"' sh "$tmpdir/helper.sh"
-    cmp "$init" "$tmpdir/after"
+    for rc_func in yes no; do
+      rm -f "$init.bak-antigoblin-confdir"
+      printf '#!/bin/sh\nPROCS=xray\nARGS="run -confdir %s"\n' "$path" > "$init"
+      [ "$rc_func" = no ] || printf '. /opt/etc/init.d/rc.func\n' >> "$init"
+      cp "$init" "$tmpdir/before"
+      XRAY_INIT="$init" sh -c 'health_log() { :; }; . "$1"' sh "$tmpdir/helper.sh"
+      if [ "$path" = '/custom/configs' ]; then
+        cmp "$init" "$tmpdir/before"
+      else
+        grep -Fxq "$target" "$init"
+        if [ "$rc_func" = yes ]; then
+          # Geo assets must be exported before rc.func starts Xray.
+          awk -v asset="$asset" '
+            $0 == asset { a = NR }
+            $0 == ". /opt/etc/init.d/rc.func" { r = NR }
+            END { exit !(a && r && a < r) }
+          ' "$init"
+        elif grep -Fq XRAY_LOCATION_ASSET "$init"; then
+          echo "FAIL: $helper exported assets without rc.func ($path)" >&2
+          exit 1
+        fi
+        if ! cmp -s "$init" "$tmpdir/before"; then
+          cmp "$init.bak-antigoblin-confdir" "$tmpdir/before"
+        fi
+      fi
+      cp "$init" "$tmpdir/after"
+      XRAY_INIT="$init" sh -c 'health_log() { :; }; . "$1"' sh "$tmpdir/helper.sh"
+      cmp "$init" "$tmpdir/after"
+    done
   done
-  echo "PASS: $helper handles literal/variable paths, preserves custom paths, is idempotent"
+  # Routers patched by older releases already hold the stock backup.
+  printf 'stock init\n' > "$init.bak-antigoblin-confdir"
+  printf '#!/bin/sh\nPROCS=xray\n%s\n. /opt/etc/init.d/rc.func\n' "$target" > "$init"
+  XRAY_INIT="$init" sh -c 'health_log() { :; }; . "$1"' sh "$tmpdir/helper.sh"
+  grep -Fxq "$asset" "$init"
+  [ "$(cat "$init.bak-antigoblin-confdir")" = 'stock init' ]
+  echo "PASS: $helper fixes confdir and Geo assets, preserves custom paths and stock backup, is idempotent"
 done
 
 extract_function "$repo_root/ui/xkeen-manager/backend/xkeen-runtime.sh" xkeen_ndmc > "$tmpdir/ndmc-test.sh"

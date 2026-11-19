@@ -244,11 +244,26 @@ Invoke-RouterCommand -Command $installSingbox
 
 $patchXrayInit = @'
 XRAY_INIT="/opt/etc/init.d/S24xray"
-if [ -f "$XRAY_INIT" ] && grep -qE 'ARGS="run -confdir /opt/etc/(xray|\$PROCS)"' "$XRAY_INIT" 2>/dev/null && ! grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$XRAY_INIT" 2>/dev/null; then
-  cp "$XRAY_INIT" "$XRAY_INIT.bak-antigoblin-confdir" 2>/dev/null || true
-  sed -E 's#ARGS="run -confdir /opt/etc/(xray|\$PROCS)"#ARGS="run -confdir /opt/etc/xray/configs"#' "$XRAY_INIT" > "$XRAY_INIT.tmp" \
-    && chmod 755 "$XRAY_INIT.tmp" \
-    && mv "$XRAY_INIT.tmp" "$XRAY_INIT"
+# Same contract as self-heal: configs/ in ARGS and the Geo asset directory
+# exported before rc.func. Custom ARGS paths are left untouched.
+if [ -f "$XRAY_INIT" ] && grep -qE 'ARGS="run -confdir /opt/etc/(xray|\$PROCS|xray/configs)"' "$XRAY_INIT" 2>/dev/null; then
+  ADD_ASSETS=0
+  if ! grep -qx 'export XRAY_LOCATION_ASSET=/opt/etc/xray/dat' "$XRAY_INIT" 2>/dev/null \
+      && grep -q '^\. /opt/etc/init\.d/rc\.func' "$XRAY_INIT" 2>/dev/null; then
+    ADD_ASSETS=1
+  fi
+  if ! grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$XRAY_INIT" 2>/dev/null || [ "$ADD_ASSETS" = 1 ]; then
+    [ -e "$XRAY_INIT.bak-antigoblin-confdir" ] || cp "$XRAY_INIT" "$XRAY_INIT.bak-antigoblin-confdir" 2>/dev/null || true
+    sed -E 's#ARGS="run -confdir /opt/etc/(xray|\$PROCS)"#ARGS="run -confdir /opt/etc/xray/configs"#' "$XRAY_INIT" \
+      | awk -v add="$ADD_ASSETS" '
+          add == 1 && /^\. \/opt\/etc\/init\.d\/rc\.func/ { print "export XRAY_LOCATION_ASSET=/opt/etc/xray/dat"; add = 0 }
+          { print }
+        ' > "$XRAY_INIT.tmp" \
+      && grep -q 'ARGS="run -confdir /opt/etc/xray/configs"' "$XRAY_INIT.tmp" \
+      && chmod 755 "$XRAY_INIT.tmp" \
+      && mv "$XRAY_INIT.tmp" "$XRAY_INIT" \
+      || rm -f "$XRAY_INIT.tmp"
+  fi
 fi
 '@
 Invoke-RouterCommand -Command $patchXrayInit
