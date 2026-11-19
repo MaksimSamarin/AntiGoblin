@@ -136,11 +136,35 @@ wait_switch_listeners() {
   return 1
 }
 
+# Start Xray the same way self-heal and Save & Apply do. The stock S24xray
+# init omits XRAY_LOCATION_ASSET: with geosite:/geoip: rules it stops the
+# working core and the new one exits on "failed to load geosite".
+restart_switch_xray() {
+  old_pid="$(xray_redirect_pid)"
+  killall xray 2>/dev/null || true
+  if [ -n "$old_pid" ]; then
+    for attempt in 1 2 3 4 5 6 7 8; do
+      kill -0 "$old_pid" 2>/dev/null || break
+      sleep 1
+    done
+    # The PID space is small: SIGKILL only a process that is still Xray.
+    if kill -0 "$old_pid" 2>/dev/null; then
+      case "$(tr '\0' ' ' < "/proc/$old_pid/cmdline" 2>/dev/null)" in
+        *xray*) kill -9 "$old_pid" 2>/dev/null || true ;;
+      esac
+    fi
+  fi
+  rm -f /opt/var/run/xray-ui.pid /opt/var/run/xray.pid
+  XRAY_LOCATION_ASSET=/opt/etc/xray/dat XRAY_LOCATION_CONFDIR="$LIVE_DIR" \
+    /opt/sbin/start-stop-daemon -S -b -m -p /opt/var/run/xray-ui.pid \
+    -x /opt/sbin/xray -- run >/dev/null 2>&1
+}
+
 restart_switch_stack() {
   # Starting Xray first restores ordinary TCP even if sing-box fails.
   prior_pid="$(xray_redirect_pid)"
   restart_ok=1
-  /opt/etc/init.d/S24xray restart >/dev/null 2>&1 ||
+  restart_switch_xray ||
     { log "subscription_failover $1 xray_restart_failed"; restart_ok=0; }
   /opt/etc/init.d/S24antigoblin-singbox restart >/dev/null 2>&1 ||
     { log "subscription_failover $1 singbox_restart_failed"; restart_ok=0; }

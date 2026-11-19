@@ -13,7 +13,7 @@ SB="$FIX/opt/etc/sing-box/xkeen.json"
 STATE="$APP/xkeen-ui-state.json"
 LOG="$FIX/opt/var/log/xkeen-subscription-refresh.log"
 mkdir -p "$APP/api" "$XRAY" "$(dirname "$SB")" "$FIX/opt/etc/init.d" \
-  "$FIX/opt/bin" "$FIX/opt/sbin" "$FIX/opt/var/log" "$FIX/tmp"
+  "$FIX/opt/bin" "$FIX/opt/sbin" "$FIX/opt/var/log" "$FIX/opt/var/run" "$FIX/tmp"
 tr -d '\r' < "$REPO/scripts/xkeen/antigoblin-subscription-refresh.sh" |
   sed "s@/opt/@$FIX/opt/@g; s@/tmp/xkeen-@$FIX/tmp/xkeen-@g" > "$FIX/antigoblin-subscription-refresh.sh"
 touch "$APP/app.js" "$APP/api/subscription-refresh.js" "$APP/api/subscription-candidate.js"
@@ -86,9 +86,22 @@ case "$*" in
   *) exit 55 ;;
 esac
 CURL
+# The stock init starts Xray without Geo assets; failover must not use it.
 cat > "$FIX/opt/etc/init.d/S24xray" <<'INIT'
 #!/bin/sh
+touch "$FIX/s24xray-used"
+exit 1
+INIT
+cat > "$FIX/opt/bin/killall" <<'KILLALL'
+#!/bin/sh
+exit 0
+KILLALL
+cat > "$FIX/opt/sbin/start-stop-daemon" <<'SSD'
+#!/bin/sh
 test -d "$FIX/runtime.lock" || exit 56
+# Geo rules need the asset directory used by self-heal and Save & Apply.
+test "$XRAY_LOCATION_ASSET" = "$FIX/opt/etc/xray/dat" || exit 57
+test "$XRAY_LOCATION_CONFDIR" = "$FIX/opt/etc/xray/configs" || exit 58
 selected="$(cat "$FIX/opt/etc/xray/configs/04_outbounds.json")"
 printf '%s\n' "$selected" >> "$FIX/restarts"
 case "$selected" in
@@ -100,7 +113,7 @@ case "$mode" in
   old-process) exit 0 ;;
 esac
 wc -l < "$FIX/restarts" | awk '{print $1+100}' > "$FIX/redirect-pid"
-INIT
+SSD
 cat > "$FIX/opt/etc/init.d/S24antigoblin-singbox" <<'SB_INIT'
 #!/bin/sh
 touch "$FIX/udp"
@@ -221,4 +234,7 @@ export LIVE_PROBE=bad
 tick 10000; tick 10060
 test "$(wc -l < "$FIX/restarts")" -eq 2
 cmp "$FIX/stale.json" "$STATE"
-echo 'PASS: failover cadence, independent probes, verified rollback, and safe concurrent edits'
+
+# No scenario may restart Xray through the asset-less stock init script.
+test ! -e "$FIX/s24xray-used"
+echo 'PASS: failover cadence, independent probes, verified rollback, Geo-safe Xray start, and safe concurrent edits'
