@@ -1,6 +1,6 @@
 # AntiGoblin
 
-Версия **1.4.8** — [запуск Xray через init на Geo-профилях](docs/releases/v1.4.8.md), [автопереключение сервера на Geo-профилях 1.4.7](docs/releases/v1.4.7.md), [восстановление после сбоя VPN 1.4.6](docs/releases/v1.4.6.md), [исправление DNS 1.4.5](docs/releases/v1.4.5.md), [прогресс обновления и панель кнопок 1.4.4](docs/releases/v1.4.4.md), [VPN-группа по умолчанию 1.4.3](docs/releases/v1.4.3.md), [исправление Discord 1.4.2](docs/releases/v1.4.2.md), [исправление обновлялки 1.4.1](docs/releases/v1.4.1.md).
+Версия **1.4.9** — [шифр SS-relay для нового Xray и локальный UDP вне туннеля](docs/releases/v1.4.9.md), [запуск Xray через init на Geo-профилях 1.4.8](docs/releases/v1.4.8.md), [автопереключение сервера на Geo-профилях 1.4.7](docs/releases/v1.4.7.md), [восстановление после сбоя VPN 1.4.6](docs/releases/v1.4.6.md), [исправление DNS 1.4.5](docs/releases/v1.4.5.md), [прогресс обновления и панель кнопок 1.4.4](docs/releases/v1.4.4.md), [VPN-группа по умолчанию 1.4.3](docs/releases/v1.4.3.md), [исправление Discord 1.4.2](docs/releases/v1.4.2.md), [исправление обновлялки 1.4.1](docs/releases/v1.4.1.md).
 
 <p align="center">
   <img src="docs/screenshots/ui-overview.png" alt="AntiGoblin UI" width="900">
@@ -238,7 +238,7 @@ exec sh                    # выйти из NDM CLI в обычный shell
    - `antigoblin-usb-aarch64.zip` — большинство современных Keenetic: Giga, Ultra, Hero, Peak, Speedster, Runner, Hopper, Skipper.
    - `antigoblin-usb-armv7.zip` — старые: Extra, Giga II/III, Duo, Air, Omni.
 
-   > Внутри zip лежит папка `install/` с правильно названным `<arch>-installer.tar.gz` — папку и файл создавать вручную не нужно. Внутри также лежит файл `VERSION`, который позже можно прочитать на роутере (см. ниже).
+   > Внутри zip лежит папка `install/` с правильно названным `<arch>-installer.tar.gz` — папку и файл создавать вручную не нужно. Версия сборки зашита внутрь tarball и после установки читается на роутере (см. ниже).
 
 2. Флешку подготовить как обычно ([Шаг 2](#шаг-2-подготовить-флешку-с-entware-на-pc)) — отформатировать в ext4.
 
