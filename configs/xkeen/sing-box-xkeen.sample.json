@@ -25,8 +25,8 @@
       "tag": "proxy",
       "server": "127.0.0.1",
       "server_port": 62640,
-      "method": "none",
-      "password": "none"
+      "method": "aes-128-gcm",
+      "password": "antigoblin-relay"
     },
     {
       "type": "direct",

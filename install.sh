@@ -531,8 +531,61 @@ prepare_udp_dns_bypass() {
     iptables -t mangle -I xkeen_udp_route 1 -p udp --dport 53 -j RETURN 2>/dev/null
 }
 
+prepare_udp_local_bypass() {
+  # Same protection for LAN, link-local, multicast and broadcast datagrams:
+  # with a catch-all UDP set the old chain fed every discovery broadcast into
+  # sing-box, which re-emitted it from the router and filled conntrack.
+  iptables -t mangle -S xkeen_udp_route >/dev/null 2>&1 || return 0
+  for LOCAL_CIDR in 224.0.0.0/4 255.255.255.255/32 169.254.0.0/16 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+    iptables -t mangle -C xkeen_udp_route -d "$LOCAL_CIDR" -j RETURN 2>/dev/null ||
+      iptables -t mangle -I xkeen_udp_route 1 -d "$LOCAL_CIDR" -j RETURN 2>/dev/null || return 1
+  done
+}
+
+migrate_relay_cipher() {
+  # Xray 25.x+ dropped the "none" shadowsocks cipher. Installs seeded before
+  # 1.4.9 keep the loopback SS relay on it, so after an opkg upgrade of xray
+  # the whole configuration fails validation and Xray never starts. Rewrite
+  # both sides of the relay (xray inbound and sing-box outbound) in place;
+  # the relay listens on 127.0.0.1 only, so a fixed password is sufficient.
+  RELAY_METHOD="aes-128-gcm"
+  RELAY_PASSWORD="antigoblin-relay"
+  RELAY_CONF="${XRAY_RELAY_CONF:-/opt/etc/xray/configs/02_relay.json}"
+  SB_CONF="${SINGBOX_LIVE_CONF:-/opt/etc/sing-box/xkeen.json}"
+  command -v jq >/dev/null 2>&1 || return 0
+  if [ -f "$RELAY_CONF" ] && jq -e '.inbounds[]? | select(.tag == "proxy-relay-ss" and .settings.method == "none")' \
+      "$RELAY_CONF" >/dev/null 2>&1; then
+    TMP_RELAY="$RELAY_CONF.tmp-cipher-$$"
+    if jq --arg m "$RELAY_METHOD" --arg p "$RELAY_PASSWORD" \
+        '.inbounds |= map(if .tag == "proxy-relay-ss" then .settings.method = $m | .settings.password = $p else . end)' \
+        "$RELAY_CONF" > "$TMP_RELAY" 2>/dev/null && jq -e '.' "$TMP_RELAY" >/dev/null 2>&1; then
+      mv "$TMP_RELAY" "$RELAY_CONF"
+      chmod 644 "$RELAY_CONF"
+      log "Switched SS relay inbound cipher from none to $RELAY_METHOD"
+    else
+      rm -f "$TMP_RELAY"
+      log "WARN: could not rewrite $RELAY_CONF; Xray may reject cipher none"
+    fi
+  fi
+  if [ -f "$SB_CONF" ] && jq -e '.outbounds[]? | select(.type == "shadowsocks" and .method == "none")' \
+      "$SB_CONF" >/dev/null 2>&1; then
+    TMP_SB="$SB_CONF.tmp-cipher-$$"
+    if jq --arg m "$RELAY_METHOD" --arg p "$RELAY_PASSWORD" \
+        '.outbounds |= map(if .type == "shadowsocks" and .method == "none" then .method = $m | .password = $p else . end)' \
+        "$SB_CONF" > "$TMP_SB" 2>/dev/null && jq -e '.' "$TMP_SB" >/dev/null 2>&1; then
+      mv "$TMP_SB" "$SB_CONF"
+      chmod 644 "$SB_CONF"
+      log "Switched sing-box SS relay outbound cipher from none to $RELAY_METHOD"
+    else
+      rm -f "$TMP_SB"
+      log "WARN: could not rewrite $SB_CONF; UDP relay may stay on cipher none"
+    fi
+  fi
+}
+
 start_services() {
   prepare_udp_dns_bypass || return 1
+  prepare_udp_local_bypass || log "WARN: cannot exempt local networks from the UDP chain; self-heal will rebuild it"
   prepare_cron_permissions || log "WARN: cannot secure crontab; scheduled updates may not run"
   log "Starting cron"
   for candidate in /opt/etc/init.d/S10cron /opt/etc/init.d/S05crond; do
@@ -608,6 +661,7 @@ main() {
   mkdirs
   ensure_xkeen_policy
   deploy_sources
+  migrate_relay_cipher
   # Only create the unused exception policy. Assigning devices remains opt-in.
   if ! /opt/bin/sh /opt/share/xkeen-manager/api/antigoblin-device-policy.sh ensure >/dev/null; then
     log "WARN: could not create no_vpn; existing device assignments were kept"
