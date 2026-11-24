@@ -7,8 +7,8 @@
       "protocol": "shadowsocks",
       "settings": {
         "network": "tcp,udp",
-        "method": "none",
-        "password": "none"
+        "method": "aes-128-gcm",
+        "password": "antigoblin-relay"
       }
     }
   ]

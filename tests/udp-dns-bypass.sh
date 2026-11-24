@@ -9,6 +9,19 @@ extract_function() {
 }
 eval "$(extract_function "$runtime" xkeen_apply_udp_route)"
 eval "$(extract_function "$repo_root/install.sh" prepare_udp_dns_bypass)"
+eval "$(extract_function "$repo_root/install.sh" prepare_udp_local_bypass)"
+
+ip_to_int() {
+  local IFS=. a b c d
+  read -r a b c d <<< "$1"
+  printf '%d\n' "$(( (a << 24) | (b << 16) | (c << 8) | d ))"
+}
+in_cidr() {
+  local ip="$1" cidr="$2" net bits mask
+  net="${cidr%/*}"; bits="${cidr#*/}"
+  mask=$(( bits == 0 ? 0 : (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF ))
+  [ $(( $(ip_to_int "$ip") & mask )) -eq $(( $(ip_to_int "$net") & mask )) ]
+}
 
 mock_udp_rules=()
 mock_chain_exists=0
@@ -78,6 +91,7 @@ udp_action() {
     for ((i=0; i<${#words[@]}; i++)); do
       case "${words[i]}" in
         -p) [ "${words[i+1]}" = udp ] || match=0 ;;
+        -d) in_cidr "$destination" "${words[i+1]}" || match=0 ;;
         --dport) [ "${words[i+1]}" = "$port" ] || match=0 ;;
         --match-set) [ "$destination" = 203.0.113.7 ] || match=0 ;;
         -j) action="${words[i+1]}" ;;
@@ -101,10 +115,21 @@ expect_action 198.51.100.4 19323 TPROXY
 expect_action 198.51.100.4 5300 TPROXY
 expect_action 198.51.100.4 853 TPROXY
 expect_action 203.0.113.7 19323 RETURN
+# LAN, link-local, multicast and broadcast never enter the tunnel even with a
+# catch-all set; CGNAT and public space still do.
+expect_action 192.168.2.255 138 RETURN
+expect_action 10.0.0.5 5000 RETURN
+expect_action 172.20.1.1 3478 RETURN
+expect_action 169.254.1.1 1900 RETURN
+expect_action 224.0.0.251 5353 RETURN
+expect_action 255.255.255.255 67 RETURN
+expect_action 100.64.1.1 443 TPROXY
+expect_action 8.8.8.8 443 TPROXY
 xkeen_apply_udp_route
 expect_action 8.8.8.8 53 RETURN
-[ "${#mock_udp_rules[@]}" = 3 ]
-echo 'PASS: DNS bypass survives rebuild; QUIC, voice, other ports and host bypass retain routing'
+expect_action 192.168.2.255 138 RETURN
+[ "${#mock_udp_rules[@]}" = 9 ]
+echo 'PASS: DNS and local bypass survive rebuild; QUIC, voice, other ports and host bypass retain routing'
 
 mock_targeted=0; mock_quic=1
 xkeen_apply_udp_route
@@ -121,6 +146,19 @@ expect_action 8.8.8.8 53 RETURN
 expect_action 198.51.100.4 19323 TPROXY
 prepare_udp_dns_bypass
 [ "${#mock_udp_rules[@]}" = 2 ]
+expect_action 192.168.2.255 138 TPROXY
+prepare_udp_local_bypass
+expect_action 192.168.2.255 138 RETURN
+expect_action 224.0.0.251 5353 RETURN
+expect_action 8.8.8.8 53 RETURN
+expect_action 198.51.100.4 19323 TPROXY
+[ "${#mock_udp_rules[@]}" = 8 ]
+prepare_udp_local_bypass
+[ "${#mock_udp_rules[@]}" = 8 ]
+mock_chain_exists=0; mock_udp_rules=()
+prepare_udp_local_bypass
+[ "${#mock_udp_rules[@]}" = 0 ]
+mock_chain_exists=1
 echo 'PASS: upgrade preparation fixes an existing chain once; fresh install needs no chain'
 
 mock_udp_rules=('-p udp -j TPROXY --on-port 61221')

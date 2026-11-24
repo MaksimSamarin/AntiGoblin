@@ -3714,13 +3714,15 @@ function buildSingboxDocument(profile) {
   } else {
     // Default: relay UDP into xray's shadowsocks listener so it can tunnel
     // via the active VLESS/VMess outbound (same path that worked for months).
+    // Xray 25.x+ rejects the legacy "none" cipher, so the loopback relay uses
+    // a real AEAD cipher with a fixed password; it must match 02_relay.json.
     base.outbounds.push({
       type: "shadowsocks",
       tag: "proxy",
       server: "127.0.0.1",
       server_port: 62640,
-      method: "none",
-      password: "none"
+      method: "aes-128-gcm",
+      password: "antigoblin-relay"
     });
   }
 

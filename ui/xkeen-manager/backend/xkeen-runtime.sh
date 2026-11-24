@@ -798,6 +798,14 @@ xkeen_apply_udp_route() {
     # Keenetic redirects DNS after mangle. Keep its resolver traffic out of
     # TPROXY so the relay cannot bind the router's DNS address after DNAT.
     iptables -t mangle -A xkeen_udp_route -p udp --dport 53 -j RETURN 2>/dev/null || return 1
+    # LAN, link-local, multicast and broadcast datagrams never belong in the
+    # tunnel. Without this a catch-all UDP set (full-tunnel profile or an empty
+    # VPN group) turns every NetBIOS/SSDP/mDNS broadcast into a sing-box
+    # session re-emitted from the router: conntrack fills up, CPU saturates
+    # and self-heal keeps restarting Xray.
+    for LOCAL_CIDR in 224.0.0.0/4 255.255.255.255/32 169.254.0.0/16 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+      iptables -t mangle -A xkeen_udp_route -d "$LOCAL_CIDR" -j RETURN 2>/dev/null || return 1
+    done
     # Explicit CIDR, resolved domains and GeoIP are classified in kernel.
     iptables -t mangle -A xkeen_udp_route -m set --match-set "$XKEEN_BYPASS_SET" dst -j RETURN 2>/dev/null || true
     iptables -t mangle -A xkeen_udp_route -p udp -j TPROXY --on-port "$XKEEN_TPROXY_PORT" --tproxy-mark "$XKEEN_UDP_MARK/$XKEEN_UDP_MARK" 2>/dev/null || return 1
@@ -809,6 +817,9 @@ xkeen_apply_udp_route() {
   if [ "$QUIC_ENABLED" = "1" ]; then
     iptables -t mangle -N xkeen_quic_route 2>/dev/null || true
     iptables -t mangle -F xkeen_quic_route 2>/dev/null || true
+    for LOCAL_CIDR in 224.0.0.0/4 255.255.255.255/32 169.254.0.0/16 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+      iptables -t mangle -A xkeen_quic_route -d "$LOCAL_CIDR" -j RETURN 2>/dev/null || return 1
+    done
     iptables -t mangle -A xkeen_quic_route -m set --match-set "$XKEEN_BYPASS_SET" dst -j RETURN 2>/dev/null || true
     iptables -t mangle -A xkeen_quic_route -p udp --dport 443 -j TPROXY --on-port "$XKEEN_QUIC_TPROXY_PORT" --tproxy-mark "$XKEEN_UDP_MARK/$XKEEN_UDP_MARK" 2>/dev/null || return 1
   else
